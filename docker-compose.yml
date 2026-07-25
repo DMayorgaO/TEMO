@@ -1,0 +1,22 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: temo-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: temo
+      POSTGRES_PASSWORD: temo_local_password
+      POSTGRES_DB: temo
+    ports:
+      - "5434:5432"
+    volumes:
+      - temo_postgres_data:/var/lib/postgresql/data
+      - ./database/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U temo -d temo"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  temo_postgres_data:

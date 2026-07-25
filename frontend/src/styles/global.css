@@ -1,0 +1,1997 @@
+:root {
+  /* Variables base de color y tipografia para mantener consistencia visual. */
+  font-family:
+    Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+    sans-serif;
+  color: #1f2933;
+  background: #f4f7f6;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  --ink: #17212b;
+  --muted: #67717d;
+  --line: #dce4e2;
+  --panel: #ffffff;
+  --teal: #0f766e;
+  --blue: #2d5f8b;
+  --gold: #b7791f;
+  --danger: #b42318;
+}
+
+* {
+  /* Evita calculos inesperados de ancho cuando los paneles tienen borde y padding. */
+  box-sizing: border-box;
+}
+
+body {
+  /* Prepara el lienzo general de la aplicacion. */
+  margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
+}
+
+button,
+input,
+select,
+textarea {
+  /* Hereda la tipografia para que controles nativos no cambien de estilo. */
+  font: inherit;
+}
+
+button {
+  /* Marca todos los botones como elementos accionables. */
+  cursor: pointer;
+}
+
+.app-shell {
+  /* Divide la pantalla entre menu lateral y area de trabajo. */
+  display: grid;
+  grid-template-columns: 292px 1fr;
+  min-height: 100vh;
+}
+
+.app-shell--sidebar-collapsed {
+  grid-template-columns: 82px 1fr;
+}
+
+.sidebar-backdrop {
+  /* En pantallas anchas no se necesita capa de cierre del menu. */
+  display: none;
+}
+
+.sidebar {
+  /* Menu principal con scroll propio para listar todas las pantallas del sistema. */
+  background:
+    linear-gradient(180deg, rgb(18 32 43 / 0.98), rgb(13 24 33 / 0.98)),
+    #12202b;
+  color: #f8fafc;
+  height: 100vh;
+  overflow-y: auto;
+  padding: 18px 14px;
+  position: sticky;
+  top: 0;
+  z-index: 20;
+}
+
+.app-shell--sidebar-collapsed .sidebar {
+  padding: 18px 10px;
+}
+
+.brand {
+  /* Identidad visual del sistema dentro del menu. */
+  align-items: center;
+  background: transparent;
+  border-bottom: 1px solid rgb(255 255 255 / 0.1);
+  border-left: 0;
+  border-right: 0;
+  border-top: 0;
+  color: inherit;
+  display: flex;
+  gap: 12px;
+  margin-bottom: 14px;
+  padding: 8px 8px 18px;
+  text-align: left;
+  width: 100%;
+}
+
+.brand:hover {
+  background: rgb(255 255 255 / 0.05);
+  border-radius: 8px;
+}
+
+.brand__logo {
+  /* Logotipo oficial del sistema dentro del menu. */
+  background: #fff;
+  border-radius: 8px;
+  display: block;
+  height: 46px;
+  object-fit: contain;
+  padding: 4px;
+  width: 42px;
+}
+
+.app-shell--sidebar-collapsed .brand {
+  justify-content: center;
+  padding: 8px 0 18px;
+}
+
+.app-shell--sidebar-collapsed .brand div,
+.app-shell--sidebar-collapsed .nav-main-action span,
+.app-shell--sidebar-collapsed .nav-button--child span,
+.app-shell--sidebar-collapsed .nav-chevron {
+  display: none;
+}
+
+.brand strong,
+.brand span {
+  display: block;
+}
+
+.brand span {
+  /* Subtitulo de marca con menor jerarquia. */
+  color: #aab7c2;
+  font-size: 0.86rem;
+}
+
+.nav-list {
+  /* Lista vertical de pantallas disponibles. */
+  display: grid;
+  gap: 8px;
+}
+
+.nav-group {
+  /* Agrupa una pantalla principal con sus pantallas hijas. */
+  display: grid;
+  gap: 4px;
+  padding: 3px;
+}
+
+.nav-button {
+  /* Boton de navegacion reutilizable para cada pantalla. */
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 42px;
+  border: 0;
+  border-radius: 8px;
+  padding: 0 10px;
+  color: #dce8ef;
+  background: transparent;
+  text-align: left;
+  transition:
+    background 0.18s ease,
+    color 0.18s ease,
+    box-shadow 0.18s ease;
+}
+
+.nav-main-action {
+  /* Area principal del grupo: permite entrar a la pantalla padre sin cerrar el acordeon. */
+  align-items: center;
+  background: transparent;
+  border: 0;
+  color: inherit;
+  display: inline-flex;
+  flex: 1;
+  gap: 10px;
+  min-height: 42px;
+  min-width: 0;
+  padding: 0;
+  text-align: left;
+}
+
+.app-shell--sidebar-collapsed .nav-button,
+.app-shell--sidebar-collapsed .nav-main-action,
+.app-shell--sidebar-collapsed .nav-button--child {
+  justify-content: center;
+}
+
+.app-shell--sidebar-collapsed .nav-main-action {
+  flex: none;
+  width: 100%;
+}
+
+.nav-main-action span,
+.nav-button--child span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nav-button--child {
+  /* Pantallas hijas con menor jerarquia visual dentro del menu. */
+  border-left: 2px solid rgb(255 255 255 / 0.12);
+  color: #b9c8d3;
+  font-size: 0.9rem;
+  margin-left: 18px;
+  min-height: 36px;
+  padding-left: 12px;
+}
+
+.app-shell--sidebar-collapsed .nav-button--child {
+  border-left: 0;
+  margin-left: 0;
+  min-height: 40px;
+  padding: 0 10px;
+}
+
+.nav-button--active,
+.nav-button:hover {
+  /* Estado activo y hover para ubicar la pantalla seleccionada. */
+  background: #1f3444;
+  color: #fff;
+  box-shadow: inset 3px 0 0 #f2c14e;
+}
+
+.nav-chevron {
+  /* Flecha de acordeon alineada al extremo derecho del grupo. */
+  align-items: center;
+  background: rgb(255 255 255 / 0.06);
+  border: 1px solid rgb(255 255 255 / 0.08);
+  border-radius: 7px;
+  color: inherit;
+  display: inline-flex;
+  height: 30px;
+  justify-content: center;
+  margin-left: auto;
+  width: 30px;
+}
+
+.nav-sublist {
+  /* Contenedor de hijos para mantener la agrupacion compacta. */
+  display: grid;
+  gap: 3px;
+}
+
+.workspace {
+  /* Contenedor principal del contenido de cada pantalla. */
+  min-width: 0;
+  padding: 24px;
+}
+
+.topbar {
+  /* Encabezado contextual con accion principal de la pantalla activa. */
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 24px;
+}
+
+.topbar h1,
+.topbar p {
+  margin: 0;
+}
+
+.topbar p,
+.panel__header p,
+.metric-card p {
+  color: var(--muted);
+  font-size: 0.88rem;
+}
+
+.topbar h1 {
+  /* Titulo principal con escala controlada para escritorio y movil. */
+  color: var(--ink);
+  font-size: clamp(1.35rem, 1.2rem + 0.7vw, 2rem);
+  font-weight: 750;
+}
+
+.icon-button,
+.owner-button,
+.primary-button,
+.secondary-button {
+  /* Botones base para acciones visuales con iconos. */
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 40px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: #fff;
+  color: var(--ink);
+  padding: 0 12px;
+}
+
+button:disabled {
+  /* Estado deshabilitado para controles de paginacion en los extremos. */
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.owner-button {
+  margin-left: auto;
+}
+
+.primary-button {
+  /* Accion principal de formularios y pantallas. */
+  border-color: var(--teal);
+  background: var(--teal);
+  color: #fff;
+}
+
+.secondary-button {
+  /* Accion secundaria para tablas y vistas de detalle. */
+  background: #f8fafc;
+}
+
+.action-row {
+  /* Agrupa botones relacionados sin que se monten entre si. */
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.metrics-grid {
+  /* Cuadricula de metricas del panel de duena. */
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 14px;
+  margin-bottom: 18px;
+}
+
+.metric-card,
+.panel {
+  /* Superficies principales para datos, formularios y tablas. */
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+}
+
+.metric-card {
+  /* Tarjeta compacta para indicadores de resumen. */
+  display: flex;
+  gap: 12px;
+  min-height: 118px;
+  padding: 16px;
+}
+
+.metric-card__icon {
+  /* Icono de apoyo dentro de cada indicador. */
+  display: grid;
+  place-items: center;
+  flex: 0 0 42px;
+  width: 42px;
+  height: 42px;
+  border-radius: 8px;
+  color: var(--teal);
+  background: #e3f4ef;
+}
+
+.metric-card p,
+.metric-card strong,
+.metric-card span {
+  display: block;
+  margin: 0;
+}
+
+.metric-card strong {
+  margin-top: 5px;
+  color: var(--ink);
+  font-size: 1.25rem;
+}
+
+.metric-card span {
+  margin-top: 6px;
+  color: var(--muted);
+  font-size: 0.82rem;
+  line-height: 1.35;
+}
+
+.work-grid {
+  /* Cuadricula heredada de la primera pantalla; queda disponible para vistas futuras. */
+  display: grid;
+  grid-template-columns: minmax(0, 1.6fr) minmax(280px, 0.8fr);
+  gap: 18px;
+}
+
+.panel {
+  /* Espaciado interno comun de los paneles. */
+  padding: 18px;
+}
+
+.panel__header {
+  /* Encabezado flexible para titulos y acciones de cada panel. */
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.table-panel-header {
+  /* Encabezado de tablas CRUD con espacio para exportaciones y alta. */
+  align-items: flex-start;
+}
+
+.panel__header h2,
+.panel__header p {
+  margin: 0;
+}
+
+.panel__header h2 {
+  font-size: 1.05rem;
+}
+
+.form-grid {
+  /* Malla de formulario usada por todas las pantallas con captura. */
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.form-field,
+label {
+  /* Etiquetas y campos se apilan para facilitar lectura en caja. */
+  display: grid;
+  gap: 8px;
+  color: #344250;
+  font-size: 0.88rem;
+  font-weight: 650;
+}
+
+.form-field--wide {
+  /* Campos de observaciones ocupan todo el ancho del formulario. */
+  grid-column: 1 / -1;
+}
+
+input,
+select,
+textarea {
+  /* Controles de captura con dimensiones estables. */
+  width: 100%;
+  min-height: 44px;
+  border: 1px solid #cfd9d7;
+  border-radius: 8px;
+  background: #fbfdfd;
+  color: var(--ink);
+  font-weight: 500;
+  padding: 0 12px;
+  transition:
+    border-color 0.18s ease,
+    box-shadow 0.18s ease,
+    background 0.18s ease;
+}
+
+textarea {
+  /* Textarea con altura flexible para descripciones largas. */
+  line-height: 1.45;
+  padding: 11px 12px;
+  resize: vertical;
+}
+
+input:focus,
+select:focus,
+textarea:focus {
+  /* Resalta el campo activo sin cambiar el layout. */
+  border-color: #2d9b8f;
+  box-shadow: 0 0 0 3px rgb(45 155 143 / 0.16);
+  outline: 0;
+}
+
+input:disabled,
+select:disabled,
+textarea:disabled {
+  /* Los campos calculados o sin opciones se distinguen sin desaparecer. */
+  background: #eef3f2;
+  color: #65727e;
+  cursor: not-allowed;
+}
+
+.input-affix {
+  /* Campo con sufijo visual fijo, usado para porcentajes sin que el usuario digite el simbolo. */
+  align-items: stretch;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.input-affix input {
+  border-radius: 8px 0 0 8px;
+}
+
+.input-affix span {
+  /* Sufijo integrado al input para mantener clara la unidad del dato capturado. */
+  align-items: center;
+  background: #eef6f4;
+  border: 1px solid #cfd9d7;
+  border-left: 0;
+  border-radius: 0 8px 8px 0;
+  color: var(--teal);
+  display: inline-flex;
+  font-weight: 800;
+  min-height: 44px;
+  padding: 0 14px;
+}
+
+.denomination-list {
+  /* Malla para conteo por denominaciones. */
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.screen-stack {
+  /* Apila formulario, tabla y metricas dentro de la pantalla activa. */
+  display: grid;
+  gap: 18px;
+}
+
+.report-card-grid {
+  /* Pantalla puente de Reportes con accesos grandes a los dos reportes principales. */
+  display: grid;
+  gap: 16px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.report-card {
+  /* Recuadro clickeable que dirige hacia un reporte especifico. */
+  align-items: flex-start;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--ink);
+  display: grid;
+  gap: 10px;
+  min-height: 170px;
+  padding: 20px;
+  text-align: left;
+}
+
+.report-card:hover {
+  border-color: #9dd5cb;
+  box-shadow: 0 12px 32px rgb(15 23 42 / 0.08);
+}
+
+.report-card svg {
+  color: var(--teal);
+}
+
+.report-card span {
+  font-size: 1.08rem;
+  font-weight: 750;
+}
+
+.report-card small {
+  color: var(--muted);
+  font-size: 0.9rem;
+  line-height: 1.45;
+}
+
+.exchange-rate-panel {
+  max-width: 720px;
+}
+
+.exchange-rate-form {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.exchange-rate-note {
+  align-items: center;
+  background: #f6f8fb;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: #344250;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 14px;
+  padding: 10px 12px;
+}
+
+.exchange-rate-note span {
+  color: var(--ink);
+  font-weight: 850;
+}
+
+.exchange-rate-note small {
+  color: var(--muted);
+  margin-left: auto;
+}
+
+.cash-count-title-row {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+}
+
+.cash-rate-chip {
+  background: #f6f8fb;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  display: grid;
+  gap: 3px;
+  min-width: 172px;
+  padding: 8px 10px;
+}
+
+.cash-rate-chip span {
+  color: #52606d;
+  font-size: 0.68rem;
+  font-weight: 850;
+  text-transform: uppercase;
+}
+
+.cash-rate-chip strong {
+  color: var(--ink);
+  font-size: 0.82rem;
+  line-height: 1.15;
+}
+
+.cash-count-grid {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: repeat(2, minmax(300px, 430px));
+  justify-content: center;
+}
+
+.cash-count-card {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.cash-count-card__header {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 9px 12px;
+}
+
+.cash-count-card__header span {
+  color: rgb(255 255 255 / 0.78);
+  display: block;
+  font-size: 0.76rem;
+  font-weight: 800;
+  letter-spacing: 0;
+}
+
+.cash-count-card__header h3 {
+  color: #fff;
+  font-size: 0.98rem;
+  margin: 2px 0 0;
+}
+
+.cash-count-card__header strong {
+  background: rgb(255 255 255 / 0.18);
+  border-radius: 8px;
+  color: #fff;
+  font-size: 0.98rem;
+  padding: 6px 9px;
+  white-space: nowrap;
+}
+
+.cash-count-card--nio .cash-count-card__header {
+  background: #0f766e;
+}
+
+.cash-count-card--usd .cash-count-card__header {
+  background: #8a640f;
+}
+
+.cash-count-table {
+  min-width: 0;
+  table-layout: fixed;
+}
+
+.cash-count-table th {
+  background: #d9e8f3;
+  color: #17212b;
+  font-size: 0.68rem;
+  padding: 6px 4px;
+  text-align: center;
+}
+
+.cash-count-table td {
+  font-size: 0.82rem;
+  padding: 4px 5px;
+  vertical-align: middle;
+}
+
+.cash-count-table__pile,
+.cash-count-table__loose,
+.cash-count-table__quantity {
+  width: 15%;
+}
+
+.cash-count-table tbody tr:nth-child(odd) {
+  background: #f7fbfd;
+}
+
+.cash-count-table tbody tr:nth-child(even) {
+  background: #edf5f9;
+}
+
+.cash-count-table tbody tr:hover {
+  background: #dceff0;
+}
+
+.cash-count-entry {
+  font-size: 0.82rem;
+  font-weight: 750;
+  min-height: 28px;
+  min-width: 0;
+  padding: 0 4px;
+  text-align: center;
+}
+
+.cash-count-entry-cell,
+.cash-total-quantity-cell {
+  text-align: center;
+}
+
+.cash-total-quantity-cell strong {
+  background: #edf3f2;
+  border: 1px solid #cfd9d7;
+  border-radius: 8px;
+  color: var(--ink);
+  display: block;
+  font-size: 0.86rem;
+  font-weight: 850;
+  line-height: 1.2;
+  min-height: 28px;
+  padding: 6px 4px;
+}
+
+.cash-denomination-cell {
+  font-size: 0.8rem;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.cash-amount-cell {
+  font-size: 0.8rem;
+  font-weight: 750;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.cash-count-table tfoot td {
+  background: #ffdc6e;
+  border-bottom: 0;
+  color: #111827;
+  font-size: 0.92rem;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.cash-count-table tfoot td:last-child {
+  text-align: right;
+  white-space: nowrap;
+}
+
+.cash-grand-total {
+  border-top: 1px solid var(--line);
+  padding: 8px 10px 10px;
+}
+
+.cash-grand-total table {
+  border-collapse: separate;
+  border-spacing: 0;
+  min-width: 0;
+  width: 100%;
+}
+
+.cash-grand-total td {
+  background: #fff8dc;
+  border-bottom: 1px solid #f0d37a;
+  color: #111827;
+  font-size: 0.9rem;
+  font-weight: 900;
+  padding: 7px 10px;
+}
+
+.cash-grand-total tr:last-child td {
+  border-bottom: 0;
+}
+
+.cash-grand-total td:first-child {
+  border-radius: 8px 0 0 8px;
+  text-align: center;
+  width: 64px;
+}
+
+.cash-grand-total td:last-child {
+  border-radius: 0 8px 8px 0;
+  text-align: right;
+}
+
+.consolidation-stack {
+  display: grid;
+  gap: 16px;
+}
+
+.consolidation-card {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: hidden;
+  width: 100%;
+}
+
+.consolidation-card__header {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+  min-height: 38px;
+  padding: 8px 12px;
+}
+
+.consolidation-card__header h3 {
+  color: #fff;
+  font-size: 1rem;
+  line-height: 1.2;
+  margin: 0;
+}
+
+.consolidation-card--nio .consolidation-card__header {
+  background: #0f766e;
+}
+
+.consolidation-card--usd .consolidation-card__header {
+  background: #8a640f;
+}
+
+.consolidation-table {
+  min-width: 1040px;
+  table-layout: fixed;
+  width: 100%;
+}
+
+.consolidation-col-bank {
+  width: 12%;
+}
+
+.consolidation-col-money {
+  width: 14%;
+}
+
+.consolidation-col-difference {
+  width: 18%;
+}
+
+.consolidation-table th {
+  background: #d9e8f3;
+  border-left: 1px solid #c3d4df;
+  border-right: 1px solid #c3d4df;
+  color: #17212b;
+  font-size: 0.68rem;
+  padding: 6px 6px;
+  text-align: center;
+}
+
+.consolidation-table td {
+  border-left: 1px solid #d4e0df;
+  border-right: 1px solid #d4e0df;
+  font-size: 0.8rem;
+  padding: 3px 5px;
+  vertical-align: middle;
+}
+
+.consolidation-table tbody tr:nth-child(odd) {
+  background: #f7fbfd;
+}
+
+.consolidation-table tbody tr:nth-child(even) {
+  background: #edf5f9;
+}
+
+.consolidation-table tbody tr:hover {
+  background: #dceff0;
+}
+
+.consolidation-entity-cell {
+  color: var(--ink);
+  font-weight: 900;
+}
+
+.consolidation-money-cell {
+  font-variant-numeric: tabular-nums;
+  font-weight: 750;
+  white-space: nowrap;
+}
+
+.money-split {
+  align-items: center;
+  display: grid;
+  gap: 6px;
+  grid-template-columns: auto minmax(0, 1fr);
+  width: 100%;
+}
+
+.money-split span {
+  color: var(--ink);
+  font-weight: 850;
+  text-align: left;
+}
+
+.money-split strong {
+  color: var(--ink);
+  font-weight: 850;
+  font-variant-numeric: tabular-nums;
+  overflow: hidden;
+  text-align: right;
+  text-overflow: clip;
+  white-space: nowrap;
+}
+
+.consolidation-input-wrap {
+  align-items: center;
+  display: grid;
+  gap: 6px;
+  grid-template-columns: auto minmax(0, 1fr);
+  width: 100%;
+}
+
+.consolidation-input-wrap span {
+  color: var(--ink);
+  font-size: 0.8rem;
+  font-weight: 850;
+  text-align: left;
+}
+
+.consolidation-input {
+  font-size: 0.8rem;
+  font-variant-numeric: tabular-nums;
+  font-weight: 750;
+  min-height: 26px;
+  min-width: 0;
+  padding: 0 6px;
+  text-align: right;
+  width: 100%;
+}
+
+.difference-badge {
+  align-items: center;
+  border-radius: 999px;
+  display: inline-flex;
+  font-size: 0.72rem;
+  font-variant-numeric: tabular-nums;
+  font-weight: 900;
+  gap: 4px;
+  justify-content: center;
+  min-height: 24px;
+  min-width: 104px;
+  padding: 0 7px;
+  white-space: nowrap;
+}
+
+.difference-badge--ok {
+  background: #e8f4ef;
+  color: #16705f;
+}
+
+.difference-badge--surplus {
+  background: #e7f1ff;
+  color: #145ca8;
+}
+
+.difference-badge--shortage {
+  background: #ffe9e6;
+  color: #b42318;
+}
+
+.consolidation-table tfoot td {
+  background: #ffdc6e;
+  border-bottom: 0;
+  color: #111827;
+  font-size: 0.8rem;
+  font-variant-numeric: tabular-nums;
+  font-weight: 900;
+  padding: 5px 6px;
+  white-space: nowrap;
+}
+
+.consolidation-table tfoot td:first-child {
+  text-align: left;
+  text-transform: uppercase;
+}
+
+.consolidation-table td:last-child,
+.consolidation-table tfoot td:last-child {
+  text-align: center;
+}
+
+.login-layout {
+  /* Login en dos columnas: credenciales y nota de acceso. */
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(260px, 0.65fr);
+  gap: 18px;
+}
+
+.muted-copy {
+  /* Texto auxiliar para notas de seguridad o instrucciones internas. */
+  color: var(--muted);
+  line-height: 1.55;
+  margin: 0;
+}
+
+.table-wrap {
+  /* Permite desplazamiento horizontal en tablas amplias desde movil. */
+  overflow-x: auto;
+}
+
+table {
+  /* Tabla base para registros CRUD y futuras consultas del backend. */
+  border-collapse: collapse;
+  min-width: 860px;
+  width: 100%;
+}
+
+th,
+td {
+  /* Celdas con separacion clara para lectura operativa. */
+  border-bottom: 1px solid var(--line);
+  padding: 12px 10px;
+  text-align: left;
+  vertical-align: top;
+}
+
+th {
+  /* Encabezados con menor contraste que el titulo, pero mayor que las filas. */
+  color: #43505d;
+  font-size: 0.78rem;
+  text-transform: uppercase;
+}
+
+.table-header--modified {
+  /* Encabezado resaltado cuando hay filtro u orden activo en esa columna. */
+  background: #e3f4ef;
+  color: #0b5f59;
+}
+
+.table-header--modified .th-sort-button {
+  color: #0b5f59;
+  font-weight: 800;
+}
+
+td {
+  /* Datos de la tabla con tamano comodo para uso repetido. */
+  color: var(--ink);
+  font-size: 0.92rem;
+}
+
+.table-toolbar {
+  /* Controles superiores: busqueda global, switch y cantidad por pagina. */
+  display: grid;
+  grid-template-columns: minmax(260px, 1fr) auto;
+  align-items: start;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.table-toolbar-controls {
+  align-items: end;
+  display: grid;
+  gap: 6px;
+  justify-items: end;
+}
+
+.currency-filter {
+  background: #f4f7f6;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  display: inline-grid;
+  grid-template-columns: repeat(2, 34px);
+  overflow: hidden;
+}
+
+.currency-filter--header {
+  grid-template-columns: repeat(2, 46px);
+  min-height: 40px;
+}
+
+.currency-filter--form {
+  grid-template-columns: repeat(2, 48px);
+  min-height: 44px;
+}
+
+.currency-filter__button {
+  background: transparent;
+  border: 0;
+  color: #52606d;
+  font-size: 0.82rem;
+  font-weight: 800;
+  height: 28px;
+}
+
+.currency-filter--header .currency-filter__button {
+  font-size: 0.95rem;
+  height: 38px;
+}
+
+.currency-filter--form .currency-filter__button {
+  font-size: 0.98rem;
+  height: 42px;
+}
+
+.currency-filter__button + .currency-filter__button {
+  border-left: 1px solid var(--line);
+}
+
+.currency-filter__button:hover {
+  background: #e8f2f0;
+}
+
+.currency-filter__button--active {
+  background: var(--teal);
+  color: #fff;
+}
+
+.currency-filter__button--active:hover {
+  background: #087f79;
+}
+
+.search-box {
+  /* Buscador general que revisa todos los campos de todos los registros filtrados. */
+  align-items: center;
+  display: flex;
+  gap: 8px;
+}
+
+.search-box input {
+  min-width: 0;
+}
+
+.page-size-control {
+  /* Selector de cantidad de registros visible por pagina. */
+  align-items: center;
+  display: flex;
+  font-size: 0.84rem;
+  gap: 8px;
+  white-space: nowrap;
+}
+
+.page-size-control select {
+  width: 88px;
+}
+
+.switch-control {
+  /* Interruptor reusable para mostrar inactivos y activar permisos por rol. */
+  align-items: center;
+  display: flex;
+  font-size: 0.84rem;
+  gap: 8px;
+  white-space: nowrap;
+}
+
+.switch-control input {
+  height: 1px;
+  opacity: 0;
+  position: absolute;
+  width: 1px;
+}
+
+.switch-control span {
+  background: #c9d4d2;
+  border-radius: 999px;
+  display: inline-flex;
+  height: 24px;
+  position: relative;
+  transition: background 0.2s ease;
+  width: 44px;
+}
+
+.switch-control span::after {
+  background: #fff;
+  border-radius: 999px;
+  content: "";
+  height: 18px;
+  left: 3px;
+  position: absolute;
+  top: 3px;
+  transition: transform 0.2s ease;
+  width: 18px;
+}
+
+.switch-control input:checked + span {
+  background: var(--teal);
+}
+
+.switch-control input:checked + span::after {
+  transform: translateX(20px);
+}
+
+.switch-control--compact {
+  justify-content: flex-start;
+}
+
+.switch-control--small {
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.switch-control--small span {
+  height: 18px;
+  width: 34px;
+}
+
+.switch-control--small span::after {
+  height: 14px;
+  left: 2px;
+  top: 2px;
+  width: 14px;
+}
+
+.switch-control--small input:checked + span::after {
+  transform: translateX(16px);
+}
+
+.th-stack {
+  /* Cada encabezado agrupa boton de ordenamiento y filtro de columna. */
+  display: grid;
+  gap: 7px;
+}
+
+.number-column {
+  /* Columna de numeracion fija al extremo izquierdo de todas las tablas. */
+  width: 72px;
+}
+
+.status-filter {
+  /* Filtro visual de estado que aparece solo cuando se muestran inactivos. */
+  align-items: center;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  display: inline-flex;
+  height: 32px;
+  justify-content: center;
+  width: 38px;
+}
+
+.status-filter--all {
+  background: #f8fafc;
+  color: #9aa6b2;
+}
+
+.status-filter--active {
+  background: #e3f4ef;
+  color: var(--teal);
+}
+
+.status-filter--inactive {
+  background: #fee4e2;
+  color: var(--danger);
+}
+
+.shift-status-filter {
+  width: 42px;
+}
+
+.shift-status-filter--open {
+  background: #e3f4ef;
+  color: var(--teal);
+}
+
+.shift-status-filter--closed {
+  background: #e7edf4;
+  color: #43505d;
+}
+
+.multi-line-cell {
+  white-space: pre-line;
+}
+
+.transaction-amount {
+  align-items: center;
+  display: inline-flex;
+  font-weight: 800;
+  gap: 8px;
+  white-space: nowrap;
+}
+
+.transaction-amount svg {
+  border-radius: 999px;
+  padding: 2px;
+}
+
+.transaction-amount--in {
+  color: #087f5b;
+}
+
+.transaction-amount--in svg {
+  background: #dff7ec;
+}
+
+.transaction-amount--out {
+  color: #c92a2a;
+}
+
+.transaction-amount--out svg {
+  background: #ffe3e3;
+}
+
+.transaction-form-meta {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.modal-panel > .transaction-form-grid {
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+}
+
+.transaction-form-id {
+  grid-column: span 2;
+}
+
+.transaction-form-bank {
+  grid-column: span 3;
+}
+
+.transaction-form-movement {
+  grid-column: span 7;
+}
+
+.transaction-form-meta {
+  grid-column: span 5;
+}
+
+.transaction-form-amount {
+  grid-column: span 7;
+}
+
+.transaction-form-pending {
+  grid-column: span 3;
+}
+
+.transaction-form-description {
+  grid-column: span 9;
+}
+
+.transaction-cash-count-section {
+  border-top: 1px solid var(--line);
+  display: grid;
+  gap: 10px;
+  grid-column: 1 / -1;
+  padding-top: 10px;
+}
+
+.transaction-cash-count-heading {
+  align-items: end;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+}
+
+.transaction-cash-count-heading div {
+  display: grid;
+  gap: 2px;
+}
+
+.transaction-cash-count-heading span,
+.transaction-cash-count-heading small {
+  color: var(--muted);
+  font-size: 0.76rem;
+}
+
+.transaction-cash-count-heading strong {
+  color: var(--ink);
+  font-size: 0.9rem;
+}
+
+.transaction-cash-count-grid {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.transaction-cash-card {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: hidden;
+  min-width: 0;
+}
+
+.transaction-cash-card__header {
+  align-items: center;
+  background: #f6fbfa;
+  border-bottom: 1px solid var(--line);
+  display: flex;
+  justify-content: space-between;
+  padding: 7px 8px;
+}
+
+.transaction-cash-card--nio .transaction-cash-card__header {
+  border-top: 3px solid var(--teal);
+}
+
+.transaction-cash-card--usd .transaction-cash-card__header {
+  border-top: 3px solid #2563eb;
+}
+
+.transaction-cash-card__header div {
+  display: grid;
+  gap: 1px;
+}
+
+.transaction-cash-card__header span {
+  color: var(--muted);
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0;
+}
+
+.transaction-cash-card__header strong {
+  color: var(--ink);
+  font-size: 0.82rem;
+}
+
+.transaction-cash-table {
+  border-collapse: collapse;
+  min-width: 0;
+  table-layout: fixed;
+  width: 100%;
+}
+
+.transaction-cash-table th,
+.transaction-cash-table td {
+  border-bottom: 1px solid #dce5e3;
+  border-left: 1px solid #dce5e3;
+  padding: 3px 5px;
+  vertical-align: middle;
+}
+
+.transaction-cash-table th:first-child,
+.transaction-cash-table td:first-child {
+  border-left: 0;
+}
+
+.transaction-cash-table th {
+  background: #dcebf7;
+  color: #102033;
+  font-size: 0.66rem;
+  font-weight: 850;
+  text-align: center;
+  text-transform: uppercase;
+}
+
+.transaction-cash-table th:nth-child(1),
+.transaction-cash-table th:nth-child(2) {
+  width: 16%;
+}
+
+.transaction-cash-table th:nth-child(3) {
+  width: 17%;
+}
+
+.transaction-cash-table th:nth-child(4) {
+  width: 25%;
+}
+
+.transaction-cash-table th:nth-child(5) {
+  width: 26%;
+}
+
+.transaction-cash-table tbody tr:nth-child(even) {
+  background: #f5faf9;
+}
+
+.transaction-cash-table tbody tr:hover {
+  background: #e8f3f1;
+}
+
+.transaction-cash-entry {
+  background: #fff;
+  border: 1px solid #c9d6d4;
+  border-radius: 6px;
+  color: var(--ink);
+  font-size: 0.74rem;
+  font-weight: 750;
+  height: 24px;
+  min-height: 24px;
+  padding: 2px 4px;
+  text-align: center;
+  width: 100%;
+}
+
+.transaction-cash-quantity {
+  color: var(--ink);
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+  font-weight: 850;
+  text-align: center;
+}
+
+.transaction-cash-denomination {
+  color: #23313f;
+  font-size: 0.72rem;
+  font-weight: 750;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.transaction-cash-amount,
+.transaction-cash-table tfoot td:last-child {
+  font-size: 0.72rem;
+  font-variant-numeric: tabular-nums;
+  font-weight: 850;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.transaction-cash-table tfoot td {
+  background: #ffdc6e;
+  border-bottom: 0;
+  color: #111827;
+  font-size: 0.72rem;
+  font-weight: 900;
+  padding: 5px;
+  text-transform: uppercase;
+  vertical-align: middle;
+}
+
+.transaction-cash-table tfoot tr + tr td {
+  background: #f8fafc;
+  border-top: 1px solid var(--line);
+  text-transform: none;
+}
+
+.transaction-cash-table .difference-badge {
+  justify-content: center;
+  min-width: 92px;
+}
+
+.transaction-direction-field,
+.transaction-currency-field {
+  display: grid;
+  gap: 8px;
+}
+
+.transaction-direction-field > span,
+.transaction-currency-field > span {
+  color: #344250;
+  font-size: 0.88rem;
+  font-weight: 650;
+}
+
+.transaction-direction-badge {
+  align-items: center;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  display: inline-flex;
+  font-size: 0.9rem;
+  font-weight: 850;
+  gap: 6px;
+  min-height: 44px;
+  padding: 0 12px;
+}
+
+.transaction-direction-badge--in {
+  background: #e9f8f0;
+  color: #16705f;
+}
+
+.transaction-direction-badge--out {
+  background: #fff0ee;
+  color: var(--danger);
+}
+
+.th-sort-button {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  color: inherit;
+  display: inline-flex;
+  gap: 6px;
+  justify-content: flex-start;
+  padding: 0;
+  text-align: left;
+  text-transform: uppercase;
+}
+
+.th-stack input {
+  font-size: 0.82rem;
+  min-height: 34px;
+  min-width: 130px;
+}
+
+.row-actions {
+  /* Botones compactos de editar e inactivar por registro. */
+  display: flex;
+  gap: 7px;
+}
+
+.icon-action {
+  align-items: center;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--ink);
+  display: inline-flex;
+  height: 34px;
+  justify-content: center;
+  width: 34px;
+}
+
+.icon-action:hover {
+  background: #eef6f4;
+}
+
+.icon-action--inactive {
+  /* Icono resaltado cuando la fila esta inactiva. */
+  background: #fee4e2;
+  border-color: #f5a8a2;
+  color: var(--danger);
+}
+
+.note-list {
+  background: #f8fafc;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  margin: 0;
+  padding: 12px 16px 12px 28px;
+}
+
+.inactive-row td {
+  /* Fila inactiva con una senal ligera sin ocupar columna de estado. */
+  color: #7b8792;
+}
+
+tbody tr {
+  cursor: pointer;
+}
+
+tbody tr:hover td {
+  background: #f2f7f6;
+}
+
+.selected-row td,
+.selected-row:hover td {
+  background: #dcecea;
+  box-shadow: inset 0 1px 0 #c2dad6, inset 0 -1px 0 #c2dad6;
+}
+
+.clickable-row {
+  /* Las filas de roles abren el modal especializado de permisos. */
+  cursor: pointer;
+}
+
+.pagination-bar {
+  /* Controles inferiores para avanzar pagina por pagina o hasta el final. */
+  align-items: center;
+  color: var(--muted);
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 14px;
+}
+
+.modal-backdrop {
+  /* Capa superpuesta que bloquea la pantalla mientras se edita un registro. */
+  align-items: center;
+  background: rgb(15 23 42 / 0.48);
+  display: flex;
+  inset: 0;
+  justify-content: center;
+  padding: 24px;
+  position: fixed;
+  z-index: 30;
+}
+
+.modal-panel {
+  /* Contenedor del formulario emergente de agregar o editar. */
+  background: #fff;
+  border-radius: 8px;
+  box-shadow: 0 24px 80px rgb(15 23 42 / 0.28);
+  max-height: min(720px, 92vh);
+  max-width: 760px;
+  overflow: auto;
+  padding: 0;
+  width: min(100%, 760px);
+}
+
+.transaction-modal-panel {
+  max-width: 980px;
+  width: min(100%, 980px);
+}
+
+.modal-panel--wide {
+  max-width: 1040px;
+  width: min(100%, 1040px);
+}
+
+.modal-header {
+  /* Encabezado del modal con titulo y boton de cierre. */
+  align-items: flex-start;
+  background: #f7fbfa;
+  border-bottom: 1px solid var(--line);
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+  padding: 18px 20px 16px;
+}
+
+.modal-header h2,
+.modal-header p {
+  margin: 0;
+}
+
+.modal-header p {
+  color: var(--muted);
+  font-size: 0.86rem;
+}
+
+.modal-panel > .form-grid,
+.modal-panel > .detail-grid,
+.modal-panel > .table-wrap {
+  /* Cuerpo del modal separado del encabezado para lectura y scroll comodo. */
+  padding: 20px;
+}
+
+.modal-panel > .form-grid {
+  /* En modales cada campo ocupa una fila completa para evitar huecos por campos altos. */
+  grid-template-columns: 1fr;
+}
+
+.modal-panel > .transaction-form-grid {
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+}
+
+.transaction-form-id {
+  grid-column: span 2;
+}
+
+.transaction-form-bank {
+  grid-column: span 3;
+}
+
+.transaction-form-movement {
+  grid-column: span 7;
+}
+
+.transaction-form-meta {
+  grid-column: span 5;
+}
+
+.transaction-form-amount {
+  grid-column: span 7;
+}
+
+.transaction-form-pending {
+  grid-column: span 3;
+}
+
+.transaction-form-description {
+  grid-column: span 9;
+}
+
+.modal-actions {
+  /* Botones finales del modal para cancelar o guardar. */
+  background: #fff;
+  border-top: 1px solid var(--line);
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+  padding: 16px 20px 18px;
+}
+
+.multi-select-list {
+  /* Lista de checks distribuida en columnas responsivas para aprovechar el ancho del modal. */
+  align-content: start;
+  background: #fbfdfd;
+  border: 1px solid #cfd9d7;
+  border-radius: 8px;
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  min-height: 44px;
+  padding: 10px;
+}
+
+.multi-select-option {
+  /* Cada opcion multiple conserva area clickeable amplia y estable. */
+  align-items: center;
+  background: #fff;
+  border: 1px solid #e2e9e7;
+  border-radius: 7px;
+  display: flex;
+  font-size: 0.86rem;
+  font-weight: 600;
+  gap: 8px;
+  min-height: 34px;
+  padding: 0 10px;
+}
+
+.multi-select-option input {
+  min-height: auto;
+  width: auto;
+}
+
+.multi-select-option span {
+  /* Mantiene textos largos legibles dentro de cada opcion horizontal. */
+  overflow-wrap: anywhere;
+}
+
+.detail-grid {
+  /* Vista de solo lectura abierta con doble click sobre una fila. */
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.detail-item {
+  /* Campo de detalle con etiqueta y valor destacado. */
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  display: grid;
+  gap: 6px;
+  padding: 12px;
+}
+
+.detail-item span {
+  color: var(--muted);
+  font-size: 0.78rem;
+  text-transform: uppercase;
+}
+
+.detail-item strong {
+  color: var(--ink);
+  font-size: 0.96rem;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 980px) {
+  /* En tablet y movil el menu se convierte en drawer desplegable. */
+  .app-shell,
+  .app-shell--sidebar-collapsed {
+    grid-template-columns: 1fr;
+  }
+
+  .sidebar {
+    bottom: 0;
+    box-shadow: 18px 0 40px rgb(15 23 42 / 0.22);
+    height: 100vh;
+    left: 0;
+    max-width: min(86vw, 320px);
+    position: fixed;
+    top: 0;
+    transform: translateX(-105%);
+    transition: transform 0.22s ease;
+    width: 292px;
+  }
+
+  .app-shell--sidebar-open .sidebar {
+    transform: translateX(0);
+  }
+
+  .app-shell--sidebar-collapsed .sidebar {
+    padding: 18px 14px;
+  }
+
+  .app-shell--sidebar-collapsed .brand {
+    justify-content: flex-start;
+    padding: 8px 8px 18px;
+  }
+
+  .app-shell--sidebar-collapsed .brand div,
+  .app-shell--sidebar-collapsed .nav-main-action span,
+  .app-shell--sidebar-collapsed .nav-button--child span {
+    display: inline;
+  }
+
+  .app-shell--sidebar-collapsed .brand div {
+    display: block;
+  }
+
+  .app-shell--sidebar-collapsed .nav-chevron {
+    display: inline-flex;
+  }
+
+  .app-shell--sidebar-collapsed .nav-button,
+  .app-shell--sidebar-collapsed .nav-main-action,
+  .app-shell--sidebar-collapsed .nav-button--child {
+    justify-content: flex-start;
+  }
+
+  .app-shell--sidebar-collapsed .nav-button--child {
+    border-left: 2px solid rgb(255 255 255 / 0.12);
+    margin-left: 18px;
+    padding-left: 12px;
+  }
+
+  .app-shell--sidebar-open .sidebar-backdrop {
+    background: rgb(15 23 42 / 0.42);
+    border: 0;
+    display: block;
+    inset: 0;
+    min-height: 100vh;
+    padding: 0;
+    position: fixed;
+    z-index: 15;
+  }
+
+  .metrics-grid,
+  .work-grid,
+  .login-layout,
+  .table-toolbar,
+  .report-card-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .table-toolbar {
+    grid-template-columns: 1fr;
+  }
+
+  .table-toolbar-controls {
+    justify-items: start;
+  }
+
+  .modal-panel > .transaction-form-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .transaction-form-id,
+  .transaction-form-bank,
+  .transaction-form-movement,
+  .transaction-form-meta,
+  .transaction-form-amount,
+  .transaction-form-pending,
+  .transaction-form-description {
+    grid-column: 1 / -1;
+  }
+
+  .transaction-cash-count-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .panel--wide {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (max-width: 640px) {
+  /* Ajustes compactos para telefonos. */
+  .workspace {
+    padding: 16px;
+  }
+
+  .topbar {
+    align-items: flex-start;
+  }
+
+  .owner-button span {
+    display: none;
+  }
+
+  .metrics-grid,
+  .work-grid,
+  .form-grid,
+  .cash-count-grid,
+  .exchange-rate-form,
+  .transaction-form-meta,
+  .transaction-cash-count-grid,
+  .denomination-list,
+  .login-layout,
+  .table-toolbar,
+  .report-card-grid,
+  .detail-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .panel__header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .pagination-bar {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .table-toolbar-controls {
+    align-items: start;
+    justify-items: start;
+  }
+
+  .exchange-rate-note small {
+    margin-left: 0;
+  }
+
+  .modal-backdrop {
+    padding: 12px;
+  }
+}
