@@ -48,3 +48,16 @@ debe indicar que tanto la API como la base de datos estan disponibles.
 
 No ejecute las migraciones como parte del arranque. El esquema de Supabase ya
 esta creado y las siguientes migraciones deben aplicarse de forma controlada.
+
+## Desplegar el frontend
+
+El mismo `render.yaml` tambien declara el sitio estatico `temo-web`. En la
+pagina del Blueprint seleccione **Manual Sync** despues de publicar el cambio.
+Render compilara React/Vite y publicara `frontend/dist` en su CDN.
+
+Cuando `temo-web` este disponible, copie su URL HTTPS y agreguela a la variable
+`CORS_ORIGINS` del servicio `temo-api`. Si conserva otros origenes de prueba,
+separe las direcciones con comas. Guarde la variable con la opcion de desplegar
+el servicio nuevamente.
+
+Finalmente compruebe el inicio de sesion desde la URL publica del frontend.
