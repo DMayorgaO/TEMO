@@ -3,7 +3,7 @@
 ## Decisiones principales
 
 - Internamente se usa `operational_entities` para agrupar bancos reales y servicios como PEX/TELEDOLAR.
-- Para la duena, todos pueden mostrarse como bancos mediante `show_as_bank`.
+- Para la jefa, todos pueden mostrarse como bancos mediante `show_as_bank`.
 - Las comisiones se guardan separadas del efectivo operativo en `transaction_commissions`.
 - Los cajeros no deben recibir datos de comisiones desde el backend.
 - Las transacciones pueden tener varios importes en `transaction_amounts`, permitiendo combinaciones de NIO/USD, efectivo, transferencia, credito y cuenta financiera.
@@ -39,14 +39,14 @@ El resultado historico por transaccion vive en:
 
 - `transaction_commissions`
 
-Esto evita que los reportes historicos cambien si la duena modifica una regla futura.
+Esto evita que los reportes historicos cambien si la jefa modifica una regla futura.
 
 ## Seguridad, roles y permisos
 
 Tablas base:
 
 - `users`: usuario del sistema con nombres, apellidos, usuario unico, hash de contrasena, rol y estado.
-- `roles`: catalogo de roles como DUENA o CAJERO.
+- `roles`: catalogo de roles como JEFA o CAJERO.
 - `permissions`: catalogo de permisos por funcion o pantalla.
 - `role_permissions`: relacion muchos-a-muchos entre roles y permisos.
 

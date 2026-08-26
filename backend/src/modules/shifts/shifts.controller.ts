@@ -1,60 +1,112 @@
-import { Controller, Get } from '@nestjs/common';
-import { DatabaseService } from '../database/database.service';
+import { BadRequestException, Body, Controller, Get, Param, Post, Put, Req } from '@nestjs/common';
+import { AuthenticatedUser } from '../auth/auth.service';
+import { ShiftsService } from './shifts.service';
+import {
+  closeShiftSchema,
+  openShiftSchema,
+  saveBalancesSchema,
+  saveCashCountSchema,
+  updateClosedShiftSchema,
+  updateShiftSchema,
+} from './shifts.schema';
+
+type AuthenticatedRequest = { user: AuthenticatedUser };
 
 @Controller('shifts')
 export class ShiftsController {
-  constructor(private readonly db: DatabaseService) {}
+  constructor(private readonly shifts: ShiftsService) {}
 
   @Get()
-  async listShifts() {
-    const result = await this.db.query(
-      `select
-         t.id_turno as id,
-         t.estado,
-         t.fecha_apertura,
-         t.fecha_cierre,
-         t.efectivo_inicial_nio,
-         t.efectivo_inicial_usd,
-         t.efectivo_final_nio,
-         t.efectivo_final_usd,
-         t.observaciones_apertura,
-         t.observaciones_cierre,
-         s.id_sucursal,
-         s.nombre as sucursal,
-         c.id_caja,
-         c.nombre as caja,
-         u.id_usuario as id_cajero,
-         u.nombre_completo as cajero
-       from temo.turnos t
-       join temo.sucursales s on s.id_sucursal = t.id_sucursal
-       join temo.cajas c on c.id_caja = t.id_caja
-       join temo.usuarios u on u.id_usuario = t.id_cajero
-       order by t.fecha_apertura desc`,
-    );
-
-    return result.rows;
+  list(@Req() request: AuthenticatedRequest) {
+    return this.shifts.list(request.user);
   }
 
   @Get('open')
-  async openShifts() {
-    const result = await this.db.query(
-      `select
-         t.id_turno as id,
-         t.estado,
-         t.fecha_apertura,
-         t.efectivo_inicial_nio,
-         t.efectivo_inicial_usd,
-         s.nombre as sucursal,
-         c.nombre as caja,
-         u.nombre_completo as cajero
-       from temo.turnos t
-       join temo.sucursales s on s.id_sucursal = t.id_sucursal
-       join temo.cajas c on c.id_caja = t.id_caja
-       join temo.usuarios u on u.id_usuario = t.id_cajero
-       where t.estado in ('ABIERTO', 'PENDIENTE_APROBACION')
-       order by t.fecha_apertura desc`,
-    );
+  open(@Req() request: AuthenticatedRequest) {
+    return this.shifts.open(request.user);
+  }
 
-    return result.rows;
+  @Get('current')
+  current(@Req() request: AuthenticatedRequest) {
+    return this.shifts.current(request.user);
+  }
+
+  @Get('notifications')
+  notifications(@Req() request: AuthenticatedRequest) {
+    return this.shifts.notifications(request.user);
+  }
+
+  @Post('notifications/:id/acknowledge')
+  acknowledge(@Param('id') id: string, @Req() request: AuthenticatedRequest) {
+    return this.shifts.acknowledgeNotification(id, request.user);
+  }
+
+  @Get(':id')
+  detail(@Param('id') id: string, @Req() request: AuthenticatedRequest) {
+    return this.shifts.detail(id, request.user);
+  }
+
+  @Post()
+  create(@Body() body: unknown, @Req() request: AuthenticatedRequest) {
+    return this.shifts.create(this.parse(openShiftSchema, body), request.user);
+  }
+
+  @Put(':id')
+  update(
+    @Param('id') id: string,
+    @Body() body: unknown,
+    @Req() request: AuthenticatedRequest,
+  ) {
+    return this.shifts.update(id, this.parse(updateShiftSchema, body), request.user);
+  }
+
+  @Put(':id/closed')
+  updateClosed(
+    @Param('id') id: string,
+    @Body() body: unknown,
+    @Req() request: AuthenticatedRequest,
+  ) {
+    return this.shifts.updateClosed(id, this.parse(updateClosedShiftSchema, body), request.user);
+  }
+
+  @Put(':id/cash-count')
+  saveCashCount(
+    @Param('id') id: string,
+    @Body() body: unknown,
+    @Req() request: AuthenticatedRequest,
+  ) {
+    return this.shifts.saveCashCount(id, this.parse(saveCashCountSchema, body), request.user);
+  }
+
+  @Put(':id/account-balances')
+  saveBalances(
+    @Param('id') id: string,
+    @Body() body: unknown,
+    @Req() request: AuthenticatedRequest,
+  ) {
+    const input = this.parse(saveBalancesSchema, body);
+    return this.shifts.saveBalances(id, input.balances, request.user);
+  }
+
+  @Post(':id/close-request')
+  requestClose(@Param('id') id: string, @Req() request: AuthenticatedRequest) {
+    return this.shifts.requestClose(id, request.user);
+  }
+
+  @Post(':id/close')
+  close(
+    @Param('id') id: string,
+    @Body() body: unknown,
+    @Req() request: AuthenticatedRequest,
+  ) {
+    return this.shifts.close(id, this.parse(closeShiftSchema, body), request.user);
+  }
+
+  private parse<T>(schema: { safeParse(value: unknown): { success: true; data: T } | { success: false; error: { issues: unknown } } }, value: unknown) {
+    const parsed = schema.safeParse(value);
+    if (!parsed.success) {
+      throw new BadRequestException({ message: 'Datos invalidos.', issues: parsed.error.issues });
+    }
+    return parsed.data;
   }
 }

@@ -1,0 +1,1081 @@
+Project TEMO {
+  database_type: 'PostgreSQL'
+  Note: 'Modelo fisico de datos del Sistema de Transacciones Economicas de Miscelanea Olivera.'
+}
+
+Enum temo.accion_bitacora {
+  CREAR
+  ACTUALIZAR
+  ANULAR
+  CORREGIR
+  APROBAR
+  RECHAZAR
+  INICIAR_SESION
+  CERRAR_SESION
+  IMPORTAR
+}
+
+Enum temo.alcance_cuenta {
+  GLOBAL
+  SUCURSAL
+}
+
+Enum temo.direccion_monto {
+  ENTRA
+  SALE
+}
+
+Enum temo.estado_aprobacion {
+  PENDIENTE
+  APROBADA
+  RECHAZADA
+}
+
+Enum temo.estado_cierre {
+  ABIERTO
+  PENDIENTE_REVISION
+  CERRADO
+}
+
+Enum temo.estado_grupo_transacciones {
+  ABIERTO
+  COMPLETADO
+  ANULADO
+}
+
+Enum temo.estado_pendiente {
+  PENDIENTE
+  ABONADO
+  PAGADO
+  VENCIDO
+  CANCELADO
+}
+
+Enum temo.estado_registro {
+  ACTIVO
+  INACTIVO
+}
+
+Enum temo.estado_transaccion {
+  REGISTRADA
+  ANULADA
+  CORREGIDA
+}
+
+Enum temo.estado_turno {
+  ABIERTO
+  PENDIENTE_APROBACION
+  CERRADO
+  ANULADO
+}
+
+Enum temo.estado_usuario {
+  ACTIVO
+  INACTIVO
+  BLOQUEADO
+}
+
+Enum temo.medio_monto {
+  EFECTIVO
+  TRANSFERENCIA
+  CREDITO
+  CUENTA_BANCARIA
+  AJUSTE
+}
+
+Enum temo.tipo_arqueo {
+  APERTURA
+  CIERRE_CALCULADO
+  CIERRE_CONTADO
+  AJUSTE
+  TRANSACCION_RECIBIDO
+  TRANSACCION_VUELTO
+  TRANSACCION_ENTREGADO
+  ACTUAL
+  PENDIENTE_RECIBIDO
+  PENDIENTE_ENTREGADO
+  PENDIENTE_VUELTO
+}
+
+Enum temo.tipo_calculo_comision {
+  PORCENTAJE
+  FIJO
+  RANGO
+  MANUAL
+}
+
+Enum temo.tipo_cuenta_bancaria {
+  CUENTA_REAL
+  SALDO_OPERATIVO
+}
+
+Enum temo.tipo_entidad_bancaria {
+  BANCO_REAL
+  SERVICIO_FINANCIERO
+  SERVICIO_REMESAS
+  OTRO
+}
+
+Enum temo.tipo_metodo_pago {
+  EFECTIVO
+  TRANSFERENCIA
+  CREDITO
+  MIXTO
+}
+
+Enum temo.tipo_pendiente {
+  POR_COBRAR
+  POR_PAGAR
+}
+
+Enum temo.tipo_tasa_aplicada {
+  COMPRA
+  VENTA
+}
+
+Table temo.abonos_pendientes [headercolor: #8A5A00] {
+  id_abono uuid [pk, default: `gen_random_uuid()`]
+  id_pendiente uuid [not null]
+  id_transaccion uuid [not null]
+  id_moneda uuid [not null]
+  monto decimal(16,4) [not null]
+  fecha_abono timestamptz [not null, default: `now()`]
+  id_usuario_creacion uuid [not null]
+  observaciones text
+  id_turno_aplicacion uuid
+  id_tipo_cambio uuid
+  tasa_compra_usada decimal(14,6)
+  tasa_venta_usada decimal(14,6)
+  Note: 'Liquidaciones parciales o totales aplicadas a una cuenta pendiente.'
+}
+
+Table temo.anulaciones_transacciones [headercolor: #8A5A00] {
+  id_anulacion uuid [pk, default: `gen_random_uuid()`]
+  id_transaccion uuid [unique, not null]
+  id_usuario uuid [not null]
+  fecha_anulacion timestamptz [not null, default: `now()`]
+  motivo text [not null]
+}
+
+Table temo.aprobaciones [headercolor: #9F1239] {
+  id_aprobacion uuid [pk, default: `gen_random_uuid()`]
+  id_usuario_solicitud uuid [not null]
+  id_usuario_revision uuid
+  entidad varchar(80) [not null]
+  id_entidad_registro uuid [not null]
+  estado temo.estado_aprobacion [not null, default: 'PENDIENTE']
+  fecha_solicitud timestamptz [not null, default: `now()`]
+  fecha_revision timestamptz
+  motivo text
+  observaciones_revision text
+}
+
+Table temo.arqueos [headercolor: #1D4ED8] {
+  id_arqueo uuid [pk, default: `gen_random_uuid()`]
+  id_turno uuid
+  id_jornada uuid
+  id_caja uuid
+  tipo temo.tipo_arqueo [not null]
+  id_moneda uuid [not null]
+  monto_total decimal(16,4) [not null, default: 0]
+  id_usuario_creacion uuid [not null]
+  fecha_creacion timestamptz [not null, default: `now()`]
+  observaciones text
+  id_grupo_transacciones uuid
+  id_tipo_cambio uuid
+  tipo_tasa temo.tipo_tasa_aplicada
+  tasa_usada decimal(14,6)
+  monto_esperado decimal(16,4)
+  diferencia decimal(16,4)
+  id_abono_pendiente uuid
+}
+
+Table temo.arqueos_denominaciones [headercolor: #1D4ED8] {
+  id_arqueo_denominacion uuid [pk, default: `gen_random_uuid()`]
+  id_arqueo uuid [not null]
+  id_denominacion uuid [not null]
+  cantidad int [not null]
+  monto decimal(16,4) [not null]
+  montones_25 int [not null, default: 0]
+  sueltos int [not null, default: 0]
+
+  indexes {
+    (id_arqueo, id_denominacion) [unique, name: 'uq_arqueos_denominaciones']
+  }
+}
+
+Table temo.bitacora [headercolor: #9F1239] {
+  id_bitacora uuid [pk, default: `gen_random_uuid()`]
+  id_usuario uuid
+  id_dispositivo uuid
+  accion temo.accion_bitacora [not null]
+  tabla varchar(80) [not null]
+  id_registro uuid
+  datos_anteriores jsonb
+  datos_nuevos jsonb
+  direccion_ip inet
+  agente_usuario text
+  fecha_creacion timestamptz [not null, default: `now()`]
+}
+
+Table temo.cajas [headercolor: #176B5B] {
+  id_caja uuid [pk, default: `gen_random_uuid()`]
+  id_sucursal uuid [not null]
+  codigo varchar(30) [not null]
+  nombre varchar(120) [not null]
+  estado temo.estado_registro [not null, default: 'ACTIVO']
+  fecha_creacion timestamptz [not null, default: `now()`]
+  fecha_modificacion timestamptz [not null, default: `now()`]
+
+  indexes {
+    (id_sucursal, codigo) [unique, name: 'uq_cajas_sucursal_codigo']
+  }
+}
+
+Table temo.cierres_diarios [headercolor: #1D4ED8] {
+  id_cierre_diario uuid [pk, default: `gen_random_uuid()`]
+  id_jornada uuid [not null]
+  id_sucursal uuid
+  id_usuario_cierre uuid [not null]
+  estado temo.estado_cierre [not null, default: 'PENDIENTE_REVISION']
+  total_comisiones_nio decimal(16,4) [not null, default: 0]
+  total_comisiones_usd decimal(16,4) [not null, default: 0]
+  observaciones text
+  fecha_cierre timestamptz [not null, default: `now()`]
+
+  indexes {
+    (id_jornada, id_sucursal) [unique, name: 'uq_cierres_diarios_alcance']
+  }
+}
+
+Table temo.cierres_diarios_detalles [headercolor: #1D4ED8] {
+  id_cierre_detalle uuid [pk, default: `gen_random_uuid()`]
+  id_cierre_diario uuid [not null]
+  id_moneda uuid [not null]
+  total_efectivo_calculado decimal(16,4) [not null, default: 0]
+  total_efectivo_contado decimal(16,4) [not null, default: 0]
+  total_cuentas_calculado decimal(16,4) [not null, default: 0]
+  total_pendientes decimal(16,4) [not null, default: 0]
+  total_comisiones decimal(16,4) [not null, default: 0]
+  diferencia decimal(16,4) [not null, default: 0]
+
+  indexes {
+    (id_cierre_diario, id_moneda) [unique, name: 'uq_cierre_detalle_moneda']
+  }
+}
+
+Table temo.contrapartes [headercolor: #176B5B] {
+  id_contraparte uuid [pk, default: `gen_random_uuid()`]
+  nombre varchar(160) [not null]
+  tipo varchar(40) [not null, default: 'CLIENTE_PROVEEDOR']
+  telefono varchar(40)
+  observaciones text
+  estado temo.estado_registro [not null, default: 'ACTIVO']
+  fecha_creacion timestamptz [not null, default: `now()`]
+  fecha_modificacion timestamptz [not null, default: `now()`]
+
+  indexes {
+    (nombre, tipo) [unique, name: 'uq_contrapartes_nombre_tipo']
+  }
+}
+
+Table temo.correcciones_transacciones [headercolor: #8A5A00] {
+  id_correccion uuid [pk, default: `gen_random_uuid()`]
+  id_transaccion_original uuid [not null]
+  id_transaccion_correccion uuid [unique, not null]
+  id_usuario uuid [not null]
+  fecha_correccion timestamptz [not null, default: `now()`]
+  motivo text [not null]
+}
+
+Table temo.cuentas_bancarias [headercolor: #176B5B] {
+  id_cuenta uuid [pk, default: `gen_random_uuid()`]
+  id_entidad uuid [not null]
+  id_moneda uuid [not null]
+  id_sucursal uuid
+  tipo_cuenta temo.tipo_cuenta_bancaria [not null, default: 'CUENTA_REAL']
+  alcance temo.alcance_cuenta [not null, default: 'GLOBAL']
+  consecutivo int [not null]
+  alias varchar(80) [unique, not null]
+  numero_cuenta varchar(80)
+  estado temo.estado_registro [not null, default: 'ACTIVO']
+  fecha_creacion timestamptz [not null, default: `now()`]
+  fecha_modificacion timestamptz [not null, default: `now()`]
+
+  indexes {
+    (id_entidad, id_moneda, consecutivo) [unique, name: 'uq_cuentas_entidad_moneda_consecutivo']
+  }
+}
+
+Table temo.cuentas_movimientos [headercolor: #176B5B] {
+  id_cuenta_movimiento uuid [pk, default: `gen_random_uuid()`]
+  id_cuenta uuid [not null]
+  id_movimiento uuid [not null]
+  codigo_operativo varchar(40) [not null]
+  nombre_operativo varchar(180) [not null]
+  prioridad int [not null, default: 100]
+  estado temo.estado_registro [not null, default: 'ACTIVO']
+  fecha_creacion timestamptz [not null, default: `now()`]
+  fecha_modificacion timestamptz [not null, default: `now()`]
+
+  indexes {
+    (id_cuenta, codigo_operativo) [unique, name: 'uq_cuentas_codigo_operativo']
+    (id_cuenta, id_movimiento) [unique, name: 'uq_cuentas_movimientos']
+  }
+}
+
+Table temo.cuentas_sucursales [headercolor: #176B5B] {
+  id_cuenta uuid [not null]
+  id_sucursal uuid [not null]
+  fecha_creacion timestamptz [not null, default: `now()`]
+
+  indexes {
+    (id_cuenta, id_sucursal) [pk, name: 'cuentas_sucursales_pkey']
+  }
+}
+
+Table temo.denominaciones [headercolor: #176B5B] {
+  id_denominacion uuid [pk, default: `gen_random_uuid()`]
+  id_moneda uuid [not null]
+  valor decimal(14,2) [not null]
+  etiqueta varchar(40) [not null]
+  orden int [not null, default: 0]
+  estado temo.estado_registro [not null, default: 'ACTIVO']
+
+  indexes {
+    (id_moneda, valor) [unique, name: 'uq_denominaciones_moneda_valor']
+  }
+}
+
+Table temo.directorio_cedulas {
+  id_cedula uuid [pk, default: `gen_random_uuid()`]
+  id_destinatario uuid [not null]
+  numero varchar(20) [not null]
+  titular varchar(180)
+  orden smallint [not null, default: 1]
+  fecha_creacion timestamptz [not null, default: `now()`]
+
+  indexes {
+    (id_destinatario, numero) [unique, name: 'directorio_cedulas_id_destinatario_numero_key']
+  }
+}
+
+Table temo.directorio_destinatarios {
+  id_destinatario uuid [pk, default: `gen_random_uuid()`]
+  codigo_destinatario bigint [unique, not null]
+  nombre varchar(180) [not null]
+  observaciones text
+  estado temo.estado_registro [not null, default: 'ACTIVO']
+  id_usuario_creacion uuid
+  id_usuario_modificacion uuid
+  fecha_creacion timestamptz [not null, default: `now()`]
+  fecha_modificacion timestamptz [not null, default: `now()`]
+}
+
+Table temo.directorio_fuentes_importacion {
+  id_fuente uuid [pk, default: `gen_random_uuid()`]
+  id_destinatario uuid [not null]
+  hoja varchar(120) [not null]
+  fila int [not null]
+  datos_originales jsonb [not null, default: '[]']
+  fecha_importacion timestamptz [not null, default: `now()`]
+
+  indexes {
+    (id_destinatario, hoja, fila) [unique, name: 'directorio_fuentes_importacion_id_destinatario_hoja_fila_key']
+  }
+}
+
+Table temo.directorio_identificadores {
+  id_identificador uuid [pk, default: `gen_random_uuid()`]
+  id_destinatario uuid [not null]
+  institucion varchar(100) [not null, default: '']
+  tipo varchar(100) [not null]
+  numero varchar(100) [not null]
+  id_moneda uuid
+  orden smallint [not null, default: 1]
+  fecha_creacion timestamptz [not null, default: `now()`]
+
+  indexes {
+    (id_destinatario, institucion, tipo, numero) [unique, name: 'directorio_identificadores_id_destinatario_institucion_tipo_key']
+  }
+}
+
+Table temo.directorio_referencias {
+  id_referencia uuid [pk, default: `gen_random_uuid()`]
+  id_destinatario uuid [not null]
+  referencia varchar(180) [not null]
+  orden smallint [not null, default: 1]
+  fecha_creacion timestamptz [not null, default: `now()`]
+
+  indexes {
+    (id_destinatario, referencia) [unique, name: 'directorio_referencias_id_destinatario_referencia_key']
+  }
+}
+
+Table temo.dispositivos [headercolor: #17324D] {
+  id_dispositivo uuid [pk, default: `gen_random_uuid()`]
+  id_usuario uuid
+  nombre_dispositivo varchar(120)
+  huella_dispositivo varchar(255) [unique]
+  direccion_ip inet
+  agente_usuario text
+  primera_vez timestamptz [not null, default: `now()`]
+  ultima_vez timestamptz [not null, default: `now()`]
+}
+
+Table temo.efectos_movimientos [headercolor: #176B5B] {
+  id_efecto uuid [pk, default: `gen_random_uuid()`]
+  id_cuenta_movimiento uuid [unique, not null]
+  afecta_efectivo boolean [not null, default: true]
+  direccion_efectivo temo.direccion_monto
+  afecta_cuenta boolean [not null, default: true]
+  direccion_cuenta temo.direccion_monto
+  genera_pendiente boolean [not null, default: false]
+  tipo_pendiente temo.tipo_pendiente
+  requiere_contraparte boolean [not null, default: false]
+  permite_conversion boolean [not null, default: false]
+  permite_credito boolean [not null, default: false]
+  observaciones text
+}
+
+Table temo.entidades_bancarias [headercolor: #176B5B] {
+  id_entidad uuid [pk, default: `gen_random_uuid()`]
+  codigo varchar(30) [unique, not null]
+  nombre_corto varchar(40) [not null]
+  nombre_largo varchar(180) [not null]
+  tipo temo.tipo_entidad_bancaria [not null]
+  mostrar_como_banco boolean [not null, default: true]
+  maneja_saldo boolean [not null, default: true]
+  maneja_comision boolean [not null, default: true]
+  estado temo.estado_registro [not null, default: 'ACTIVO']
+  fecha_creacion timestamptz [not null, default: `now()`]
+  fecha_modificacion timestamptz [not null, default: `now()`]
+}
+
+Table temo.grupos_transacciones [headercolor: #8A5A00] {
+  id_grupo_transacciones uuid [pk, default: `gen_random_uuid()`]
+  codigo_operacion bigint [unique, not null]
+  id_turno uuid [not null]
+  id_contraparte uuid
+  estado temo.estado_grupo_transacciones [not null, default: 'ABIERTO']
+  id_tipo_cambio_vuelto uuid
+  tipo_tasa_vuelto temo.tipo_tasa_aplicada
+  tasa_vuelto_usada decimal(14,6)
+  observaciones text
+  id_usuario_creacion uuid [not null]
+  id_usuario_modificacion uuid
+  fecha_creacion timestamptz [not null, default: `now()`]
+  fecha_modificacion timestamptz [not null, default: `now()`]
+  Note: 'Encabezado atomico para una o varias transacciones realizadas por el mismo cliente.'
+}
+
+Table temo.historial_pendientes [headercolor: #8A5A00] {
+  id_historial uuid [pk, default: `gen_random_uuid()`]
+  id_pendiente uuid [not null]
+  estado_anterior temo.estado_pendiente
+  estado_nuevo temo.estado_pendiente [not null]
+  id_usuario uuid [not null]
+  fecha_cambio timestamptz [not null, default: `now()`]
+  motivo text
+}
+
+Table temo.importaciones_excel [headercolor: #9F1239] {
+  id_importacion uuid [pk, default: `gen_random_uuid()`]
+  nombre_archivo text [not null]
+  ruta_archivo text
+  fecha_detectada date
+  sucursal_detectada varchar(120)
+  id_sucursal_asignada uuid
+  id_caja_asignada uuid
+  id_cajero_asignado uuid
+  estado varchar(40) [not null, default: 'PENDIENTE']
+  id_usuario_importacion uuid
+  fecha_importacion timestamptz [not null, default: `now()`]
+  observaciones text
+}
+
+Table temo.importaciones_excel_errores [headercolor: #9F1239] {
+  id_importacion_error uuid [pk, default: `gen_random_uuid()`]
+  id_importacion_fila uuid
+  id_importacion uuid [not null]
+  codigo_error varchar(80) [not null]
+  mensaje text [not null]
+  fecha_creacion timestamptz [not null, default: `now()`]
+}
+
+Table temo.importaciones_excel_filas [headercolor: #9F1239] {
+  id_importacion_fila uuid [pk, default: `gen_random_uuid()`]
+  id_importacion uuid [not null]
+  hoja varchar(80) [not null]
+  numero_fila int [not null]
+  datos_crudos jsonb [not null]
+  id_transaccion_mapeada uuid
+  estado_validacion varchar(40) [not null, default: 'PENDIENTE']
+  fecha_creacion timestamptz [not null, default: `now()`]
+}
+
+Table temo.jornadas [headercolor: #1D4ED8] {
+  id_jornada uuid [pk, default: `gen_random_uuid()`]
+  fecha date [not null]
+  id_sucursal uuid
+  id_usuario_apertura uuid [not null]
+  id_usuario_cierre uuid
+  estado temo.estado_cierre [not null, default: 'ABIERTO']
+  fecha_apertura timestamptz [not null, default: `now()`]
+  fecha_cierre timestamptz
+  observaciones text
+
+  indexes {
+    (fecha, id_sucursal) [unique, name: 'uq_jornadas_fecha_sucursal']
+  }
+}
+
+Table temo.metodos_pago [headercolor: #176B5B] {
+  id_metodo_pago uuid [pk, default: `gen_random_uuid()`]
+  codigo varchar(40) [unique, not null]
+  nombre varchar(80) [not null]
+  tipo temo.tipo_metodo_pago [not null]
+  estado temo.estado_registro [not null, default: 'ACTIVO']
+}
+
+Table temo.migraciones_sistema [headercolor: #9F1239] {
+  codigo varchar(80) [pk]
+  fecha_aplicacion timestamptz [not null, default: `now()`]
+}
+
+Table temo.monedas [headercolor: #176B5B] {
+  id_moneda uuid [pk, default: `gen_random_uuid()`]
+  codigo char [unique, not null]
+  nombre varchar(80) [not null]
+  simbolo varchar(8) [not null]
+  decimales smallint [not null, default: 2]
+  estado temo.estado_registro [not null, default: 'ACTIVO']
+}
+
+Table temo.movimientos [headercolor: #176B5B] {
+  id_movimiento uuid [pk, default: `gen_random_uuid()`]
+  codigo varchar(40) [unique, not null]
+  nombre varchar(160) [not null]
+  descripcion text
+  estado temo.estado_registro [not null, default: 'ACTIVO']
+  fecha_creacion timestamptz [not null, default: `now()`]
+  fecha_modificacion timestamptz [not null, default: `now()`]
+}
+
+Table temo.movimientos_cuentas [headercolor: #8A5A00] {
+  id_movimiento_cuenta uuid [pk, default: `gen_random_uuid()`]
+  id_transaccion uuid
+  id_cuenta uuid [not null]
+  id_moneda uuid [not null]
+  direccion temo.direccion_monto [not null]
+  monto decimal(16,4) [not null]
+  es_reverso boolean [not null, default: false]
+  id_movimiento_reversado uuid
+  fecha_creacion timestamptz [not null, default: `now()`]
+  id_transferencia uuid
+}
+
+Table temo.movimientos_efectivo [headercolor: #8A5A00] {
+  id_movimiento_efectivo uuid [pk, default: `gen_random_uuid()`]
+  id_transaccion uuid
+  id_turno uuid [not null]
+  id_caja uuid [not null]
+  id_moneda uuid [not null]
+  direccion temo.direccion_monto [not null]
+  monto decimal(16,4) [not null]
+  es_reverso boolean [not null, default: false]
+  id_movimiento_reversado uuid
+  fecha_creacion timestamptz [not null, default: `now()`]
+  id_grupo_transacciones uuid
+  id_abono_pendiente uuid
+  id_transferencia uuid
+}
+
+Table temo.notificaciones_usuarios [headercolor: #9F1239] {
+  id_notificacion uuid [pk, default: `gen_random_uuid()`]
+  id_usuario_destino uuid [not null]
+  tipo varchar(40) [not null]
+  titulo varchar(160) [not null]
+  mensaje text [not null]
+  id_pendiente uuid
+  id_turno uuid
+  id_usuario_origen uuid
+  fecha_creacion timestamptz [not null, default: `now()`]
+  fecha_lectura timestamptz
+}
+
+Table temo.pagos_pendientes [headercolor: #8A5A00] {
+  id_pendiente uuid [pk, default: `gen_random_uuid()`]
+  id_transaccion uuid [unique, not null]
+  tipo temo.tipo_pendiente [not null]
+  id_contraparte uuid [not null]
+  id_moneda uuid [not null]
+  monto_original decimal(16,4) [not null]
+  saldo_pendiente decimal(16,4) [not null]
+  fecha_vencimiento date
+  estado temo.estado_pendiente [not null, default: 'PENDIENTE']
+  observaciones text
+  id_usuario_creacion uuid [not null]
+  fecha_creacion timestamptz [not null, default: `now()`]
+  fecha_modificacion timestamptz [not null, default: `now()`]
+}
+
+Table temo.permisos [headercolor: #17324D] {
+  id_permiso uuid [pk, default: `gen_random_uuid()`]
+  codigo varchar(80) [unique, not null]
+  nombre varchar(120) [not null]
+  descripcion text
+  estado temo.estado_registro [not null, default: 'ACTIVO']
+  fecha_creacion timestamptz [not null, default: `now()`]
+  fecha_modificacion timestamptz [not null, default: `now()`]
+}
+
+Table temo.reglas_comisiones [headercolor: #176B5B] {
+  id_comision uuid [pk, default: `gen_random_uuid()`]
+  id_entidad uuid [not null]
+  id_moneda uuid [not null]
+  id_movimiento uuid [not null]
+  tipo_calculo temo.tipo_calculo_comision [not null]
+  porcentaje decimal(9,6)
+  monto_fijo decimal(14,4)
+  rango_inicio decimal(16,4)
+  rango_fin decimal(16,4)
+  incluida_en_monto_transaccion boolean [not null, default: true]
+  fecha_inicio date [not null, default: `CURRENT_DATE`]
+  fecha_fin date
+  estado temo.estado_registro [not null, default: 'ACTIVO']
+  id_usuario_creacion uuid
+  fecha_creacion timestamptz [not null, default: `now()`]
+  fecha_modificacion timestamptz [not null, default: `now()`]
+  id_moneda_comision uuid
+}
+
+Table temo.roles [headercolor: #17324D] {
+  id_rol uuid [pk, default: `gen_random_uuid()`]
+  codigo varchar(40) [unique, not null]
+  nombre varchar(80) [unique, not null]
+  descripcion text
+  estado temo.estado_registro [not null, default: 'ACTIVO']
+  fecha_creacion timestamptz [not null, default: `now()`]
+  fecha_modificacion timestamptz [not null, default: `now()`]
+}
+
+Table temo.roles_permisos [headercolor: #17324D] {
+  id_rol uuid [not null]
+  id_permiso uuid [not null]
+
+  indexes {
+    (id_rol, id_permiso) [pk, name: 'roles_permisos_pkey']
+  }
+}
+
+Table temo.saldos_jornada_cuentas [headercolor: #1D4ED8] {
+  id_saldo_jornada uuid [pk, default: `gen_random_uuid()`]
+  id_jornada uuid [not null]
+  id_cuenta uuid [not null]
+  saldo_inicial decimal(16,4) [not null, default: 0]
+  saldo_final_calculado decimal(16,4)
+  saldo_final_contado decimal(16,4)
+  diferencia decimal(16,4)
+
+  indexes {
+    (id_jornada, id_cuenta) [unique, name: 'uq_saldos_jornada_cuenta']
+  }
+}
+
+Table temo.saldos_turno_cuentas [headercolor: #1D4ED8] {
+  id_saldo_turno uuid [pk, default: `gen_random_uuid()`]
+  id_turno uuid [not null]
+  id_cuenta uuid [not null]
+  saldo_inicial decimal(16,4) [not null, default: 0]
+  saldo_final_calculado decimal(16,4)
+  saldo_final_sistema decimal(16,4)
+  diferencia decimal(16,4)
+  fecha_registro_apertura timestamptz [not null, default: `now()`]
+  fecha_registro_cierre timestamptz
+
+  indexes {
+    (id_turno, id_cuenta) [unique, name: 'uq_saldos_turno_cuenta']
+  }
+}
+
+Table temo.solicitudes_cierre_turno [headercolor: #1D4ED8] {
+  id_solicitud_cierre uuid [pk, default: `gen_random_uuid()`]
+  id_turno uuid [unique, not null]
+  id_usuario_solicitud uuid [not null]
+  id_usuario_revision uuid
+  estado varchar(20) [not null, default: 'PENDIENTE']
+  fecha_solicitud timestamptz [not null, default: `now()`]
+  fecha_revision timestamptz
+  fecha_notificacion_cajero_leida timestamptz
+  observaciones_cierre text
+}
+
+Table temo.sucursales [headercolor: #176B5B] {
+  id_sucursal uuid [pk, default: `gen_random_uuid()`]
+  codigo varchar(30) [unique, not null]
+  nombre varchar(120) [not null]
+  direccion text
+  estado temo.estado_registro [not null, default: 'ACTIVO']
+  fecha_creacion timestamptz [not null, default: `now()`]
+  fecha_modificacion timestamptz [not null, default: `now()`]
+}
+
+Table temo.tipos_cambio [headercolor: #176B5B] {
+  id_tipo_cambio uuid [pk, default: `gen_random_uuid()`]
+  tasa_compra decimal(14,6) [not null]
+  tasa_venta decimal(14,6) [not null]
+  vigente_desde timestamptz [not null, default: `now()`]
+  id_usuario_creacion uuid [not null]
+  observaciones text
+  fecha_creacion timestamptz [not null, default: `now()`]
+}
+
+Table temo.transacciones [headercolor: #8A5A00] {
+  id_transaccion uuid [pk, default: `gen_random_uuid()`]
+  id_turno uuid [not null]
+  id_sucursal uuid [not null]
+  id_caja uuid [not null]
+  id_cajero uuid [not null]
+  id_cuenta_movimiento uuid [not null]
+  id_contraparte uuid
+  id_metodo_pago uuid [not null]
+  id_moneda_original uuid [not null]
+  monto_original decimal(16,4) [not null]
+  id_tipo_cambio uuid
+  tasa_compra_usada decimal(14,6)
+  tasa_venta_usada decimal(14,6)
+  descripcion text
+  estado temo.estado_transaccion [not null, default: 'REGISTRADA']
+  consecutivo_turno int
+  fecha_transaccion timestamptz [not null, default: `now()`]
+  id_usuario_creacion uuid [not null]
+  id_usuario_modificacion uuid
+  fecha_creacion timestamptz [not null, default: `now()`]
+  fecha_modificacion timestamptz [not null, default: `now()`]
+  id_grupo_transacciones uuid [not null]
+  orden_grupo smallint [not null]
+
+  indexes {
+    (id_turno, consecutivo_turno) [unique, name: 'uq_transacciones_turno_consecutivo']
+  }
+}
+
+Table temo.transacciones_comisiones [headercolor: #8A5A00] {
+  id_transaccion_comision uuid [pk, default: `gen_random_uuid()`]
+  id_transaccion uuid [unique, not null]
+  id_comision uuid
+  id_moneda uuid [not null]
+  monto decimal(16,4) [not null]
+  detalle_calculo jsonb [not null, default: '{}']
+  calculada_automaticamente boolean [not null, default: true]
+  oculta_para_cajero boolean [not null, default: true]
+  fecha_creacion timestamptz [not null, default: `now()`]
+}
+
+Table temo.transacciones_montos [headercolor: #8A5A00] {
+  id_transaccion_monto uuid [pk, default: `gen_random_uuid()`]
+  id_transaccion uuid [not null]
+  direccion temo.direccion_monto [not null]
+  medio temo.medio_monto [not null]
+  id_moneda uuid [not null]
+  monto decimal(16,4) [not null]
+  id_cuenta uuid
+  observaciones text
+  fecha_creacion timestamptz [not null, default: `now()`]
+}
+
+Table temo.transferencias [headercolor: #6D28D9] {
+  id_transferencia uuid [pk, default: `gen_random_uuid()`]
+  codigo_transferencia bigint [unique, not null]
+  id_turno uuid [not null]
+  tipo temo.medio_monto [not null]
+  direccion temo.direccion_monto [not null]
+  id_moneda uuid [not null]
+  id_cuenta uuid
+  monto decimal(16,4) [not null]
+  descripcion text
+  estado temo.estado_registro [not null, default: 'ACTIVO']
+  motivo_anulacion text
+  id_usuario_creacion uuid [not null]
+  id_usuario_modificacion uuid
+  id_usuario_anulacion uuid
+  fecha_transferencia timestamptz [not null, default: `now()`]
+  fecha_creacion timestamptz [not null, default: `now()`]
+  fecha_modificacion timestamptz [not null, default: `now()`]
+  fecha_anulacion timestamptz
+}
+
+Table temo.transferencias_denominaciones [headercolor: #6D28D9] {
+  id_transferencia uuid [not null]
+  id_denominacion uuid [not null]
+  montones_25 int [not null, default: 0]
+  sueltos int [not null, default: 0]
+
+  indexes {
+    (id_transferencia, id_denominacion) [pk, name: 'transferencias_denominaciones_pkey']
+  }
+}
+
+Table temo.turnos [headercolor: #1D4ED8] {
+  id_turno uuid [pk, default: `gen_random_uuid()`]
+  id_jornada uuid [not null]
+  id_sucursal uuid [not null]
+  id_caja uuid [not null]
+  id_cajero uuid [not null]
+  id_usuario_apertura uuid [not null]
+  id_usuario_cierre uuid
+  id_usuario_aprobacion uuid
+  estado temo.estado_turno [not null, default: 'ABIERTO']
+  fecha_apertura timestamptz [not null, default: `now()`]
+  fecha_cierre timestamptz
+  fecha_aprobacion timestamptz
+  observaciones_cierre text
+  fecha_creacion timestamptz [not null, default: `now()`]
+  fecha_modificacion timestamptz [not null, default: `now()`]
+  efectivo_inicial_nio decimal(16,4) [not null, default: 0]
+  efectivo_inicial_usd decimal(16,4) [not null, default: 0]
+  efectivo_final_nio decimal(16,4)
+  efectivo_final_usd decimal(16,4)
+  observaciones_apertura text
+  cambio_nio decimal(16,4) [not null, default: 0]
+}
+
+Table temo.usuarios [headercolor: #17324D] {
+  id_usuario uuid [pk, default: `gen_random_uuid()`]
+  id_rol uuid [not null]
+  nombres varchar(80) [not null]
+  apellidos varchar(120) [not null]
+  nombre_completo varchar(180)
+  usuario varchar(60) [unique, not null]
+  correo varchar(160) [unique]
+  contrasena_hash text [not null]
+  debe_cambiar_contrasena boolean [not null, default: true]
+  estado temo.estado_usuario [not null, default: 'ACTIVO']
+  ultimo_acceso timestamptz
+  fecha_creacion timestamptz [not null, default: `now()`]
+  fecha_modificacion timestamptz [not null, default: `now()`]
+}
+
+Table temo.usuarios_sucursales [headercolor: #17324D] {
+  id_usuario uuid [not null]
+  id_sucursal uuid [not null]
+  fecha_creacion timestamptz [not null, default: `now()`]
+
+  indexes {
+    (id_usuario, id_sucursal) [pk, name: 'usuarios_sucursales_pkey']
+  }
+}
+Ref abonos_pendientes_id_moneda_fkey: temo.abonos_pendientes.id_moneda > temo.monedas.id_moneda [delete: No action, update: No action]
+Ref abonos_pendientes_id_pendiente_fkey: temo.abonos_pendientes.id_pendiente > temo.pagos_pendientes.id_pendiente [delete: Cascade, update: No action]
+Ref abonos_pendientes_id_tipo_cambio_fkey: temo.abonos_pendientes.id_tipo_cambio > temo.tipos_cambio.id_tipo_cambio [delete: No action, update: No action]
+Ref abonos_pendientes_id_transaccion_fkey: temo.abonos_pendientes.id_transaccion > temo.transacciones.id_transaccion [delete: No action, update: No action]
+Ref abonos_pendientes_id_turno_aplicacion_fkey: temo.abonos_pendientes.id_turno_aplicacion > temo.turnos.id_turno [delete: No action, update: No action]
+Ref abonos_pendientes_id_usuario_creacion_fkey: temo.abonos_pendientes.id_usuario_creacion > temo.usuarios.id_usuario [delete: No action, update: No action]
+Ref anulaciones_transacciones_id_transaccion_fkey: temo.anulaciones_transacciones.id_transaccion > temo.transacciones.id_transaccion [delete: No action, update: No action]
+Ref anulaciones_transacciones_id_usuario_fkey: temo.anulaciones_transacciones.id_usuario > temo.usuarios.id_usuario [delete: No action, update: No action]
+Ref aprobaciones_id_usuario_revision_fkey: temo.aprobaciones.id_usuario_revision > temo.usuarios.id_usuario [delete: No action, update: No action]
+Ref aprobaciones_id_usuario_solicitud_fkey: temo.aprobaciones.id_usuario_solicitud > temo.usuarios.id_usuario [delete: No action, update: No action]
+Ref arqueos_id_abono_pendiente_fkey: temo.arqueos.id_abono_pendiente > temo.abonos_pendientes.id_abono [delete: Cascade, update: No action]
+Ref arqueos_id_caja_fkey: temo.arqueos.id_caja > temo.cajas.id_caja [delete: No action, update: No action]
+Ref arqueos_id_grupo_transacciones_fkey: temo.arqueos.id_grupo_transacciones > temo.grupos_transacciones.id_grupo_transacciones [delete: Cascade, update: No action]
+Ref arqueos_id_jornada_fkey: temo.arqueos.id_jornada > temo.jornadas.id_jornada [delete: Cascade, update: No action]
+Ref arqueos_id_moneda_fkey: temo.arqueos.id_moneda > temo.monedas.id_moneda [delete: No action, update: No action]
+Ref arqueos_id_tipo_cambio_fkey: temo.arqueos.id_tipo_cambio > temo.tipos_cambio.id_tipo_cambio [delete: No action, update: No action]
+Ref arqueos_id_turno_fkey: temo.arqueos.id_turno > temo.turnos.id_turno [delete: Cascade, update: No action]
+Ref arqueos_id_usuario_creacion_fkey: temo.arqueos.id_usuario_creacion > temo.usuarios.id_usuario [delete: No action, update: No action]
+Ref arqueos_denominaciones_id_arqueo_fkey: temo.arqueos_denominaciones.id_arqueo > temo.arqueos.id_arqueo [delete: Cascade, update: No action]
+Ref arqueos_denominaciones_id_denominacion_fkey: temo.arqueos_denominaciones.id_denominacion > temo.denominaciones.id_denominacion [delete: No action, update: No action]
+Ref bitacora_id_dispositivo_fkey: temo.bitacora.id_dispositivo > temo.dispositivos.id_dispositivo [delete: No action, update: No action]
+Ref bitacora_id_usuario_fkey: temo.bitacora.id_usuario > temo.usuarios.id_usuario [delete: No action, update: No action]
+Ref cajas_id_sucursal_fkey: temo.cajas.id_sucursal > temo.sucursales.id_sucursal [delete: No action, update: No action]
+Ref cierres_diarios_id_jornada_fkey: temo.cierres_diarios.id_jornada > temo.jornadas.id_jornada [delete: No action, update: No action]
+Ref cierres_diarios_id_sucursal_fkey: temo.cierres_diarios.id_sucursal > temo.sucursales.id_sucursal [delete: No action, update: No action]
+Ref cierres_diarios_id_usuario_cierre_fkey: temo.cierres_diarios.id_usuario_cierre > temo.usuarios.id_usuario [delete: No action, update: No action]
+Ref cierres_diarios_detalles_id_cierre_diario_fkey: temo.cierres_diarios_detalles.id_cierre_diario > temo.cierres_diarios.id_cierre_diario [delete: Cascade, update: No action]
+Ref cierres_diarios_detalles_id_moneda_fkey: temo.cierres_diarios_detalles.id_moneda > temo.monedas.id_moneda [delete: No action, update: No action]
+Ref correcciones_transacciones_id_transaccion_correccion_fkey: temo.correcciones_transacciones.id_transaccion_correccion > temo.transacciones.id_transaccion [delete: No action, update: No action]
+Ref correcciones_transacciones_id_transaccion_original_fkey: temo.correcciones_transacciones.id_transaccion_original > temo.transacciones.id_transaccion [delete: No action, update: No action]
+Ref correcciones_transacciones_id_usuario_fkey: temo.correcciones_transacciones.id_usuario > temo.usuarios.id_usuario [delete: No action, update: No action]
+Ref cuentas_bancarias_id_entidad_fkey: temo.cuentas_bancarias.id_entidad > temo.entidades_bancarias.id_entidad [delete: No action, update: No action]
+Ref cuentas_bancarias_id_moneda_fkey: temo.cuentas_bancarias.id_moneda > temo.monedas.id_moneda [delete: No action, update: No action]
+Ref cuentas_bancarias_id_sucursal_fkey: temo.cuentas_bancarias.id_sucursal > temo.sucursales.id_sucursal [delete: No action, update: No action]
+Ref cuentas_movimientos_id_cuenta_fkey: temo.cuentas_movimientos.id_cuenta > temo.cuentas_bancarias.id_cuenta [delete: Cascade, update: No action]
+Ref cuentas_movimientos_id_movimiento_fkey: temo.cuentas_movimientos.id_movimiento > temo.movimientos.id_movimiento [delete: No action, update: No action]
+Ref cuentas_sucursales_id_cuenta_fkey: temo.cuentas_sucursales.id_cuenta > temo.cuentas_bancarias.id_cuenta [delete: Cascade, update: No action]
+Ref cuentas_sucursales_id_sucursal_fkey: temo.cuentas_sucursales.id_sucursal > temo.sucursales.id_sucursal [delete: Cascade, update: No action]
+Ref denominaciones_id_moneda_fkey: temo.denominaciones.id_moneda > temo.monedas.id_moneda [delete: No action, update: No action]
+Ref directorio_cedulas_id_destinatario_fkey: temo.directorio_cedulas.id_destinatario > temo.directorio_destinatarios.id_destinatario [delete: Cascade, update: No action]
+Ref directorio_destinatarios_id_usuario_creacion_fkey: temo.directorio_destinatarios.id_usuario_creacion > temo.usuarios.id_usuario [delete: No action, update: No action]
+Ref directorio_destinatarios_id_usuario_modificacion_fkey: temo.directorio_destinatarios.id_usuario_modificacion > temo.usuarios.id_usuario [delete: No action, update: No action]
+Ref directorio_fuentes_importacion_id_destinatario_fkey: temo.directorio_fuentes_importacion.id_destinatario > temo.directorio_destinatarios.id_destinatario [delete: Cascade, update: No action]
+Ref directorio_identificadores_id_destinatario_fkey: temo.directorio_identificadores.id_destinatario > temo.directorio_destinatarios.id_destinatario [delete: Cascade, update: No action]
+Ref directorio_identificadores_id_moneda_fkey: temo.directorio_identificadores.id_moneda > temo.monedas.id_moneda [delete: No action, update: No action]
+Ref directorio_referencias_id_destinatario_fkey: temo.directorio_referencias.id_destinatario > temo.directorio_destinatarios.id_destinatario [delete: Cascade, update: No action]
+Ref dispositivos_id_usuario_fkey: temo.dispositivos.id_usuario > temo.usuarios.id_usuario [delete: No action, update: No action]
+Ref efectos_movimientos_id_cuenta_movimiento_fkey: temo.efectos_movimientos.id_cuenta_movimiento > temo.cuentas_movimientos.id_cuenta_movimiento [delete: Cascade, update: No action]
+Ref grupos_transacciones_id_contraparte_fkey: temo.grupos_transacciones.id_contraparte > temo.contrapartes.id_contraparte [delete: No action, update: No action]
+Ref grupos_transacciones_id_tipo_cambio_vuelto_fkey: temo.grupos_transacciones.id_tipo_cambio_vuelto > temo.tipos_cambio.id_tipo_cambio [delete: No action, update: No action]
+Ref grupos_transacciones_id_turno_fkey: temo.grupos_transacciones.id_turno > temo.turnos.id_turno [delete: No action, update: No action]
+Ref grupos_transacciones_id_usuario_creacion_fkey: temo.grupos_transacciones.id_usuario_creacion > temo.usuarios.id_usuario [delete: No action, update: No action]
+Ref grupos_transacciones_id_usuario_modificacion_fkey: temo.grupos_transacciones.id_usuario_modificacion > temo.usuarios.id_usuario [delete: No action, update: No action]
+Ref historial_pendientes_id_pendiente_fkey: temo.historial_pendientes.id_pendiente > temo.pagos_pendientes.id_pendiente [delete: Cascade, update: No action]
+Ref historial_pendientes_id_usuario_fkey: temo.historial_pendientes.id_usuario > temo.usuarios.id_usuario [delete: No action, update: No action]
+Ref importaciones_excel_id_caja_asignada_fkey: temo.importaciones_excel.id_caja_asignada > temo.cajas.id_caja [delete: No action, update: No action]
+Ref importaciones_excel_id_cajero_asignado_fkey: temo.importaciones_excel.id_cajero_asignado > temo.usuarios.id_usuario [delete: No action, update: No action]
+Ref importaciones_excel_id_sucursal_asignada_fkey: temo.importaciones_excel.id_sucursal_asignada > temo.sucursales.id_sucursal [delete: No action, update: No action]
+Ref importaciones_excel_id_usuario_importacion_fkey: temo.importaciones_excel.id_usuario_importacion > temo.usuarios.id_usuario [delete: No action, update: No action]
+Ref importaciones_excel_errores_id_importacion_fila_fkey: temo.importaciones_excel_errores.id_importacion_fila > temo.importaciones_excel_filas.id_importacion_fila [delete: Cascade, update: No action]
+Ref importaciones_excel_errores_id_importacion_fkey: temo.importaciones_excel_errores.id_importacion > temo.importaciones_excel.id_importacion [delete: Cascade, update: No action]
+Ref importaciones_excel_filas_id_importacion_fkey: temo.importaciones_excel_filas.id_importacion > temo.importaciones_excel.id_importacion [delete: Cascade, update: No action]
+Ref importaciones_excel_filas_id_transaccion_mapeada_fkey: temo.importaciones_excel_filas.id_transaccion_mapeada > temo.transacciones.id_transaccion [delete: No action, update: No action]
+Ref jornadas_id_sucursal_fkey: temo.jornadas.id_sucursal > temo.sucursales.id_sucursal [delete: No action, update: No action]
+Ref jornadas_id_usuario_apertura_fkey: temo.jornadas.id_usuario_apertura > temo.usuarios.id_usuario [delete: No action, update: No action]
+Ref jornadas_id_usuario_cierre_fkey: temo.jornadas.id_usuario_cierre > temo.usuarios.id_usuario [delete: No action, update: No action]
+Ref movimientos_cuentas_id_cuenta_fkey: temo.movimientos_cuentas.id_cuenta > temo.cuentas_bancarias.id_cuenta [delete: No action, update: No action]
+Ref movimientos_cuentas_id_moneda_fkey: temo.movimientos_cuentas.id_moneda > temo.monedas.id_moneda [delete: No action, update: No action]
+Ref movimientos_cuentas_id_movimiento_reversado_fkey: temo.movimientos_cuentas.id_movimiento_reversado > temo.movimientos_cuentas.id_movimiento_cuenta [delete: No action, update: No action]
+Ref movimientos_cuentas_id_transaccion_fkey: temo.movimientos_cuentas.id_transaccion > temo.transacciones.id_transaccion [delete: No action, update: No action]
+Ref movimientos_cuentas_id_transferencia_fkey: temo.movimientos_cuentas.id_transferencia > temo.transferencias.id_transferencia [delete: No action, update: No action]
+Ref movimientos_efectivo_id_abono_pendiente_fkey: temo.movimientos_efectivo.id_abono_pendiente > temo.abonos_pendientes.id_abono [delete: Cascade, update: No action]
+Ref movimientos_efectivo_id_caja_fkey: temo.movimientos_efectivo.id_caja > temo.cajas.id_caja [delete: No action, update: No action]
+Ref movimientos_efectivo_id_grupo_transacciones_fkey: temo.movimientos_efectivo.id_grupo_transacciones > temo.grupos_transacciones.id_grupo_transacciones [delete: No action, update: No action]
+Ref movimientos_efectivo_id_moneda_fkey: temo.movimientos_efectivo.id_moneda > temo.monedas.id_moneda [delete: No action, update: No action]
+Ref movimientos_efectivo_id_movimiento_reversado_fkey: temo.movimientos_efectivo.id_movimiento_reversado > temo.movimientos_efectivo.id_movimiento_efectivo [delete: No action, update: No action]
+Ref movimientos_efectivo_id_transaccion_fkey: temo.movimientos_efectivo.id_transaccion > temo.transacciones.id_transaccion [delete: No action, update: No action]
+Ref movimientos_efectivo_id_transferencia_fkey: temo.movimientos_efectivo.id_transferencia > temo.transferencias.id_transferencia [delete: No action, update: No action]
+Ref movimientos_efectivo_id_turno_fkey: temo.movimientos_efectivo.id_turno > temo.turnos.id_turno [delete: No action, update: No action]
+Ref notificaciones_usuarios_id_pendiente_fkey: temo.notificaciones_usuarios.id_pendiente > temo.pagos_pendientes.id_pendiente [delete: Cascade, update: No action]
+Ref notificaciones_usuarios_id_turno_fkey: temo.notificaciones_usuarios.id_turno > temo.turnos.id_turno [delete: Cascade, update: No action]
+Ref notificaciones_usuarios_id_usuario_destino_fkey: temo.notificaciones_usuarios.id_usuario_destino > temo.usuarios.id_usuario [delete: Cascade, update: No action]
+Ref notificaciones_usuarios_id_usuario_origen_fkey: temo.notificaciones_usuarios.id_usuario_origen > temo.usuarios.id_usuario [delete: No action, update: No action]
+Ref pagos_pendientes_id_contraparte_fkey: temo.pagos_pendientes.id_contraparte > temo.contrapartes.id_contraparte [delete: No action, update: No action]
+Ref pagos_pendientes_id_moneda_fkey: temo.pagos_pendientes.id_moneda > temo.monedas.id_moneda [delete: No action, update: No action]
+Ref pagos_pendientes_id_transaccion_fkey: temo.pagos_pendientes.id_transaccion > temo.transacciones.id_transaccion [delete: No action, update: No action]
+Ref pagos_pendientes_id_usuario_creacion_fkey: temo.pagos_pendientes.id_usuario_creacion > temo.usuarios.id_usuario [delete: No action, update: No action]
+Ref reglas_comisiones_id_entidad_fkey: temo.reglas_comisiones.id_entidad > temo.entidades_bancarias.id_entidad [delete: No action, update: No action]
+Ref reglas_comisiones_id_moneda_comision_fkey: temo.reglas_comisiones.id_moneda_comision > temo.monedas.id_moneda [delete: No action, update: No action]
+Ref reglas_comisiones_id_moneda_fkey: temo.reglas_comisiones.id_moneda > temo.monedas.id_moneda [delete: No action, update: No action]
+Ref reglas_comisiones_id_movimiento_fkey: temo.reglas_comisiones.id_movimiento > temo.movimientos.id_movimiento [delete: No action, update: No action]
+Ref reglas_comisiones_id_usuario_creacion_fkey: temo.reglas_comisiones.id_usuario_creacion > temo.usuarios.id_usuario [delete: No action, update: No action]
+Ref roles_permisos_id_permiso_fkey: temo.roles_permisos.id_permiso > temo.permisos.id_permiso [delete: Cascade, update: No action]
+Ref roles_permisos_id_rol_fkey: temo.roles_permisos.id_rol > temo.roles.id_rol [delete: Cascade, update: No action]
+Ref saldos_jornada_cuentas_id_cuenta_fkey: temo.saldos_jornada_cuentas.id_cuenta > temo.cuentas_bancarias.id_cuenta [delete: No action, update: No action]
+Ref saldos_jornada_cuentas_id_jornada_fkey: temo.saldos_jornada_cuentas.id_jornada > temo.jornadas.id_jornada [delete: Cascade, update: No action]
+Ref saldos_turno_cuentas_id_cuenta_fkey: temo.saldos_turno_cuentas.id_cuenta > temo.cuentas_bancarias.id_cuenta [delete: No action, update: No action]
+Ref saldos_turno_cuentas_id_turno_fkey: temo.saldos_turno_cuentas.id_turno > temo.turnos.id_turno [delete: Cascade, update: No action]
+Ref solicitudes_cierre_turno_id_turno_fkey: temo.solicitudes_cierre_turno.id_turno > temo.turnos.id_turno [delete: Cascade, update: No action]
+Ref solicitudes_cierre_turno_id_usuario_revision_fkey: temo.solicitudes_cierre_turno.id_usuario_revision > temo.usuarios.id_usuario [delete: No action, update: No action]
+Ref solicitudes_cierre_turno_id_usuario_solicitud_fkey: temo.solicitudes_cierre_turno.id_usuario_solicitud > temo.usuarios.id_usuario [delete: No action, update: No action]
+Ref tipos_cambio_id_usuario_creacion_fkey: temo.tipos_cambio.id_usuario_creacion > temo.usuarios.id_usuario [delete: No action, update: No action]
+Ref fk_transacciones_grupo: temo.transacciones.id_grupo_transacciones > temo.grupos_transacciones.id_grupo_transacciones [delete: No action, update: No action]
+Ref transacciones_id_caja_fkey: temo.transacciones.id_caja > temo.cajas.id_caja [delete: No action, update: No action]
+Ref transacciones_id_cajero_fkey: temo.transacciones.id_cajero > temo.usuarios.id_usuario [delete: No action, update: No action]
+Ref transacciones_id_contraparte_fkey: temo.transacciones.id_contraparte > temo.contrapartes.id_contraparte [delete: No action, update: No action]
+Ref transacciones_id_cuenta_movimiento_fkey: temo.transacciones.id_cuenta_movimiento > temo.cuentas_movimientos.id_cuenta_movimiento [delete: No action, update: No action]
+Ref transacciones_id_metodo_pago_fkey: temo.transacciones.id_metodo_pago > temo.metodos_pago.id_metodo_pago [delete: No action, update: No action]
+Ref transacciones_id_moneda_original_fkey: temo.transacciones.id_moneda_original > temo.monedas.id_moneda [delete: No action, update: No action]
+Ref transacciones_id_sucursal_fkey: temo.transacciones.id_sucursal > temo.sucursales.id_sucursal [delete: No action, update: No action]
+Ref transacciones_id_tipo_cambio_fkey: temo.transacciones.id_tipo_cambio > temo.tipos_cambio.id_tipo_cambio [delete: No action, update: No action]
+Ref transacciones_id_turno_fkey: temo.transacciones.id_turno > temo.turnos.id_turno [delete: No action, update: No action]
+Ref transacciones_id_usuario_creacion_fkey: temo.transacciones.id_usuario_creacion > temo.usuarios.id_usuario [delete: No action, update: No action]
+Ref transacciones_id_usuario_modificacion_fkey: temo.transacciones.id_usuario_modificacion > temo.usuarios.id_usuario [delete: No action, update: No action]
+Ref transacciones_comisiones_id_comision_fkey: temo.transacciones_comisiones.id_comision > temo.reglas_comisiones.id_comision [delete: No action, update: No action]
+Ref transacciones_comisiones_id_moneda_fkey: temo.transacciones_comisiones.id_moneda > temo.monedas.id_moneda [delete: No action, update: No action]
+Ref transacciones_comisiones_id_transaccion_fkey: temo.transacciones_comisiones.id_transaccion > temo.transacciones.id_transaccion [delete: Cascade, update: No action]
+Ref transacciones_montos_id_cuenta_fkey: temo.transacciones_montos.id_cuenta > temo.cuentas_bancarias.id_cuenta [delete: No action, update: No action]
+Ref transacciones_montos_id_moneda_fkey: temo.transacciones_montos.id_moneda > temo.monedas.id_moneda [delete: No action, update: No action]
+Ref transacciones_montos_id_transaccion_fkey: temo.transacciones_montos.id_transaccion > temo.transacciones.id_transaccion [delete: Cascade, update: No action]
+Ref transferencias_id_cuenta_fkey: temo.transferencias.id_cuenta > temo.cuentas_bancarias.id_cuenta [delete: No action, update: No action]
+Ref transferencias_id_moneda_fkey: temo.transferencias.id_moneda > temo.monedas.id_moneda [delete: No action, update: No action]
+Ref transferencias_id_turno_fkey: temo.transferencias.id_turno > temo.turnos.id_turno [delete: No action, update: No action]
+Ref transferencias_id_usuario_anulacion_fkey: temo.transferencias.id_usuario_anulacion > temo.usuarios.id_usuario [delete: No action, update: No action]
+Ref transferencias_id_usuario_creacion_fkey: temo.transferencias.id_usuario_creacion > temo.usuarios.id_usuario [delete: No action, update: No action]
+Ref transferencias_id_usuario_modificacion_fkey: temo.transferencias.id_usuario_modificacion > temo.usuarios.id_usuario [delete: No action, update: No action]
+Ref transferencias_denominaciones_id_denominacion_fkey: temo.transferencias_denominaciones.id_denominacion > temo.denominaciones.id_denominacion [delete: No action, update: No action]
+Ref transferencias_denominaciones_id_transferencia_fkey: temo.transferencias_denominaciones.id_transferencia > temo.transferencias.id_transferencia [delete: Cascade, update: No action]
+Ref turnos_id_caja_fkey: temo.turnos.id_caja > temo.cajas.id_caja [delete: No action, update: No action]
+Ref turnos_id_cajero_fkey: temo.turnos.id_cajero > temo.usuarios.id_usuario [delete: No action, update: No action]
+Ref turnos_id_jornada_fkey: temo.turnos.id_jornada > temo.jornadas.id_jornada [delete: No action, update: No action]
+Ref turnos_id_sucursal_fkey: temo.turnos.id_sucursal > temo.sucursales.id_sucursal [delete: No action, update: No action]
+Ref turnos_id_usuario_apertura_fkey: temo.turnos.id_usuario_apertura > temo.usuarios.id_usuario [delete: No action, update: No action]
+Ref turnos_id_usuario_aprobacion_fkey: temo.turnos.id_usuario_aprobacion > temo.usuarios.id_usuario [delete: No action, update: No action]
+Ref turnos_id_usuario_cierre_fkey: temo.turnos.id_usuario_cierre > temo.usuarios.id_usuario [delete: No action, update: No action]
+Ref usuarios_id_rol_fkey: temo.usuarios.id_rol > temo.roles.id_rol [delete: No action, update: No action]
+Ref usuarios_sucursales_id_sucursal_fkey: temo.usuarios_sucursales.id_sucursal > temo.sucursales.id_sucursal [delete: Cascade, update: No action]
+Ref usuarios_sucursales_id_usuario_fkey: temo.usuarios_sucursales.id_usuario > temo.usuarios.id_usuario [delete: Cascade, update: No action]
+
+TableGroup "01 - Seguridad y acceso" {
+  temo.roles
+  temo.permisos
+  temo.roles_permisos
+  temo.usuarios
+  temo.usuarios_sucursales
+  temo.dispositivos
+}
+
+TableGroup "02 - Catalogos maestros" {
+  temo.entidades_bancarias
+  temo.monedas
+  temo.sucursales
+  temo.cajas
+  temo.cuentas_bancarias
+  temo.cuentas_sucursales
+  temo.movimientos
+  temo.cuentas_movimientos
+  temo.efectos_movimientos
+  temo.denominaciones
+  temo.metodos_pago
+  temo.tipos_cambio
+  temo.reglas_comisiones
+  temo.contrapartes
+}
+
+TableGroup "03 - Jornadas, turnos y saldos" {
+  temo.jornadas
+  temo.turnos
+  temo.arqueos
+  temo.arqueos_denominaciones
+  temo.saldos_jornada_cuentas
+  temo.saldos_turno_cuentas
+  temo.solicitudes_cierre_turno
+  temo.cierres_diarios
+  temo.cierres_diarios_detalles
+}
+
+TableGroup "04 - Transacciones y pendientes" {
+  temo.grupos_transacciones
+  temo.transacciones
+  temo.transacciones_montos
+  temo.movimientos_efectivo
+  temo.movimientos_cuentas
+  temo.transacciones_comisiones
+  temo.pagos_pendientes
+  temo.abonos_pendientes
+  temo.historial_pendientes
+  temo.anulaciones_transacciones
+  temo.correcciones_transacciones
+}
+
+TableGroup "05 - Transferencias internas" {
+  temo.transferencias
+  temo.transferencias_denominaciones
+}
+
+TableGroup "06 - Control, auditoria e importacion" {
+  temo.bitacora
+  temo.aprobaciones
+  temo.notificaciones_usuarios
+  temo.importaciones_excel
+  temo.importaciones_excel_filas
+  temo.importaciones_excel_errores
+  temo.migraciones_sistema
+}
+
+TableGroup "07 - Sin clasificar" {
+  temo.directorio_cedulas
+  temo.directorio_destinatarios
+  temo.directorio_fuentes_importacion
+  temo.directorio_identificadores
+  temo.directorio_referencias
+}

@@ -2,67 +2,67 @@
 
 Este documento define la primera version funcional del sistema TEMO para Miscelanea Olivera. La base actual ya contempla dos perfiles principales:
 
-- **Duena**: acceso completo, incluyendo comisiones, cierres, configuracion y reportes gerenciales.
+- **Jefa**: acceso completo, incluyendo comisiones, cierres, configuracion y reportes gerenciales.
 - **Cajero**: operacion diaria de caja, registro de transacciones, arqueos y reportes operativos sin informacion de comisiones.
 
 ## Procesos principales
 
 | Proceso | Objetivo | Usuario principal | Resultado esperado |
 | --- | --- | --- | --- |
-| Inicio de sesion | Identificar al usuario y cargar permisos | Duena, Cajero | Sesion activa con menu segun rol |
-| Apertura de dia | Crear el dia operativo por sucursal | Duena | Dia abierto para registrar turnos |
-| Apertura de turno | Asignar caja, cajero y efectivo inicial | Duena, Cajero | Turno abierto con conteo inicial |
-| Registro de transacciones | Registrar depositos, retiros, remesas, pagos y otros movimientos | Cajero, Duena | Transaccion guardada con movimientos de efectivo/cuenta |
-| Anulacion de transacciones | Reversar una transaccion con motivo | Cajero, Duena | Transaccion anulada y reversos creados |
-| Correccion de transacciones cerradas | Corregir operaciones despues del cierre sin borrar historial | Duena | Nueva transaccion correctiva trazable |
-| Gestion de pendientes | Controlar cuentas por cobrar o por pagar | Cajero, Duena | Pendiente actualizado con abonos y estado |
-| Arqueo de caja | Contar efectivo por denominacion | Cajero, Duena | Conteo fisico comparado contra sistema |
+| Inicio de sesion | Identificar al usuario y cargar permisos | Jefa, Cajero | Sesion activa con menu segun rol |
+| Apertura de dia | Crear el dia operativo por sucursal | Jefa | Dia abierto para registrar turnos |
+| Apertura de turno | Asignar caja, cajero y efectivo inicial | Jefa, Cajero | Turno abierto con conteo inicial |
+| Registro de transacciones | Registrar depositos, retiros, remesas, pagos y otros movimientos | Cajero, Jefa | Transaccion guardada con movimientos de efectivo/cuenta |
+| Anulacion de transacciones | Reversar una transaccion con motivo | Cajero, Jefa | Transaccion anulada y reversos creados |
+| Correccion de transacciones cerradas | Corregir operaciones despues del cierre sin borrar historial | Jefa | Nueva transaccion correctiva trazable |
+| Gestion de pendientes | Controlar cuentas por cobrar o por pagar | Cajero, Jefa | Pendiente actualizado con abonos y estado |
+| Arqueo de caja | Contar efectivo por denominacion | Cajero, Jefa | Conteo fisico comparado contra sistema |
 | Cierre de turno | Finalizar turno y enviar diferencias a revision | Cajero | Turno cerrado o pendiente de aprobacion |
-| Aprobacion de cierres | Revisar diferencias y aprobar/rechazar cierres | Duena | Turno aprobado o devuelto con observacion |
-| Cierre diario | Consolidar cajas, bancos, comisiones y diferencias del dia | Duena | Dia cerrado con resumen oficial |
-| Gestion de bancos/saldos | Administrar entidades, cuentas y saldos operativos | Duena | Catalogo financiero vigente |
-| Gestion de comisiones | Definir reglas y consultar ganancias | Duena | Reglas activas y reportes de comision |
-| Reportes | Consultar movimientos, cierres, pendientes y saldos | Duena, Cajero | Informacion filtrable y exportable |
-| Importacion historica | Cargar registros desde Excel anterior | Duena | Datos historicos validados o rechazados |
-| Gestion de usuarios | Administrar usuarios, credenciales temporales, roles y estados | Duena | Usuarios activos con rol asignado |
-| Gestion de roles y permisos | Administrar roles y permisos por pantalla o funcion | Duena | Matriz de permisos vigente por rol |
-| Auditoria | Revisar acciones sensibles del sistema | Duena | Historial de cambios y accesos |
+| Aprobacion de cierres | Revisar diferencias y aprobar/rechazar cierres | Jefa | Turno aprobado o devuelto con observacion |
+| Cierre diario | Consolidar cajas, bancos, comisiones y diferencias del dia | Jefa | Dia cerrado con resumen oficial |
+| Gestion de bancos/saldos | Administrar entidades, cuentas y saldos operativos | Jefa | Catalogo financiero vigente |
+| Gestion de comisiones | Definir reglas y consultar ganancias | Jefa | Reglas activas y reportes de comision |
+| Reportes | Consultar movimientos, cierres, pendientes y saldos | Jefa, Cajero | Informacion filtrable y exportable |
+| Importacion historica | Cargar registros desde Excel anterior | Jefa | Datos historicos validados o rechazados |
+| Gestion de usuarios | Administrar usuarios, credenciales temporales, roles y estados | Jefa | Usuarios activos con rol asignado |
+| Gestion de roles y permisos | Administrar roles y permisos por pantalla o funcion | Jefa | Matriz de permisos vigente por rol |
+| Auditoria | Revisar acciones sensibles del sistema | Jefa | Historial de cambios y accesos |
 
 ## Pantallas existentes o previstas
 
 | Pantalla | Ruta sugerida | Que muestra | Acceso |
 | --- | --- | --- | --- |
-| Login | `/login` | Usuario, contrasena, estado de conexion, mensajes de error | Duena, Cajero |
-| Panel de duena | `/duena` o `/dashboard` | Resumen del dia, efectivo NIO/USD, entidades, comisiones, turnos abiertos, alertas | Duena |
+| Login | `/login` | Usuario, contrasena, estado de conexion, mensajes de error | Jefa, Cajero |
+| Panel de jefa | `/jefa` o `/dashboard` | Resumen del dia, efectivo NIO/USD, entidades, comisiones, turnos abiertos, alertas | Jefa |
 | Panel de cajero | `/caja` | Turno activo, botones rapidos de transaccion, efectivo esperado, pendientes del cajero | Cajero |
-| Turnos | `/turnos` | Turnos abiertos, cerrados, pendientes de aprobacion, filtros por fecha/sucursal/cajero | Duena, Cajero limitado |
-| Apertura de turno | `/turnos/nuevo` | Sucursal, caja, cajero, fecha, conteo inicial por denominacion | Duena, Cajero |
-| Detalle de turno | `/turnos/:id` | Transacciones del turno, totales, arqueos, diferencias, bitacora | Duena, Cajero si es su turno |
-| Transacciones | `/transacciones` | Listado filtrable por fecha, entidad, movimiento, moneda, cajero y estado | Duena, Cajero limitado |
-| Nueva transaccion | `/transacciones/nueva` | Entidad, movimiento, moneda, monto, metodo de pago, cliente/proveedor, descripcion | Duena, Cajero |
-| Detalle de transaccion | `/transacciones/:id` | Datos completos, importes, movimientos, estado, motivo de anulacion/correccion | Duena, Cajero limitado |
-| Arqueo | `/arqueo` | Conteo por denominaciones NIO/USD, esperado del sistema, diferencia | Duena, Cajero |
-| Cierre de turno | `/turnos/:id/cierre` | Resumen del turno, conteo final, observaciones, envio a revision | Duena, Cajero si es su turno |
-| Aprobaciones | `/aprobaciones` | Cierres con diferencia, anulaciones sensibles, correcciones pendientes | Duena |
-| Pendientes | `/pendientes` | Por cobrar, por pagar, vencidos, abonados, pagados, filtros por persona | Duena, Cajero |
-| Abono a pendiente | `/pendientes/:id/abono` | Monto, moneda, metodo de pago, observacion | Duena, Cajero |
-| Bancos y entidades | `/bancos` | BAC, BANPRO, LAFISE, BDF, PEX, TELEDOLAR, saldos y cuentas | Duena |
-| Cuentas financieras | `/cuentas` | Alias, moneda, entidad, sucursal/global, estado | Duena |
-| Catalogos | `/catalogos` | Sucursales, cajas, monedas, denominaciones, tipos de movimiento, metodos de pago | Duena |
-| Comisiones | `/comisiones` | Reglas por entidad/movimiento, rangos, vigencia, moneda, historico | Duena |
-| Reportes operativos | `/reportes/operativos` | Transacciones, turnos, arqueos, pendientes, exportacion | Duena, Cajero |
-| Reporte de comisiones | `/reportes/comisiones` | Ganancias por entidad, movimiento, fecha, sucursal, cajero y moneda | Duena |
-| Cierre diario | `/cierres/diarios` | Totales por caja, efectivo contado, saldos de cuentas, comisiones, diferencias | Duena |
-| Importacion historica | `/importaciones` | Carga de Excel, validaciones, errores, asignacion de sucursal/caja/cajero | Duena |
-| Gestion de usuarios | `/usuarios` | IdUsuario, nombres, apellidos, usuario, rol asignado, estado | Duena |
-| Roles y permisos | `/roles-permisos` | Roles, permisos disponibles y matriz de permisos por rol | Duena |
-| Auditoria | `/auditoria` | Acciones realizadas, usuario, fecha, entidad afectada, datos antes/despues | Duena |
+| Turnos | `/turnos` | Turnos abiertos, cerrados, pendientes de aprobacion, filtros por fecha/sucursal/cajero | Jefa, Cajero limitado |
+| Apertura de turno | `/turnos/nuevo` | Sucursal, caja, cajero, fecha, conteo inicial por denominacion | Jefa, Cajero |
+| Detalle de turno | `/turnos/:id` | Transacciones del turno, totales, arqueos, diferencias, bitacora | Jefa, Cajero si es su turno |
+| Transacciones | `/transacciones` | Listado filtrable por fecha, entidad, movimiento, moneda, cajero y estado | Jefa, Cajero limitado |
+| Nueva transaccion | `/transacciones/nueva` | Entidad, movimiento, moneda, monto, metodo de pago, cliente/proveedor, descripcion | Jefa, Cajero |
+| Detalle de transaccion | `/transacciones/:id` | Datos completos, importes, movimientos, estado, motivo de anulacion/correccion | Jefa, Cajero limitado |
+| Arqueo | `/arqueo` | Conteo por denominaciones NIO/USD, esperado del sistema, diferencia | Jefa, Cajero |
+| Cierre de turno | `/turnos/:id/cierre` | Resumen del turno, conteo final, observaciones, envio a revision | Jefa, Cajero si es su turno |
+| Aprobaciones | `/aprobaciones` | Cierres con diferencia, anulaciones sensibles, correcciones pendientes | Jefa |
+| Pendientes | `/pendientes` | Por cobrar, por pagar, vencidos, abonados, pagados, filtros por persona | Jefa, Cajero |
+| Abono a pendiente | `/pendientes/:id/abono` | Monto, moneda, metodo de pago, observacion | Jefa, Cajero |
+| Bancos y entidades | `/bancos` | BAC, BANPRO, LAFISE, BDF, PEX, TELEDOLAR, saldos y cuentas | Jefa |
+| Cuentas financieras | `/cuentas` | Alias, moneda, entidad, sucursal/global, estado | Jefa |
+| Catalogos | `/catalogos` | Sucursales, cajas, monedas, denominaciones, tipos de movimiento, metodos de pago | Jefa |
+| Comisiones | `/comisiones` | Reglas por entidad/movimiento, rangos, vigencia, moneda, historico | Jefa |
+| Reportes operativos | `/reportes/operativos` | Transacciones, turnos, arqueos, pendientes, exportacion | Jefa, Cajero |
+| Reporte de comisiones | `/reportes/comisiones` | Ganancias por entidad, movimiento, fecha, sucursal, cajero y moneda | Jefa |
+| Cierre diario | `/cierres/diarios` | Totales por caja, efectivo contado, saldos de cuentas, comisiones, diferencias | Jefa |
+| Importacion historica | `/importaciones` | Carga de Excel, validaciones, errores, asignacion de sucursal/caja/cajero | Jefa |
+| Gestion de usuarios | `/usuarios` | IdUsuario, nombres, apellidos, usuario, rol asignado, estado | Jefa |
+| Roles y permisos | `/roles-permisos` | Roles, permisos disponibles y matriz de permisos por rol | Jefa |
+| Auditoria | `/auditoria` | Acciones realizadas, usuario, fecha, entidad afectada, datos antes/despues | Jefa |
 
 ## Menu por rol
 
-### Duena
+### Jefa
 
-La duena debe ver el menu completo:
+La jefa debe ver el menu completo:
 
 - Panel Jefa.
 - Mi caja: Arqueo, Aprobaciones y Pendientes.
@@ -92,7 +92,7 @@ El cajero no debe recibir desde el backend datos de comisiones, reglas de comisi
 
 ## Contenido minimo por pantalla
 
-### Panel de duena
+### Panel de jefa
 
 - Indicadores del dia: efectivo NIO, efectivo USD, transferencias, pendientes y diferencias.
 - Resumen de comisiones del dia, semana y mes.
@@ -176,11 +176,11 @@ Reportes recomendados:
 - Permisos: IdPermiso, detalle o nombre clave, descripcion y estado.
 - Relacion muchos-a-muchos entre roles y permisos.
 - Matriz para activar permisos por rol segun pantalla o funcion.
-- La duena debe tener todos los permisos activos por defecto.
+- La jefa debe tener todos los permisos activos por defecto.
 
 ## Reglas de acceso por datos sensibles
 
-| Dato | Duena | Cajero |
+| Dato | Jefa | Cajero |
 | --- | --- | --- |
 | Comisiones calculadas | Si | No |
 | Reglas de comision | Si | No |
@@ -230,12 +230,12 @@ Cada nueva pantalla o funcion agregada al sistema debe registrarse tambien como 
 
 1. Login real con roles y permisos.
 2. Menu dinamico por rol.
-3. Panel de cajero y panel de duena separados.
+3. Panel de cajero y panel de jefa separados.
 4. Apertura de turno con conteo inicial.
 5. Registro de transacciones conectado a catalogos.
 6. Listado y detalle de transacciones.
 7. Arqueo y cierre de turno.
-8. Aprobacion de cierres por la duena.
+8. Aprobacion de cierres por la jefa.
 9. Pendientes y abonos.
 10. Reportes operativos.
 11. Comisiones y reporte de ganancias.

@@ -8,7 +8,7 @@ services:
       POSTGRES_PASSWORD: temo_local_password
       POSTGRES_DB: temo
     ports:
-      - "5434:5432"
+      - "${POSTGRES_PORT:-55432}:5432"
     volumes:
       - temo_postgres_data:/var/lib/postgresql/data
       - ./database/init:/docker-entrypoint-initdb.d:ro

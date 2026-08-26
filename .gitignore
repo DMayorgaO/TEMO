@@ -6,5 +6,8 @@ build/
 .env.local
 coverage/
 *.log
+logs/
+database/local-seeds/
+database/seeds/*.initial.json
 tmp/
 .DS_Store
