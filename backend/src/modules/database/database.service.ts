@@ -1,5 +1,6 @@
 import { Injectable, OnModuleDestroy } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { readFileSync } from 'node:fs';
 import { Pool, PoolClient, QueryResult, QueryResultRow } from 'pg';
 
 @Injectable()
@@ -10,10 +11,21 @@ export class DatabaseService implements OnModuleDestroy {
     const connectionString =
       config.get<string>('DATABASE_URL') ??
       'postgresql://temo:temo_local_password@localhost:55432/temo';
+    const useSsl = config.get<string>('DATABASE_SSL', 'false').toLowerCase() === 'true';
+    const sslCaPath = config.get<string>('DATABASE_SSL_CA_PATH', '').trim();
+    const sslCaBase64 = config.get<string>('DATABASE_SSL_CA_BASE64', '').trim();
+    const sslCa = sslCaBase64
+      ? Buffer.from(sslCaBase64, 'base64').toString('utf8')
+      : sslCaPath
+        ? readFileSync(sslCaPath, 'utf8')
+        : undefined;
+    const maxConnections = Number(config.get<string>('DATABASE_POOL_MAX', '10'));
 
     this.pool = new Pool({
       connectionString,
       application_name: 'temo-backend',
+      max: Number.isFinite(maxConnections) ? Math.max(1, Math.min(maxConnections, 20)) : 10,
+      ssl: useSsl ? { ca: sslCa, rejectUnauthorized: true } : undefined,
     });
   }
 

@@ -4,6 +4,8 @@ build/
 *.tsbuildinfo
 .env
 .env.local
+.env.cloud
+.certificates/
 coverage/
 *.log
 logs/

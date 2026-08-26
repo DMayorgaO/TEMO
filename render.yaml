@@ -1,0 +1,26 @@
+services:
+  - type: web
+    name: temo-api
+    runtime: node
+    plan: free
+    region: oregon
+    branch: main
+    buildCommand: npm ci && npm run build -w backend
+    startCommand: npm run start -w backend
+    healthCheckPath: /api/health
+    autoDeploy: true
+    envVars:
+      - key: NODE_VERSION
+        value: 22.14.0
+      - key: DATABASE_URL
+        sync: false
+      - key: DATABASE_SSL
+        value: "true"
+      - key: DATABASE_SSL_CA_BASE64
+        sync: false
+      - key: DATABASE_POOL_MAX
+        value: "5"
+      - key: AUTH_SECRET
+        generateValue: true
+      - key: CORS_ORIGINS
+        sync: false
