@@ -8,6 +8,7 @@ import { ShiftsModule } from './modules/shifts/shifts.module';
 import { TransactionsModule } from './modules/transactions/transactions.module';
 import { TransfersModule } from './modules/transfers/transfers.module';
 import { DirectoryModule } from './modules/directory/directory.module';
+import { AppController } from './app.controller';
 
 @Module({
   imports: [
@@ -21,5 +22,6 @@ import { DirectoryModule } from './modules/directory/directory.module';
     TransfersModule,
     DirectoryModule,
   ],
+  controllers: [AppController],
 })
 export class AppModule {}

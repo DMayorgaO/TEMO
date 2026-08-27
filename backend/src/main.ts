@@ -1,4 +1,5 @@
 import { ConfigService } from '@nestjs/config';
+import { RequestMethod } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
 
@@ -15,7 +16,9 @@ async function bootstrap() {
     origin: configuredOrigins.length ? configuredOrigins : true,
     credentials: true,
   });
-  app.setGlobalPrefix('api');
+  app.setGlobalPrefix('api', {
+    exclude: [{ path: '', method: RequestMethod.GET }],
+  });
 
   await app.listen(port, '0.0.0.0');
 }
