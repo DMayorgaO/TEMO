@@ -9,10 +9,15 @@ import { TransactionsModule } from './modules/transactions/transactions.module';
 import { TransfersModule } from './modules/transfers/transfers.module';
 import { DirectoryModule } from './modules/directory/directory.module';
 import { AppController } from './app.controller';
+import { validateEnvironment } from './config/environment.validation';
 
 @Module({
   imports: [
-    ConfigModule.forRoot({ isGlobal: true, envFilePath: ['.env', '../.env'] }),
+    ConfigModule.forRoot({
+      isGlobal: true,
+      envFilePath: ['.env', '../.env'],
+      validate: validateEnvironment,
+    }),
     DatabaseModule,
     HealthModule,
     AuthModule,

@@ -86,6 +86,8 @@ type AuthUser = {
   roleCode: string;
   roleName: string;
   permissions: string[];
+  mustChangePassword: boolean;
+  sessionVersion: number;
 };
 
 type LoginResponse = {
@@ -2967,6 +2969,27 @@ export function App() {
   const [systemConfirm, setSystemConfirm] = useState<SystemConfirmRequest | null>(null);
   const [, setCatalogRevision] = useState(0);
 
+  // Cierra sesiones abandonadas sin guardar contrasenas ni informacion sensible.
+  useEffect(() => {
+    if (!currentUser) return;
+    const idleMinutes = Number(
+      (import.meta as ImportMeta & { env?: Record<string, string | undefined> }).env
+        ?.VITE_SESSION_IDLE_MINUTES || '30',
+    );
+    const idleMs = Math.max(5, Number.isFinite(idleMinutes) ? idleMinutes : 30) * 60_000;
+    let timer = window.setTimeout(() => window.dispatchEvent(new Event('temo:session-expired')), idleMs);
+    const reset = () => {
+      window.clearTimeout(timer);
+      timer = window.setTimeout(() => window.dispatchEvent(new Event('temo:session-expired')), idleMs);
+    };
+    const events: Array<keyof WindowEventMap> = ['mousedown', 'keydown', 'touchstart', 'scroll'];
+    events.forEach((event) => window.addEventListener(event, reset, { passive: true }));
+    return () => {
+      window.clearTimeout(timer);
+      events.forEach((event) => window.removeEventListener(event, reset));
+    };
+  }, [currentUser?.id]);
+
   // Restaura una sesion valida y descarta tokens vencidos o usuarios inactivos.
   useEffect(() => {
     const handleSystemConfirm = (event: Event) => setSystemConfirm((event as CustomEvent<SystemConfirmRequest>).detail);
@@ -3159,6 +3182,7 @@ export function App() {
   }
 
   function closeSession() {
+    void apiRequest('/auth/logout', { method: 'POST' }).catch(() => undefined);
     window.sessionStorage.removeItem(authTokenStorageKey);
     window.sessionStorage.removeItem(authUserStorageKey);
     setCurrentUser(null);
@@ -3189,6 +3213,10 @@ export function App() {
 
   if (!currentUser) {
     return <LoginScreen onLogin={completeLogin} />;
+  }
+
+  if (currentUser.mustChangePassword) {
+    return <ChangePasswordScreen user={currentUser} onChanged={completeLogin} onCancel={closeSession} />;
   }
 
   return (
@@ -3521,6 +3549,69 @@ function ShiftClosureModal({
         </footer>
       </section>
     </div>
+  );
+}
+
+function ChangePasswordScreen({
+  user,
+  onChanged,
+  onCancel,
+}: {
+  user: AuthUser;
+  onChanged: (response: LoginResponse) => void;
+  onCancel: () => void;
+}) {
+  const [currentPassword, setCurrentPassword] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmation, setConfirmation] = useState('');
+  const [error, setError] = useState('');
+  const [saving, setSaving] = useState(false);
+  const formRef = useAutoFocusFirstField<HTMLFormElement>();
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (saving) return;
+    if (newPassword !== confirmation) {
+      setError('La confirmacion no coincide con la nueva contrasena.');
+      return;
+    }
+    setSaving(true);
+    setError('');
+    try {
+      const response = await apiRequest<LoginResponse>('/auth/change-password', {
+        method: 'POST',
+        body: JSON.stringify({ currentPassword, newPassword }),
+      });
+      onChanged(response);
+    } catch (changeError) {
+      setError(changeError instanceof Error ? changeError.message : 'No fue posible cambiar la contrasena.');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <main className="login-page">
+      <section className="login-panel" aria-labelledby="change-password-title">
+        <div className="login-brand">
+          <img src="/LOGO_TEMO.png" alt="TEMO" />
+          <span>Transacciones Económicas Miscelánea Olivera</span>
+        </div>
+        <div className="login-heading">
+          <small>Primer ingreso de {user.username}</small>
+          <h1 id="change-password-title">Cambiar contraseña</h1>
+          <p>Utilice al menos 10 caracteres, una mayúscula, una minúscula y un número.</p>
+        </div>
+        <form className="login-form" onSubmit={submit} ref={formRef}>
+          <label className="form-field">Contraseña actual<input autoComplete="current-password" type="password" value={currentPassword} onChange={(event) => setCurrentPassword(event.target.value)} required /></label>
+          <label className="form-field">Nueva contraseña<input autoComplete="new-password" type="password" value={newPassword} onChange={(event) => setNewPassword(event.target.value)} minLength={10} required /></label>
+          <label className="form-field">Confirmar contraseña<input autoComplete="new-password" type="password" value={confirmation} onChange={(event) => setConfirmation(event.target.value)} minLength={10} required /></label>
+          {error && <p className="login-error" role="alert">{error}</p>}
+          <button type="submit" className="primary-button login-submit" disabled={saving}><ShieldCheck size={19} />{saving ? 'Actualizando...' : 'Cambiar contraseña'}</button>
+          <button type="button" className="secondary-button danger-button login-submit" onClick={onCancel}><X size={18} />Cancelar</button>
+        </form>
+      </section>
+    </main>
   );
 }
 

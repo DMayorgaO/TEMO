@@ -10,6 +10,8 @@ services:
     healthCheckPath: /api/health
     autoDeploy: true
     envVars:
+      - key: APP_ENV
+        value: pilot
       - key: NODE_VERSION
         value: 22.14.0
       - key: DATABASE_URL
@@ -37,6 +39,10 @@ services:
         value: 22.14.0
       - key: VITE_API_URL
         value: https://temo-api.onrender.com/api
+      - key: VITE_APP_ENV
+        value: pilot
+      - key: VITE_SESSION_IDLE_MINUTES
+        value: "30"
     headers:
       - path: /*
         name: X-Content-Type-Options

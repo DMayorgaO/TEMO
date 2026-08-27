@@ -12,4 +12,5 @@ logs/
 database/local-seeds/
 database/seeds/*.initial.json
 tmp/
+backups/
 .DS_Store

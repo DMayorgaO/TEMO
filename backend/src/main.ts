@@ -1,16 +1,38 @@
 import { ConfigService } from '@nestjs/config';
 import { RequestMethod } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
+import { json, urlencoded } from 'express';
+import { rateLimit } from 'express-rate-limit';
+import helmet from 'helmet';
 import { AppModule } from './app.module';
 
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule);
+  const app = await NestFactory.create(AppModule, { bodyParser: false });
   const config = app.get(ConfigService);
   const port = config.get<number>('PORT') ?? config.get<number>('BACKEND_PORT', 4000);
   const configuredOrigins = config.get<string>('CORS_ORIGINS', '')
     .split(',')
     .map((origin) => origin.trim())
     .filter(Boolean);
+
+  const server = app.getHttpAdapter().getInstance() as { set: (key: string, value: unknown) => void };
+  server.set('trust proxy', 1);
+  app.use(helmet({ contentSecurityPolicy: false }));
+  app.use(json({ limit: '256kb' }));
+  app.use(urlencoded({ extended: false, limit: '64kb' }));
+  app.use('/api/auth/login', rateLimit({
+    windowMs: 15 * 60 * 1000,
+    limit: 20,
+    standardHeaders: 'draft-7',
+    legacyHeaders: false,
+    message: { statusCode: 429, message: 'Demasiados intentos. Intente nuevamente en 15 minutos.' },
+  }));
+  app.use('/api', rateLimit({
+    windowMs: 15 * 60 * 1000,
+    limit: 1200,
+    standardHeaders: 'draft-7',
+    legacyHeaders: false,
+  }));
 
   app.enableCors({
     origin: configuredOrigins.length ? configuredOrigins : true,

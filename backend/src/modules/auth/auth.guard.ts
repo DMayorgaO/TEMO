@@ -2,15 +2,17 @@ import {
   CanActivate,
   ExecutionContext,
   Injectable,
+  ForbiddenException,
   UnauthorizedException,
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
-import { AuthService } from './auth.service';
+import { AuthenticatedUser, AuthService } from './auth.service';
 import { IS_PUBLIC_ENDPOINT } from './public.decorator';
 
 type AuthenticatedRequest = {
   headers: Record<string, string | string[] | undefined>;
-  user?: unknown;
+  url?: string;
+  user?: AuthenticatedUser;
 };
 
 @Injectable()
@@ -37,6 +39,13 @@ export class AuthGuard implements CanActivate {
     }
 
     request.user = await this.auth.validateAccessToken(token);
+    if (
+      request.user.mustChangePassword &&
+      !request.url?.startsWith('/api/auth/change-password') &&
+      !request.url?.startsWith('/api/auth/me')
+    ) {
+      throw new ForbiddenException('Debe cambiar su contrasena antes de continuar.');
+    }
     return true;
   }
 }

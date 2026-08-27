@@ -91,23 +91,37 @@ export class CatalogsService {
       'El rol seleccionado no existe.',
     );
     const status = this.userStatus(payload.status);
+    const password = this.text(payload.password ?? payload.contrasena);
+    if (!databaseId && !password) {
+      throw new BadRequestException('Ingrese una contrasena temporal para el nuevo usuario.');
+    }
+    if (password && (password.length < 10 || !/[a-z]/.test(password) || !/[A-Z]/.test(password) || !/[0-9]/.test(password))) {
+      throw new BadRequestException('La contrasena temporal debe tener al menos 10 caracteres, una mayuscula, una minuscula y un numero.');
+    }
     const result = databaseId
       ? await client.query(
           `update temo.usuarios
            set id_rol = $2, nombres = $3, apellidos = $4, usuario = $5,
-               correo = nullif($6, ''), estado = $7, fecha_modificacion = now()
+               correo = nullif($6, ''), estado = $7,
+               contrasena_hash = case when $8 <> '' then crypt($8, gen_salt('bf', 12)) else contrasena_hash end,
+               debe_cambiar_contrasena = case when $8 <> '' then true else debe_cambiar_contrasena end,
+               version_sesion = case when $8 <> '' then version_sesion + 1 else version_sesion end,
+               contrasena_modificada_en = case when $8 <> '' then now() else contrasena_modificada_en end,
+               intentos_fallidos = case when $8 <> '' then 0 else intentos_fallidos end,
+               bloqueado_hasta = case when $8 <> '' then null else bloqueado_hasta end,
+               fecha_modificacion = now()
            where id_usuario = $1
            returning id_usuario as id`,
-          [databaseId, roleId, firstName, lastName, username, email, status],
+          [databaseId, roleId, firstName, lastName, username, email, status, password],
         )
       : await client.query(
           `insert into temo.usuarios (
              id_rol, nombres, apellidos, usuario, correo, contrasena_hash,
              debe_cambiar_contrasena, estado
            )
-           values ($1, $2, $3, $4, nullif($5, ''), crypt('temp123', gen_salt('bf', 10)), true, $6)
+           values ($1, $2, $3, $4, nullif($5, ''), crypt($7, gen_salt('bf', 12)), true, $6)
            returning id_usuario as id`,
-          [roleId, firstName, lastName, username, email, status],
+          [roleId, firstName, lastName, username, email, status, password],
         );
     return this.firstId(result.rows, 'usuario');
   }
