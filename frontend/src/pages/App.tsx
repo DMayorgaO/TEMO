@@ -219,6 +219,13 @@ type ShiftDetail = {
     entity: string;
     currency: CashCurrency;
   }>;
+  availableMovements: Array<{
+    entity: string;
+    code: string;
+    name: string;
+    direction: 'Ingreso' | 'Salida';
+    currencies: CashCurrency[];
+  }>;
 };
 
 type BranchCatalogRow = {
@@ -1372,7 +1379,7 @@ function mergeInitialCatalogRows(storageKey: string, rows: CrudRow[], fallbackRo
 function readStoredRows(storageKey: string, fallbackRows: CrudRow[]) {
   const stored = window.localStorage.getItem(`temo:${storageKey}`);
   if (!stored) {
-    return fallbackRows;
+    return catalogEndpointByStorageKey[storageKey] ? [] : fallbackRows;
   }
   let parsedRows = JSON.parse(stored) as CrudRow[];
   if (storageKey === 'users' && parsedRows.some((row) => 'temporaryPassword' in row)) {
@@ -1383,13 +1390,12 @@ function readStoredRows(storageKey: string, fallbackRows: CrudRow[]) {
     });
     window.localStorage.setItem(`temo:${storageKey}`, JSON.stringify(parsedRows));
   }
-  if (storageKey === 'movements' && (parsedRows.length < 20 || !parsedRows.every((row) => row.direction))) {
-    return fallbackRows;
-  }
   if (storageKey === 'movements') {
     parsedRows = normalizeMovementCurrencyRules(parsedRows);
   }
-  return mergeInitialCatalogRows(storageKey, parsedRows, fallbackRows);
+  return catalogEndpointByStorageKey[storageKey]
+    ? parsedRows
+    : mergeInitialCatalogRows(storageKey, parsedRows, fallbackRows);
 }
 
 function normalizeMovementCurrencyRules(rows: CrudRow[]) {
@@ -7058,6 +7064,7 @@ function TransactionTable({ config, currentUser }: { config: CrudConfig; current
           mode={modal.mode}
           row={modal.row}
           availableAccounts={currentShift?.availableAccounts ?? []}
+          availableMovements={currentShift?.availableMovements ?? []}
           isSaving={isSavingTransactions}
           saveError={transactionSaveError}
           onCancel={() => {
@@ -7096,6 +7103,7 @@ function TransactionModal({
   mode,
   row,
   availableAccounts = [],
+  availableMovements = [],
   isSaving,
   saveError,
   onCancel,
@@ -7107,6 +7115,7 @@ function TransactionModal({
   mode: ModalMode | 'view' | 'pay';
   row: CrudRow;
   availableAccounts?: ShiftDetail['availableAccounts'];
+  availableMovements?: ShiftDetail['availableMovements'];
   isSaving: boolean;
   saveError: string;
   onCancel: () => void;
@@ -7146,10 +7155,22 @@ function TransactionModal({
       .filter((account) => normalizeLookupValue(account.entity) === normalizeLookupValue(draft.entity))
       .map((account) => account.currency),
   );
-  const movementRows = getMovementRowsForEntity(draft.entity).filter(
-    (movement) =>
-      !restrictToShiftAccounts ||
-      getMovementCurrencies(movement).some((currency) => entityCurrencies.has(currency)),
+  const movementRows = (restrictToShiftAccounts
+    ? availableMovements
+        .filter((movement) => normalizeLookupValue(movement.entity) === normalizeLookupValue(draft.entity))
+        .map((movement) => ({
+          id: `${movement.entity}-${movement.code}`,
+          code: movement.code,
+          name: movement.name,
+          direction: movement.direction,
+          banks: movement.entity,
+          currencies: movement.currencies.join(', '),
+          status: 'Activo',
+        }))
+    : getMovementRowsForEntity(draft.entity)
+  ).filter((movement) =>
+    !restrictToShiftAccounts ||
+    getMovementCurrencies(movement).some((currency) => entityCurrencies.has(currency)),
   );
   const movementOptions = movementRows.map((movement) => movement.name).filter(Boolean);
   const movementCodeQuery = draft.movementCode.trim().toUpperCase();

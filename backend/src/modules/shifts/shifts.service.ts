@@ -88,12 +88,14 @@ export class ShiftsService {
     const cashCounts = await this.loadCashCounts(shiftId);
     const balances = await this.loadBalances(shiftId);
     const availableAccounts = await this.loadAvailableAccounts(shift.id_sucursal);
+    const availableMovements = await this.loadAvailableMovements(shift.id_sucursal);
     const expectedCash = await this.loadExpectedCash(shiftId);
     return {
       ...shift,
       cashCounts,
       balances,
       availableAccounts,
+      availableMovements,
       expectedCash,
     };
   }
@@ -875,6 +877,44 @@ export class ShiftsService {
            )
          )
        order by eb.codigo, m.codigo, cb.consecutivo`,
+      [branchId],
+    );
+    return result.rows;
+  }
+
+  private async loadAvailableMovements(branchId: string) {
+    const result = await this.db.query(
+      `select
+         eb.codigo as entity,
+         cm.codigo_operativo as code,
+         cm.nombre_operativo as name,
+         case ef.direccion_efectivo when 'SALE' then 'Salida' else 'Ingreso' end as direction,
+         array_agg(distinct m.codigo order by m.codigo) as currencies
+       from temo.cuentas_movimientos cm
+       join temo.cuentas_bancarias cb on cb.id_cuenta = cm.id_cuenta
+       join temo.entidades_bancarias eb on eb.id_entidad = cb.id_entidad
+       join temo.monedas m on m.id_moneda = cb.id_moneda
+       join temo.movimientos mv on mv.id_movimiento = cm.id_movimiento
+       join temo.efectos_movimientos ef on ef.id_cuenta_movimiento = cm.id_cuenta_movimiento
+       where cm.estado = 'ACTIVO'
+         and cb.estado = 'ACTIVO'
+         and eb.estado = 'ACTIVO'
+         and m.estado = 'ACTIVO'
+         and mv.estado = 'ACTIVO'
+         and ef.direccion_efectivo is not null
+         and (
+           not exists (
+             select 1 from temo.cuentas_sucursales all_scopes
+             where all_scopes.id_cuenta = cb.id_cuenta
+           )
+           or exists (
+             select 1 from temo.cuentas_sucursales branch_scope
+             where branch_scope.id_cuenta = cb.id_cuenta
+               and branch_scope.id_sucursal = $1
+           )
+         )
+       group by eb.codigo, cm.codigo_operativo, cm.nombre_operativo, ef.direccion_efectivo
+       order by eb.codigo, min(cm.prioridad), cm.nombre_operativo`,
       [branchId],
     );
     return result.rows;
