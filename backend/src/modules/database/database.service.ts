@@ -24,6 +24,7 @@ export class DatabaseService implements OnModuleDestroy {
     this.pool = new Pool({
       connectionString,
       application_name: 'temo-backend',
+      options: '-c search_path=temo,extensions,public',
       max: Number.isFinite(maxConnections) ? Math.max(1, Math.min(maxConnections, 20)) : 10,
       ssl: useSsl ? { ca: sslCa, rejectUnauthorized: true } : undefined,
     });
