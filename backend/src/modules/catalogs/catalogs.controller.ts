@@ -10,6 +10,22 @@ export class CatalogsController {
     private readonly catalogs: CatalogsService,
   ) {}
 
+  // Permite a la Jefa asignar una clave temporal exclusivamente a un cajero.
+  @Post('usuarios/:id/reset-password')
+  resetUserPassword(
+    @Param('id') id: string,
+    @Body() body: Record<string, unknown>,
+    @Req() request: { user: AuthenticatedUser; ip?: string; headers: Record<string, string | string[] | undefined> },
+  ) {
+    return this.catalogs.resetUserPassword(
+      id,
+      String(body.temporaryPassword ?? ''),
+      request.user,
+      request.ip ?? '',
+      String(request.headers['user-agent'] ?? ''),
+    );
+  }
+
   @Post(':resource')
   saveNew(
     @Param('resource') resource: string,

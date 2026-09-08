@@ -24,6 +24,50 @@ const writableCatalogs = new Set([
 export class CatalogsService {
   constructor(private readonly db: DatabaseService) {}
 
+  // Reemplaza la clave de un cajero, invalida sus sesiones y exige cambiarla al ingresar.
+  async resetUserPassword(
+    targetUserId: string,
+    temporaryPassword: string,
+    user: AuthenticatedUser,
+    ip: string,
+    userAgent: string,
+  ) {
+    this.requireBoss(user);
+    this.validateTemporaryPassword(temporaryPassword);
+    return this.db.transaction(async (client) => {
+      const updated = await client.query<{ id: string; username: string }>(
+        `update temo.usuarios target
+         set contrasena_hash = crypt($2, gen_salt('bf', 12)),
+             debe_cambiar_contrasena = true,
+             version_sesion = version_sesion + 1,
+             contrasena_modificada_en = now(),
+             intentos_fallidos = 0,
+             bloqueado_hasta = null,
+             fecha_modificacion = now()
+         from temo.roles role
+         where target.id_usuario = $1
+           and role.id_rol = target.id_rol
+           and role.codigo = 'CAJERO'
+           and target.estado = 'ACTIVO'
+         returning target.id_usuario as id, target.usuario as username`,
+        [targetUserId, temporaryPassword],
+      );
+      const target = updated.rows[0];
+      if (!target) {
+        throw new BadRequestException('Sólo se puede restablecer la contraseña de un cajero activo.');
+      }
+      await client.query(
+        `insert into temo.bitacora
+           (id_usuario, accion, tabla, id_registro, datos_nuevos, direccion_ip, agente_usuario)
+         values ($1, 'ACTUALIZAR', 'usuarios', $2,
+                 jsonb_build_object('evento', 'RESTABLECER_CONTRASENA', 'usuario', $3),
+                 nullif($4, '')::inet, nullif($5, ''))`,
+        [user.id, target.id, target.username, ip.replace(/^::ffff:/, '').trim().slice(0, 45), userAgent.slice(0, 1000)],
+      );
+      return { success: true, mustChangePassword: true };
+    });
+  }
+
   async save(
     resource: string,
     databaseId: string | undefined,
@@ -124,6 +168,13 @@ export class CatalogsService {
           [roleId, firstName, lastName, username, email, status, password],
         );
     return this.firstId(result.rows, 'usuario');
+  }
+
+  // Aplica a claves temporales la misma politica minima usada por autenticacion.
+  private validateTemporaryPassword(password: string) {
+    if (password.length < 10 || password.length > 128 || !/[a-z]/.test(password) || !/[A-Z]/.test(password) || !/[0-9]/.test(password)) {
+      throw new BadRequestException('La contraseña temporal debe tener entre 10 y 128 caracteres, una mayúscula, una minúscula y un número.');
+    }
   }
 
   private async saveBank(client: PoolClient, databaseId: string | undefined, payload: CatalogPayload) {

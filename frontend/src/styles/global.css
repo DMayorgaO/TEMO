@@ -1341,6 +1341,32 @@ textarea:disabled {
   margin: 2px -20px -20px;
 }
 
+.reset-password-generate {
+  /* Mantiene la generacion alternativa junto al campo que modifica. */
+  justify-self: start;
+}
+
+.catalog-feedback {
+  /* Presenta resultados administrativos sin recurrir a alertas del navegador. */
+  border-left: 4px solid;
+  font-size: 0.86rem;
+  line-height: 1.4;
+  margin: 0 18px 12px;
+  padding: 9px 11px;
+}
+
+.catalog-feedback--success {
+  background: #e8f6ef;
+  border-color: #198754;
+  color: #146c43;
+}
+
+.catalog-feedback--error {
+  background: #fff0ef;
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
 .muted-copy {
   /* Texto auxiliar para notas de seguridad o instrucciones internas. */
   color: var(--muted);

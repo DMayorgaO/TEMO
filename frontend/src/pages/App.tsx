@@ -8385,8 +8385,10 @@ function CrudTable({
   const [sortKey, setSortKey] = useState<string | null>('id');
   const [sortDirection, setSortDirection] = useState<SortDirection>('desc');
   const [modal, setModal] = useState<{ mode: ModalMode; row: CrudRow; columns: CrudColumn[] } | null>(null);
+  const [passwordResetRow, setPasswordResetRow] = useState<CrudRow | null>(null);
   const [selectedRowId, setSelectedRowId] = useState<string | null>(null);
   const [catalogSaveError, setCatalogSaveError] = useState('');
+  const [catalogSuccess, setCatalogSuccess] = useState('');
 
   const visibleColumns = useMemo(() => getVisibleColumns(config), [config]);
 
@@ -8493,6 +8495,7 @@ function CrudTable({
   // Abre el modal con un registro vacio listo para guardar.
   function openCreateModal() {
     setCatalogSaveError('');
+    setCatalogSuccess('');
     const formColumns = getFormColumns();
     const baseRow = formColumns.reduce<CrudRow>((acc, column) => {
       acc[column.key] = column.key === 'id' ? nextReadableId(rows, config.idPrefix) : getDefaultColumnValue(column);
@@ -8507,6 +8510,7 @@ function CrudTable({
   // Abre el modal de edicion con una copia del registro seleccionado.
   function openEditModal(row: CrudRow) {
     setCatalogSaveError('');
+    setCatalogSuccess('');
     const editableRow = config.storageKey === 'users' ? normalizeUserRow(row) : row;
     const formColumns = getFormColumns(editableRow);
     setModal({ mode: 'edit', row: normalizeRowDefaults(editableRow, formColumns), columns: formColumns });
@@ -8515,6 +8519,7 @@ function CrudTable({
   // El doble clic usa el mismo formulario de edicion, inicialmente bloqueado.
   function openViewModal(row: CrudRow) {
     setCatalogSaveError('');
+    setCatalogSuccess('');
     const viewableRow = config.storageKey === 'users' ? normalizeUserRow(row) : row;
     const formColumns = getFormColumns(viewableRow);
     setModal({ mode: 'view', row: normalizeRowDefaults(viewableRow, formColumns), columns: formColumns });
@@ -8595,6 +8600,19 @@ function CrudTable({
     );
   }
 
+  // Envía la clave temporal elegida por la Jefa y actualiza el estado visible de la tabla.
+  async function resetCashierPassword(temporaryPassword: string) {
+    if (!passwordResetRow?.databaseId) return;
+    setCatalogSaveError('');
+    setCatalogSuccess('');
+    await apiRequest(`/catalogs/usuarios/${passwordResetRow.databaseId}/reset-password`, {
+      method: 'POST',
+      body: JSON.stringify({ temporaryPassword }),
+    });
+    setPasswordResetRow(null);
+    setCatalogSuccess(`Contraseña temporal asignada a ${passwordResetRow.username}. Deberá cambiarla al ingresar.`);
+  }
+
   // Cambia el ordenamiento en ciclo: sin orden, ascendente, descendente.
   function cycleSort(columnKey: string) {
     if (sortKey !== columnKey) {
@@ -8671,6 +8689,10 @@ function CrudTable({
           </label>
         </div>
       </div>
+
+      {/* Mensajes propios de la tabla para confirmar o reportar acciones administrativas. */}
+      {catalogSuccess && <p className="catalog-feedback catalog-feedback--success" role="status">{catalogSuccess}</p>}
+      {catalogSaveError && !modal && <p className="catalog-feedback catalog-feedback--error" role="alert">{catalogSaveError}</p>}
 
       {/* Tabla con filtros por encabezado, ordenamiento y acciones por fila. */}
       <div className="table-wrap">
@@ -8749,6 +8771,22 @@ function CrudTable({
                       >
                         {isInactive(row) ? <RotateCcw size={16} /> : <Ban size={16} />}
                       </button>
+                      {config.storageKey === 'users' && normalizeLookupValue(row.role) === 'cajero' && !isInactive(row) && (
+                        <button
+                          type="button"
+                          className="icon-action"
+                          title="Restablecer contraseña"
+                          aria-label={`Restablecer contraseña de ${row.username}`}
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            setCatalogSaveError('');
+                            setCatalogSuccess('');
+                            setPasswordResetRow(row);
+                          }}
+                        >
+                          <KeyRound size={16} />
+                        </button>
+                      )}
                     </div>
                   </td>
                 </tr>
@@ -8810,6 +8848,15 @@ function CrudTable({
           saveError={catalogSaveError}
         />
       )}
+      {/* Ventana administrativa separada para no mezclar credenciales con datos personales. */}
+      {passwordResetRow && (
+        <ResetCashierPasswordDialog
+          cashierName={`${passwordResetRow.firstName} ${passwordResetRow.lastName}`.trim()}
+          username={passwordResetRow.username}
+          onCancel={() => setPasswordResetRow(null)}
+          onReset={resetCashierPassword}
+        />
+      )}
     </article>
   );
 }
@@ -8820,6 +8867,71 @@ type ModalRecordNavigation = {
   onPrevious: () => void;
   onNext: () => void;
 };
+
+function createEasyTemporaryPassword() {
+  // Genera una clave pronunciable, temporal y compatible con la politica de seguridad.
+  const digits = String(crypto.getRandomValues(new Uint32Array(1))[0] % 10_000).padStart(4, '0');
+  return `Temo-${digits}-Aa`;
+}
+
+function ResetCashierPasswordDialog({
+  cashierName,
+  username,
+  onCancel,
+  onReset,
+}: {
+  cashierName: string;
+  username: string;
+  onCancel: () => void;
+  onReset: (temporaryPassword: string) => Promise<void>;
+}) {
+  const [temporaryPassword, setTemporaryPassword] = useState(createEasyTemporaryPassword);
+  const [confirmation, setConfirmation] = useState('');
+  const [error, setError] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  // Confirma que la Jefa transcribió correctamente la clave antes de invalidar sesiones.
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (saving) return;
+    if (temporaryPassword !== confirmation) {
+      setError('La confirmación no coincide con la contraseña temporal.');
+      return;
+    }
+    setSaving(true);
+    setError('');
+    try {
+      await onReset(temporaryPassword);
+    } catch (resetError) {
+      setError(resetError instanceof Error ? resetError.message : 'No fue posible restablecer la contraseña.');
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="modal-backdrop profile-password-backdrop" role="dialog" aria-modal="true" aria-labelledby="reset-password-title">
+      <section className="modal-panel profile-password-modal">
+        {/* Encabezado que identifica al cajero antes de aplicar una acción sensible. */}
+        <header className="modal-header">
+          <div><p>{cashierName} · {username}</p><h2 id="reset-password-title">Restablecer contraseña</h2></div>
+          <button type="button" className="icon-button danger-button" onClick={onCancel} aria-label="Cancelar"><X size={19} /></button>
+        </header>
+        {/* La contraseña se muestra para que la Jefa pueda entregársela temporalmente al cajero. */}
+        <form className="profile-password-form" onSubmit={submit}>
+          <p className="muted-copy">El cajero deberá cambiar esta contraseña inmediatamente después de ingresar.</p>
+          <label className="form-field">Contraseña temporal<input value={temporaryPassword} onChange={(event) => setTemporaryPassword(event.target.value)} minLength={10} required /></label>
+          <button type="button" className="secondary-button reset-password-generate" onClick={() => { setTemporaryPassword(createEasyTemporaryPassword()); setConfirmation(''); }}><RefreshCw size={17} />Generar otra contraseña</button>
+          <label className="form-field">Confirmar contraseña<input value={confirmation} onChange={(event) => setConfirmation(event.target.value)} minLength={10} required /></label>
+          {error && <p className="login-error" role="alert">{error}</p>}
+          <footer className="modal-actions">
+            <button type="button" className="secondary-button danger-button" onClick={onCancel}><X size={17} />Cancelar</button>
+            <button type="submit" className="primary-button" disabled={saving}><KeyRound size={18} />{saving ? 'Restableciendo...' : 'Restablecer'}</button>
+          </footer>
+        </form>
+      </section>
+    </div>
+  );
+}
 
 function ModalRecordNavigator({ currentIndex, total, onPrevious, onNext }: ModalRecordNavigation) {
   const canMovePrevious = currentIndex > 0;
