@@ -7,12 +7,14 @@ import { DatabaseService } from '../database/database.service';
 type AuthUserRow = QueryResultRow & {
   id: string; role_id: string; role_code: string; role_name: string;
   full_name: string; username: string; must_change_password: boolean;
-  session_version: number; password_valid?: boolean; blocked_until?: Date | null;
+  session_version: number; profile_photo?: string | null;
+  password_valid?: boolean; blocked_until?: Date | null;
 };
 type AccessTokenPayload = { sub: string; username: string; version: number; iat: number; exp: number };
 export type AuthenticatedUser = {
   id: string; fullName: string; username: string; roleId: string; roleCode: string;
   roleName: string; permissions: string[]; mustChangePassword: boolean; sessionVersion: number;
+  profilePhoto: string | null;
 };
 
 const MAX_FAILED_ATTEMPTS = 5;
@@ -40,7 +42,7 @@ export class AuthService {
     const result = await this.db.query<AuthUserRow>(
       `select u.id_usuario as id, u.id_rol as role_id, r.codigo as role_code,
               r.nombre as role_name, u.nombre_completo as full_name, u.usuario as username,
-              u.debe_cambiar_contrasena as must_change_password,
+              u.debe_cambiar_contrasena as must_change_password, u.foto_perfil as profile_photo,
               u.version_sesion as session_version, u.bloqueado_hasta as blocked_until,
               u.contrasena_hash = crypt($2, u.contrasena_hash) as password_valid
        from temo.usuarios u join temo.roles r on r.id_rol = u.id_rol
@@ -127,6 +129,33 @@ export class AuthService {
     return { token: this.issueToken(refreshed), expiresIn: this.tokenLifetimeSeconds, user: refreshed };
   }
 
+  // Valida y persiste una imagen previamente reducida por el navegador.
+  async changeProfilePhoto(user: AuthenticatedUser, photoDataUrl: string, ip: string, userAgent: string) {
+    const normalizedPhoto = photoDataUrl.trim();
+    if (!/^data:image\/(jpeg|png|webp);base64,[a-z0-9+/=]+$/i.test(normalizedPhoto)) {
+      throw new BadRequestException('Seleccione una imagen JPG, PNG o WEBP valida.');
+    }
+    if (normalizedPhoto.length > 200_000) {
+      throw new BadRequestException('La fotografia es demasiado grande. Seleccione otra imagen.');
+    }
+    await this.db.transaction(async (client) => {
+      await client.query(
+        `update temo.usuarios set foto_perfil = $2, fecha_modificacion = now()
+         where id_usuario = $1`,
+        [user.id, normalizedPhoto],
+      );
+      await client.query(
+        `insert into temo.bitacora
+           (id_usuario, accion, tabla, id_registro, datos_nuevos, direccion_ip, agente_usuario)
+         values ($1, 'ACTUALIZAR', 'usuarios', $1,
+                 jsonb_build_object('evento', 'CAMBIO_FOTO_PERFIL'),
+                 nullif($2, '')::inet, nullif($3, ''))`,
+        [user.id, this.normalizeIp(ip), userAgent.slice(0, 1000)],
+      );
+    });
+    return { user: await this.loadUser(user.id, user.username) };
+  }
+
   async logout(user: AuthenticatedUser, ip: string, userAgent: string) {
     await this.db.transaction(async (client) => {
       await client.query(`update temo.usuarios set version_sesion = version_sesion + 1 where id_usuario = $1`, [user.id]);
@@ -151,7 +180,8 @@ export class AuthService {
     const result = await this.db.query<AuthUserRow>(
       `select u.id_usuario as id, u.id_rol as role_id, r.codigo as role_code,
               r.nombre as role_name, u.nombre_completo as full_name, u.usuario as username,
-              u.debe_cambiar_contrasena as must_change_password, u.version_sesion as session_version
+              u.debe_cambiar_contrasena as must_change_password, u.version_sesion as session_version,
+              u.foto_perfil as profile_photo
        from temo.usuarios u join temo.roles r on r.id_rol = u.id_rol
        where u.id_usuario = $1 and u.usuario = $2 and u.estado = 'ACTIVO' and r.estado = 'ACTIVO' limit 1`,
       [id, username],
@@ -171,6 +201,7 @@ export class AuthService {
       roleCode: row.role_code, roleName: row.role_name,
       permissions: permissions.rows.map((item) => item.code),
       mustChangePassword: Boolean(row.must_change_password), sessionVersion: Number(row.session_version),
+      profilePhoto: row.profile_photo ?? null,
     };
   }
 

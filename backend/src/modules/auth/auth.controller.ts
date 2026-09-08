@@ -7,6 +7,7 @@ type LoginRequest = {
   password?: unknown;
 };
 type ChangePasswordRequest = { currentPassword?: unknown; newPassword?: unknown };
+type ChangeProfilePhotoRequest = { photoDataUrl?: unknown };
 
 type HttpRequest = {
   ip?: string;
@@ -40,6 +41,17 @@ export class AuthController {
       request.user as import('./auth.service').AuthenticatedUser,
       String(body.currentPassword ?? ''), String(body.newPassword ?? ''),
       request.ip ?? '', String(request.headers['user-agent'] ?? ''),
+    );
+  }
+
+  // Actualiza la fotografia del usuario autenticado sin aceptar archivos en el servidor.
+  @Post('profile-photo')
+  changeProfilePhoto(@Body() body: ChangeProfilePhotoRequest, @Req() request: HttpRequest) {
+    return this.auth.changeProfilePhoto(
+      request.user as import('./auth.service').AuthenticatedUser,
+      String(body.photoDataUrl ?? ''),
+      request.ip ?? '',
+      String(request.headers['user-agent'] ?? ''),
     );
   }
 

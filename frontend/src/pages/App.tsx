@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { ClipboardEvent, FormEvent, KeyboardEvent, PointerEvent as ReactPointerEvent } from 'react';
+import type { ChangeEvent, ClipboardEvent, FormEvent, KeyboardEvent, PointerEvent as ReactPointerEvent } from 'react';
 import type { LucideIcon } from 'lucide-react';
 import {
   ArrowDownAZ,
@@ -14,6 +14,7 @@ import {
   BookUser,
   Building2,
   Calculator,
+  Camera,
   CalendarDays,
   CheckCircle2,
   ChevronDown,
@@ -29,6 +30,7 @@ import {
   FileText,
   GripHorizontal,
   Landmark,
+  KeyRound,
   LockKeyhole,
   LogIn,
   LogOut,
@@ -41,6 +43,7 @@ import {
   Scale,
   Search,
   ShieldCheck,
+  UserRound,
   UserCog,
   Users,
   Trash2,
@@ -88,6 +91,7 @@ type AuthUser = {
   permissions: string[];
   mustChangePassword: boolean;
   sessionVersion: number;
+  profilePhoto: string | null;
 };
 
 type LoginResponse = {
@@ -394,6 +398,48 @@ async function apiRequest<T>(path: string, init?: RequestInit): Promise<T> {
     );
   }
   return payload as T;
+}
+
+// Reduce y recorta la fotografia antes de enviarla para mantener pequeno el perfil almacenado.
+function prepareProfilePhoto(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) {
+      reject(new Error('Seleccione una imagen JPG, PNG o WEBP.'));
+      return;
+    }
+    const image = new Image();
+    const objectUrl = URL.createObjectURL(file);
+    image.onload = () => {
+      const side = Math.min(image.naturalWidth, image.naturalHeight);
+      const canvas = document.createElement('canvas');
+      canvas.width = 256;
+      canvas.height = 256;
+      const context = canvas.getContext('2d');
+      if (!context) {
+        URL.revokeObjectURL(objectUrl);
+        reject(new Error('No fue posible procesar la fotografia.'));
+        return;
+      }
+      context.drawImage(
+        image,
+        (image.naturalWidth - side) / 2,
+        (image.naturalHeight - side) / 2,
+        side,
+        side,
+        0,
+        0,
+        256,
+        256,
+      );
+      URL.revokeObjectURL(objectUrl);
+      resolve(canvas.toDataURL('image/jpeg', 0.78));
+    };
+    image.onerror = () => {
+      URL.revokeObjectURL(objectUrl);
+      reject(new Error('No fue posible leer la fotografia seleccionada.'));
+    };
+    image.src = objectUrl;
+  });
 }
 
 // El menu lateral se agrupa para que las pantallas hijas vivan bajo su proceso principal.
@@ -2973,7 +3019,30 @@ export function App() {
   const [dismissedNotifications, setDismissedNotifications] = useState<string[]>([]);
   const [closingShift, setClosingShift] = useState<ShiftDetail | null>(null);
   const [systemConfirm, setSystemConfirm] = useState<SystemConfirmRequest | null>(null);
+  const [isProfileMenuOpen, setIsProfileMenuOpen] = useState(false);
+  const [isPasswordDialogOpen, setIsPasswordDialogOpen] = useState(false);
+  const [profilePhotoError, setProfilePhotoError] = useState('');
+  const [isUploadingProfilePhoto, setIsUploadingProfilePhoto] = useState(false);
   const [, setCatalogRevision] = useState(0);
+  const profileMenuRef = useRef<HTMLDivElement>(null);
+  const profilePhotoInputRef = useRef<HTMLInputElement>(null);
+
+  // Cierra el menu de usuario al hacer clic fuera o presionar Escape.
+  useEffect(() => {
+    if (!isProfileMenuOpen) return;
+    const closeFromPointer = (event: MouseEvent) => {
+      if (!profileMenuRef.current?.contains(event.target as Node)) setIsProfileMenuOpen(false);
+    };
+    const closeFromKeyboard = (event: globalThis.KeyboardEvent) => {
+      if (event.key === 'Escape') setIsProfileMenuOpen(false);
+    };
+    document.addEventListener('mousedown', closeFromPointer);
+    window.addEventListener('keydown', closeFromKeyboard);
+    return () => {
+      document.removeEventListener('mousedown', closeFromPointer);
+      window.removeEventListener('keydown', closeFromKeyboard);
+    };
+  }, [isProfileMenuOpen]);
 
   // Cierra sesiones abandonadas sin guardar contrasenas ni informacion sensible.
   useEffect(() => {
@@ -3196,6 +3265,36 @@ export function App() {
     window.location.hash = '/login';
   }
 
+  // Sustituye el usuario autenticado y conserva la sesion emitida al cambiar contrasena.
+  function completeProfilePasswordChange(response: LoginResponse) {
+    completeLogin(response);
+    setIsPasswordDialogOpen(false);
+    setIsProfileMenuOpen(false);
+  }
+
+  // Procesa y guarda la fotografia seleccionada en el perfil del usuario actual.
+  async function changeProfilePhoto(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file || isUploadingProfilePhoto) return;
+    setIsUploadingProfilePhoto(true);
+    setProfilePhotoError('');
+    try {
+      const photoDataUrl = await prepareProfilePhoto(file);
+      const response = await apiRequest<{ user: AuthUser }>('/auth/profile-photo', {
+        method: 'POST',
+        body: JSON.stringify({ photoDataUrl }),
+      });
+      window.sessionStorage.setItem(authUserStorageKey, JSON.stringify(response.user));
+      setCurrentUser(response.user);
+      setIsProfileMenuOpen(false);
+    } catch (photoError) {
+      setProfilePhotoError(photoError instanceof Error ? photoError.message : 'No fue posible cambiar la fotografia.');
+    } finally {
+      setIsUploadingProfilePhoto(false);
+    }
+  }
+
   const visibleNotification = notifications.find((item) => !dismissedNotifications.includes(item.id));
 
   async function openShiftClosure(shiftId: string) {
@@ -3313,14 +3412,44 @@ export function App() {
             <p>{activeHeader.eyebrow}</p>
             <h1>{activeHeader.title}</h1>
           </div>
-          <div className="session-controls">
-            <div className="session-user">
-              <strong>{currentUser.fullName}</strong>
-              <span>{currentUser.roleName}</span>
-            </div>
-            <button type="button" className="icon-button" onClick={closeSession} aria-label="Cerrar sesion" title="Cerrar sesion">
-              <LogOut size={18} />
+          {/* Identidad del usuario y acciones personales disponibles desde un menu contextual. */}
+          <div className="session-controls" ref={profileMenuRef}>
+            <button
+              type="button"
+              className="profile-menu-trigger"
+              aria-expanded={isProfileMenuOpen}
+              aria-haspopup="menu"
+              onClick={() => {
+                setProfilePhotoError('');
+                setIsProfileMenuOpen((current) => !current);
+              }}
+            >
+              <span className="profile-avatar">
+                {currentUser.profilePhoto
+                  ? <img src={currentUser.profilePhoto} alt="Foto de perfil" />
+                  : <UserRound size={21} />}
+              </span>
+              <span className="session-user">
+                <strong>{currentUser.fullName}</strong>
+                <span>{currentUser.roleName}</span>
+              </span>
+              <ChevronDown size={16} className={isProfileMenuOpen ? 'profile-menu-chevron--open' : ''} />
             </button>
+            {isProfileMenuOpen && (
+              <div className="profile-menu" role="menu">
+                <button type="button" role="menuitem" onClick={() => setIsPasswordDialogOpen(true)}>
+                  <KeyRound size={18} /><span>Cambiar contraseña</span>
+                </button>
+                <button type="button" role="menuitem" disabled={isUploadingProfilePhoto} onClick={() => profilePhotoInputRef.current?.click()}>
+                  <Camera size={18} /><span>{isUploadingProfilePhoto ? 'Procesando foto...' : 'Cambiar foto de perfil'}</span>
+                </button>
+                <button type="button" role="menuitem" className="profile-menu__logout" onClick={closeSession}>
+                  <LogOut size={18} /><span>Cerrar sesión</span>
+                </button>
+                {profilePhotoError && <p role="alert">{profilePhotoError}</p>}
+              </div>
+            )}
+            <input ref={profilePhotoInputRef} className="profile-photo-input" type="file" accept="image/jpeg,image/png,image/webp" onChange={(event) => void changeProfilePhoto(event)} />
           </div>
         </header>
 
@@ -3377,6 +3506,14 @@ export function App() {
           <div className="system-dialog__actions"><button type="button" className="secondary-button danger-button" onClick={() => { systemConfirm.resolve(false); setSystemConfirm(null); }}><X size={17}/>{systemConfirm.cancelLabel}</button><button type="button" autoFocus className={systemConfirm.tone === 'danger' ? 'primary-button system-dialog__danger-action' : 'primary-button'} onClick={() => { systemConfirm.resolve(true); setSystemConfirm(null); }}><CheckCircle2 size={17}/>{systemConfirm.confirmLabel}</button></div>
         </section>
       </div>
+    )}
+    {/* Formulario modal para cambiar la contrasena sin abandonar la pantalla actual. */}
+    {isPasswordDialogOpen && (
+      <ChangePasswordDialog
+        username={currentUser.username}
+        onChanged={completeProfilePasswordChange}
+        onCancel={() => setIsPasswordDialogOpen(false)}
+      />
     )}
     {closingShift && (
       <ShiftClosureModal
@@ -3618,6 +3755,70 @@ function ChangePasswordScreen({
         </form>
       </section>
     </main>
+  );
+}
+
+function ChangePasswordDialog({
+  username,
+  onChanged,
+  onCancel,
+}: {
+  username: string;
+  onChanged: (response: LoginResponse) => void;
+  onCancel: () => void;
+}) {
+  const [currentPassword, setCurrentPassword] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmation, setConfirmation] = useState('');
+  const [error, setError] = useState('');
+  const [saving, setSaving] = useState(false);
+  const formRef = useAutoFocusFirstField<HTMLFormElement>();
+
+  // Valida la confirmacion y solicita una nueva sesion con la contrasena actualizada.
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (saving) return;
+    if (newPassword !== confirmation) {
+      setError('La confirmación no coincide con la nueva contraseña.');
+      return;
+    }
+    setSaving(true);
+    setError('');
+    try {
+      const response = await apiRequest<LoginResponse>('/auth/change-password', {
+        method: 'POST',
+        body: JSON.stringify({ currentPassword, newPassword }),
+      });
+      onChanged(response);
+    } catch (changeError) {
+      setError(changeError instanceof Error ? changeError.message : 'No fue posible cambiar la contraseña.');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="modal-backdrop profile-password-backdrop" role="dialog" aria-modal="true" aria-labelledby="profile-password-title">
+      <section className="modal-panel profile-password-modal">
+        {/* Encabezado compacto que mantiene visible la accion de cancelar. */}
+        <header className="modal-header">
+          <div><p>Seguridad de {username}</p><h2 id="profile-password-title">Cambiar contraseña</h2></div>
+          <button type="button" className="icon-button danger-button" onClick={onCancel} aria-label="Cancelar"><X size={19} /></button>
+        </header>
+        {/* Campos requeridos para verificar la identidad y definir la nueva clave. */}
+        <form className="profile-password-form" onSubmit={submit} ref={formRef}>
+          <p className="muted-copy">Utilice al menos 10 caracteres, una mayúscula, una minúscula y un número.</p>
+          <label className="form-field">Contraseña actual<input autoComplete="current-password" type="password" value={currentPassword} onChange={(event) => setCurrentPassword(event.target.value)} required /></label>
+          <label className="form-field">Nueva contraseña<input autoComplete="new-password" type="password" value={newPassword} onChange={(event) => setNewPassword(event.target.value)} minLength={10} required /></label>
+          <label className="form-field">Confirmar contraseña<input autoComplete="new-password" type="password" value={confirmation} onChange={(event) => setConfirmation(event.target.value)} minLength={10} required /></label>
+          {error && <p className="login-error" role="alert">{error}</p>}
+          <footer className="modal-actions">
+            <button type="button" className="secondary-button danger-button" onClick={onCancel}><X size={17} />Cancelar</button>
+            <button type="submit" className="primary-button" disabled={saving}><ShieldCheck size={18} />{saving ? 'Actualizando...' : 'Cambiar contraseña'}</button>
+          </footer>
+        </form>
+      </section>
+    </div>
   );
 }
 
