@@ -27,6 +27,14 @@ async function bootstrap() {
     legacyHeaders: false,
     message: { statusCode: 429, message: 'Demasiados intentos. Intente nuevamente en 15 minutos.' },
   }));
+  // Limita solicitudes y validaciones de recuperación para evitar abuso del correo y de códigos.
+  app.use('/api/auth/password-recovery', rateLimit({
+    windowMs: 15 * 60 * 1000,
+    limit: 10,
+    standardHeaders: 'draft-7',
+    legacyHeaders: false,
+    message: { statusCode: 429, message: 'Demasiados intentos de recuperación. Espere 15 minutos.' },
+  }));
   app.use('/api', rateLimit({
     windowMs: 15 * 60 * 1000,
     limit: 1200,

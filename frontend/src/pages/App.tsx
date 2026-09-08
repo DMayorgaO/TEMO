@@ -978,6 +978,7 @@ const crudConfigs: Record<ScreenId, CrudConfig[]> = {
         { key: 'firstName', label: 'Nombres' },
         { key: 'lastName', label: 'Apellidos' },
         { key: 'username', label: 'Usuario' },
+        { key: 'email', label: 'Correo' },
         { key: 'role', label: 'Rol', inputKind: 'select', options: [] },
         { key: 'status', label: 'Estado', inputKind: 'select', options: ['Activo', 'Inactivo', 'Bloqueado'] },
       ],
@@ -3828,7 +3829,9 @@ function LoginScreen({ onLogin }: { onLogin: (response: LoginResponse) => void }
   const [password, setPassword] = useState('');
   const [rememberMe, setRememberMe] = useState(Boolean(rememberedUsername));
   const [error, setError] = useState('');
+  const [success, setSuccess] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isRecoveryOpen, setIsRecoveryOpen] = useState(false);
   const loginRef = useAutoFocusFirstField<HTMLFormElement>();
 
   async function submitLogin(event: FormEvent<HTMLFormElement>) {
@@ -3837,6 +3840,7 @@ function LoginScreen({ onLogin }: { onLogin: (response: LoginResponse) => void }
       return;
     }
     setError('');
+    setSuccess('');
     setIsSubmitting(true);
     try {
       const response = await apiRequest<LoginResponse>('/auth/login', {
@@ -3902,7 +3906,13 @@ function LoginScreen({ onLogin }: { onLogin: (response: LoginResponse) => void }
             <span>Recordarme</span>
           </label>
 
+          {/* Acceso al flujo seguro de recuperación para cuentas con rol Jefa. */}
+          <button type="button" className="login-recovery-link" onClick={() => { setError(''); setSuccess(''); setIsRecoveryOpen(true); }}>
+            <KeyRound size={16} />Olvidé mi contraseña
+          </button>
+
           {error && <p className="login-error" role="alert">{error}</p>}
+          {success && <p className="login-success" role="status">{success}</p>}
 
           <button type="submit" className="primary-button login-submit" disabled={isSubmitting}>
             <LogIn size={19} strokeWidth={2.25} />
@@ -3910,7 +3920,118 @@ function LoginScreen({ onLogin }: { onLogin: (response: LoginResponse) => void }
           </button>
         </form>
       </section>
+      {/* El diálogo conserva el diseño del sistema y devuelve al inicio al completar el cambio. */}
+      {isRecoveryOpen && (
+        <PasswordRecoveryDialog
+          initialIdentifier={username}
+          onCancel={() => setIsRecoveryOpen(false)}
+          onRecovered={(message) => {
+            setIsRecoveryOpen(false);
+            setSuccess(message);
+            setPassword('');
+          }}
+        />
+      )}
     </main>
+  );
+}
+
+function PasswordRecoveryDialog({
+  initialIdentifier,
+  onCancel,
+  onRecovered,
+}: {
+  initialIdentifier: string;
+  onCancel: () => void;
+  onRecovered: (message: string) => void;
+}) {
+  const [step, setStep] = useState<'request' | 'confirm'>('request');
+  const [identifier, setIdentifier] = useState(initialIdentifier);
+  const [code, setCode] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmation, setConfirmation] = useState('');
+  const [message, setMessage] = useState('');
+  const [error, setError] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  // Solicita el correo sin informar si el usuario introducido existe.
+  async function requestCode(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (saving) return;
+    setSaving(true);
+    setError('');
+    try {
+      const response = await apiRequest<{ message: string }>('/auth/password-recovery/request', {
+        method: 'POST',
+        body: JSON.stringify({ identifier }),
+      });
+      setMessage(response.message);
+      setStep('confirm');
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : 'No fue posible solicitar la recuperación.');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  // Comprueba el código y reemplaza la contraseña cuando ambas entradas coinciden.
+  async function confirmCode(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (saving) return;
+    if (newPassword !== confirmation) {
+      setError('La confirmación no coincide con la nueva contraseña.');
+      return;
+    }
+    setSaving(true);
+    setError('');
+    try {
+      const response = await apiRequest<{ message: string }>('/auth/password-recovery/confirm', {
+        method: 'POST',
+        body: JSON.stringify({ identifier, code, newPassword }),
+      });
+      onRecovered(response.message);
+    } catch (confirmError) {
+      setError(confirmError instanceof Error ? confirmError.message : 'No fue posible cambiar la contraseña.');
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="modal-backdrop profile-password-backdrop" role="dialog" aria-modal="true" aria-labelledby="recovery-title">
+      <section className="modal-panel profile-password-modal">
+        {/* Encabezado compartido por las dos etapas del proceso. */}
+        <header className="modal-header">
+          <div><p>Acceso seguro</p><h2 id="recovery-title">Recuperar contraseña</h2></div>
+          <button type="button" className="icon-button danger-button" onClick={onCancel} aria-label="Cancelar"><X size={19} /></button>
+        </header>
+        {step === 'request' ? (
+          <form className="profile-password-form" onSubmit={requestCode}>
+            {/* La cuenta se localiza por usuario o por su correo previamente registrado. */}
+            <p className="muted-copy">Disponible para usuarios con rol Jefa y correo registrado.</p>
+            <label className="form-field">Usuario o correo<input autoComplete="username" value={identifier} onChange={(event) => setIdentifier(event.target.value)} required /></label>
+            {error && <p className="login-error" role="alert">{error}</p>}
+            <footer className="modal-actions">
+              <button type="button" className="secondary-button danger-button" onClick={onCancel}><X size={17} />Cancelar</button>
+              <button type="submit" className="primary-button" disabled={saving}><KeyRound size={18} />{saving ? 'Enviando...' : 'Enviar código'}</button>
+            </footer>
+          </form>
+        ) : (
+          <form className="profile-password-form" onSubmit={confirmCode}>
+            {/* El código tiene seis dígitos, vence en diez minutos y sólo admite cinco intentos. */}
+            <p className="login-success" role="status">{message}</p>
+            <label className="form-field">Código de seis dígitos<input inputMode="numeric" autoComplete="one-time-code" value={code} onChange={(event) => setCode(event.target.value.replace(/\D/g, '').slice(0, 6))} minLength={6} maxLength={6} required /></label>
+            <label className="form-field">Nueva contraseña<input type="password" autoComplete="new-password" value={newPassword} onChange={(event) => setNewPassword(event.target.value)} minLength={10} required /></label>
+            <label className="form-field">Confirmar contraseña<input type="password" autoComplete="new-password" value={confirmation} onChange={(event) => setConfirmation(event.target.value)} minLength={10} required /></label>
+            {error && <p className="login-error" role="alert">{error}</p>}
+            <button type="button" className="login-recovery-link" onClick={() => { setStep('request'); setCode(''); setError(''); }}>Solicitar otro código</button>
+            <footer className="modal-actions">
+              <button type="button" className="secondary-button danger-button" onClick={onCancel}><X size={17} />Cancelar</button>
+              <button type="submit" className="primary-button" disabled={saving}><ShieldCheck size={18} />{saving ? 'Actualizando...' : 'Cambiar contraseña'}</button>
+            </footer>
+          </form>
+        )}
+      </section>
+    </div>
   );
 }
 

@@ -8,6 +8,8 @@ type LoginRequest = {
 };
 type ChangePasswordRequest = { currentPassword?: unknown; newPassword?: unknown };
 type ChangeProfilePhotoRequest = { photoDataUrl?: unknown };
+type RequestPasswordRecoveryRequest = { identifier?: unknown };
+type ConfirmPasswordRecoveryRequest = { identifier?: unknown; code?: unknown; newPassword?: unknown };
 
 type HttpRequest = {
   ip?: string;
@@ -25,6 +27,30 @@ export class AuthController {
     return this.auth.login(
       String(body.username ?? ''),
       String(body.password ?? ''),
+      request.ip ?? '',
+      String(request.headers['user-agent'] ?? ''),
+    );
+  }
+
+  // Inicia una recuperación sin revelar si el usuario o correo existe.
+  @Public()
+  @Post('password-recovery/request')
+  requestPasswordRecovery(@Body() body: RequestPasswordRecoveryRequest, @Req() request: HttpRequest) {
+    return this.auth.requestPasswordRecovery(
+      String(body.identifier ?? ''),
+      request.ip ?? '',
+      String(request.headers['user-agent'] ?? ''),
+    );
+  }
+
+  // Valida el código recibido y establece una nueva contraseña para la Jefa.
+  @Public()
+  @Post('password-recovery/confirm')
+  confirmPasswordRecovery(@Body() body: ConfirmPasswordRecoveryRequest, @Req() request: HttpRequest) {
+    return this.auth.confirmPasswordRecovery(
+      String(body.identifier ?? ''),
+      String(body.code ?? ''),
+      String(body.newPassword ?? ''),
       request.ip ?? '',
       String(request.headers['user-agent'] ?? ''),
     );

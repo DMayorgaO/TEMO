@@ -1192,6 +1192,35 @@ textarea:disabled {
   width: 100%;
 }
 
+.login-recovery-link {
+  /* Acción secundaria discreta para abrir o reiniciar la recuperación. */
+  align-items: center;
+  align-self: start;
+  background: transparent;
+  border: 0;
+  color: var(--primary);
+  display: inline-flex;
+  font-weight: 650;
+  gap: 6px;
+  justify-content: flex-start;
+  padding: 2px 0;
+}
+
+.login-recovery-link:hover {
+  text-decoration: underline;
+}
+
+.login-success {
+  /* Confirmación positiva integrada en formularios de acceso y seguridad. */
+  background: #e8f6ef;
+  border-left: 3px solid #198754;
+  color: #146c43;
+  font-size: 0.84rem;
+  line-height: 1.4;
+  margin: 0;
+  padding: 9px 11px;
+}
+
 .session-controls {
   /* Ancla el menu desplegable al extremo derecho del encabezado. */
   align-items: center;
