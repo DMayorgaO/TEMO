@@ -927,38 +927,18 @@ export class ShiftsService {
          m.codigo as currency,
          (
            case when m.codigo = 'NIO' then t.efectivo_inicial_nio else t.efectivo_inicial_usd end
-           + coalesce(transaction_cash.amount, 0)
-           + coalesce(pending_cash.amount, 0)
-           + coalesce(transfer_cash.amount, 0)
+           + coalesce(cash_movements.amount, 0)
          ) as amount
        from temo.turnos t
        cross join temo.monedas m
-       left join lateral (
-         select sum(
-           case tm.direccion when 'ENTRA' then tm.monto else -tm.monto end
-         ) as amount
-         from temo.transacciones tr
-         join temo.transacciones_montos tm
-           on tm.id_transaccion = tr.id_transaccion
-          and tm.id_moneda = m.id_moneda
-          and tm.medio = 'EFECTIVO'
-         where tr.id_turno = t.id_turno
-           and tr.estado <> 'ANULADA'
-       ) transaction_cash on true
-       left join lateral (
-         select sum(
-           case pp.tipo when 'POR_COBRAR' then ap.monto else -ap.monto end
-         ) as amount
-         from temo.abonos_pendientes ap
-         join temo.pagos_pendientes pp on pp.id_pendiente = ap.id_pendiente
-         where ap.id_turno_aplicacion = t.id_turno
-           and ap.id_moneda = m.id_moneda
-       ) pending_cash on true
+       /* Concilia por los billetes que realmente entraron o salieron, incluso
+          cuando la moneda fisica difiere de la moneda de la operacion. */
        left join lateral (
          select sum(case me.direccion when 'ENTRA' then me.monto else -me.monto end) as amount
          from temo.movimientos_efectivo me
-         where me.id_turno = t.id_turno and me.id_moneda = m.id_moneda and me.id_transferencia is not null
-       ) transfer_cash on true
+         where me.id_turno = t.id_turno
+           and me.id_moneda = m.id_moneda
+       ) cash_movements on true
        where t.id_turno = $1 and m.codigo in ('NIO', 'USD')
        order by m.codigo`,
       [shiftId],
