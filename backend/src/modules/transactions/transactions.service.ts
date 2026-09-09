@@ -341,6 +341,15 @@ export class TransactionsService {
           : 'TRANSACCION_ENTREGADO';
       const primaryTotals = this.cashTotals(input.settlement.primaryCounts);
       const changeTotals = this.cashTotals(input.settlement.changeCounts);
+      // Un pendiente representa el monto completo a credito y no mueve efectivo al crearse.
+      if (
+        input.transactions.some((transaction) => transaction.pendingName) &&
+        (primaryTotals.NIO > 0 || primaryTotals.USD > 0 || changeTotals.NIO > 0 || changeTotals.USD > 0)
+      ) {
+        throw new ConflictException(
+          'Un pendiente total no puede guardarse con billetes ni vuelto. Limpie el arqueo e intente nuevamente.',
+        );
+      }
 
       for (const currency of ['NIO', 'USD'] as const) {
         if (
@@ -1334,6 +1343,15 @@ export class TransactionsService {
       : 'TRANSACCION_ENTREGADO';
     const primaryTotals = this.cashTotals(input.settlement.primaryCounts);
     const changeTotals = this.cashTotals(input.settlement.changeCounts);
+    // Mantiene la misma regla al editar una transaccion que genera un pendiente total.
+    if (
+      input.pendingName &&
+      (primaryTotals.NIO > 0 || primaryTotals.USD > 0 || changeTotals.NIO > 0 || changeTotals.USD > 0)
+    ) {
+      throw new ConflictException(
+        'Un pendiente total no puede guardarse con billetes ni vuelto. Limpie el arqueo e intente nuevamente.',
+      );
+    }
     const shift: ShiftRow = {
       id_turno: transaction.id_turno,
       id_sucursal: transaction.id_sucursal,

@@ -2931,6 +2931,7 @@ type SystemConfirmOptions = {
   confirmLabel?: string;
   cancelLabel?: string;
   tone?: 'primary' | 'danger';
+  alertOnly?: boolean;
 };
 
 type SystemConfirmRequest = Required<SystemConfirmOptions> & {
@@ -2947,9 +2948,19 @@ function requestSystemConfirm(message: string, options: SystemConfirmOptions = {
         confirmLabel: options.confirmLabel ?? 'Confirmar',
         cancelLabel: options.cancelLabel ?? 'Cancelar',
         tone: options.tone ?? 'primary',
+        alertOnly: options.alertOnly ?? false,
         resolve,
       },
     }));
+  });
+}
+
+// Presenta avisos informativos con la misma ventana visual de TEMO.
+function requestSystemAlert(message: string, title = 'Aviso') {
+  return requestSystemConfirm(message, {
+    title,
+    confirmLabel: 'Entendido',
+    alertOnly: true,
   });
 }
 
@@ -3503,8 +3514,8 @@ export function App() {
       <div className="system-dialog-backdrop" role="dialog" aria-modal="true" aria-labelledby="system-confirm-title">
         <section className={`system-dialog system-dialog--${systemConfirm.tone}`}>
           <div className="system-dialog__icon">{systemConfirm.tone === 'danger' ? <Ban size={24}/> : <ShieldCheck size={24}/>}</div>
-          <div className="system-dialog__content"><p>Confirmacion</p><h2 id="system-confirm-title">{systemConfirm.title}</h2><span>{systemConfirm.message}</span></div>
-          <div className="system-dialog__actions"><button type="button" className="secondary-button danger-button" onClick={() => { systemConfirm.resolve(false); setSystemConfirm(null); }}><X size={17}/>{systemConfirm.cancelLabel}</button><button type="button" autoFocus className={systemConfirm.tone === 'danger' ? 'primary-button system-dialog__danger-action' : 'primary-button'} onClick={() => { systemConfirm.resolve(true); setSystemConfirm(null); }}><CheckCircle2 size={17}/>{systemConfirm.confirmLabel}</button></div>
+          <div className="system-dialog__content"><p>{systemConfirm.alertOnly ? 'Notificacion' : 'Confirmacion'}</p><h2 id="system-confirm-title">{systemConfirm.title}</h2><span>{systemConfirm.message}</span></div>
+          <div className="system-dialog__actions">{!systemConfirm.alertOnly && <button type="button" className="secondary-button danger-button" onClick={() => { systemConfirm.resolve(false); setSystemConfirm(null); }}><X size={17}/>{systemConfirm.cancelLabel}</button>}<button type="button" autoFocus className={systemConfirm.tone === 'danger' ? 'primary-button system-dialog__danger-action' : 'primary-button'} onClick={() => { systemConfirm.resolve(true); setSystemConfirm(null); }}><CheckCircle2 size={17}/>{systemConfirm.confirmLabel}</button></div>
         </section>
       </div>
     )}
@@ -7758,8 +7769,17 @@ function TransactionModal({
     updateField('amountValue', normalizeAccountingMoneyRaw(event.clipboardData.getData('text')));
   }
 
-  function saveWithCashCount() {
+  async function saveWithCashCount() {
     if (isReadOnly) return;
+    const hasPending = drafts.some((transactionDraft) => transactionDraft.pendingName.trim());
+    const hasEnteredCash = cashTotals.NIO > 0 || cashTotals.USD > 0 || changeCashTotals.NIO > 0 || changeCashTotals.USD > 0;
+    if (!isPayment && hasPending && hasEnteredCash) {
+      await requestSystemAlert(
+        'Un pendiente se registra por el monto total y no debe incluir billetes recibidos, entregados ni vuelto. Limpie el arqueo antes de guardar.',
+        'Pendiente sin efectivo',
+      );
+      return;
+    }
     onSave(
       drafts.map((transactionDraft, index) => {
         const currency: CashCurrency = transactionDraft.currency === 'USD' ? 'USD' : 'NIO';
