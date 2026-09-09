@@ -83,9 +83,32 @@ export const payPendingSchema = z
   })
   .strict();
 
+// Valida una liquidacion total de varios pendientes compatibles.
+export const payPendingBatchSchema = z
+  .object({
+    pendingIds: z.array(z.string().uuid()).min(1).max(50),
+    method: z.enum(['EFECTIVO', 'DIGITAL']),
+    rates: ratesSchema,
+    settlement: settlementSchema.optional(),
+    digital: z.object({
+      entityCode: z.string().trim().min(1).max(40),
+      movementCode: z.string().trim().min(1).max(40),
+    }).strict().optional(),
+  })
+  .strict()
+  .superRefine((value, context) => {
+    if (value.method === 'EFECTIVO' && !value.settlement) {
+      context.addIssue({ code: 'custom', message: 'El pago en efectivo requiere arqueo.', path: ['settlement'] });
+    }
+    if (value.method === 'DIGITAL' && !value.digital) {
+      context.addIssue({ code: 'custom', message: 'El pago digital requiere una cuenta y movimiento.', path: ['digital'] });
+    }
+  });
+
 export type CreateTransactionBatchInput = z.infer<
   typeof createTransactionBatchSchema
 >;
 
 export type UpdateTransactionInput = z.infer<typeof updateTransactionSchema>;
 export type PayPendingInput = z.infer<typeof payPendingSchema>;
+export type PayPendingBatchInput = z.infer<typeof payPendingBatchSchema>;

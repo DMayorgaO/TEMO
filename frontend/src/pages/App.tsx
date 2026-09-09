@@ -228,6 +228,8 @@ type ShiftDetail = {
     code: string;
     name: string;
     direction: 'Ingreso' | 'Salida';
+    accountDirection: 'Ingreso' | 'Salida' | null;
+    affectsAccount: boolean;
     currencies: CashCurrency[];
   }>;
 };
@@ -298,6 +300,7 @@ type PendingApiRow = {
   database_id: string;
   id: string;
   transaction_database_id: string;
+  shift_database_id: string;
   transaction_id: string;
   tipo: 'POR_COBRAR' | 'POR_PAGAR';
   estado: 'PENDIENTE' | 'ABONADO' | 'PAGADO' | 'VENCIDO' | 'CANCELADO';
@@ -4847,6 +4850,14 @@ function PendingScreen({ currentUser }: { currentUser: AuthUser }) {
     pending: PendingApiRow;
     row: CrudRow;
   } | null>(null);
+  const [selectedPendingIds, setSelectedPendingIds] = useState<string[]>([]);
+  const [batchCashModal, setBatchCashModal] = useState<{ pendings: PendingApiRow[]; row: CrudRow } | null>(null);
+  const [batchDigitalModal, setBatchDigitalModal] = useState<{
+    pendings: PendingApiRow[];
+    shift: ShiftDetail;
+    entity: string;
+    movementCode: string;
+  } | null>(null);
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
   const isBoss = currentUser.roleCode === 'JEFA';
@@ -5018,6 +5029,124 @@ function PendingScreen({ currentUser }: { currentUser: AuthUser }) {
     }
   }
 
+  function selectedPayablePendings() {
+    return rows.filter((row) => selectedPendingIds.includes(row.database_id) && !['PAGADO', 'CANCELADO'].includes(row.estado));
+  }
+
+  // Comprueba que un lote pueda liquidarse con una sola moneda, direccion y turno.
+  async function validateBatchSelection() {
+    const selected = selectedPayablePendings();
+    if (!selected.length) {
+      await requestSystemAlert('Seleccione al menos un pendiente disponible.', 'Seleccionar pendientes');
+      return null;
+    }
+    const reference = selected[0];
+    if (selected.some((row) => row.tipo !== reference.tipo || row.moneda !== reference.moneda || row.shift_database_id !== reference.shift_database_id)) {
+      await requestSystemAlert('Los pendientes deben pertenecer al mismo turno y tener el mismo tipo y moneda.', 'Seleccion incompatible');
+      return null;
+    }
+    return selected;
+  }
+
+  async function openBatchCashPayment() {
+    const selected = await validateBatchSelection();
+    if (!selected) return;
+    setPayingId('batch');
+    try {
+      const baseRow = await loadPendingPaymentRow(selected[0]);
+      const total = selected.reduce((sum, row) => sum + Number(row.saldo_pendiente), 0);
+      setBatchCashModal({
+        pendings: selected,
+        row: normalizeTransactionRow({
+          ...baseRow,
+          amountValue: String(total),
+          pendingName: `${selected.length} pendientes seleccionados`,
+          direction: selected[0].tipo === 'POR_COBRAR' ? 'Ingreso' : 'Salida',
+        }),
+      });
+    } catch (batchError) {
+      setError(batchError instanceof Error ? batchError.message : 'No fue posible preparar la liquidacion multiple.');
+    } finally {
+      setPayingId(null);
+    }
+  }
+
+  async function openBatchDigitalPayment() {
+    const selected = await validateBatchSelection();
+    if (!selected) return;
+    setPayingId('batch');
+    try {
+      const shift = await apiRequest<ShiftDetail>(`/shifts/${selected[0].shift_database_id}`);
+      const expectedDirection = selected[0].tipo === 'POR_COBRAR' ? 'Ingreso' : 'Salida';
+      const movements = shift.availableMovements.filter((movement) => movement.affectsAccount && movement.accountDirection === expectedDirection && movement.currencies.includes(selected[0].moneda));
+      const first = movements[0];
+      if (!first) {
+        await requestSystemAlert(`No hay movimientos digitales de ${expectedDirection.toLowerCase()} configurados para ${selected[0].moneda}.`, 'Movimiento no disponible');
+        return;
+      }
+      setBatchDigitalModal({ pendings: selected, shift, entity: first.entity, movementCode: first.code });
+    } catch (batchError) {
+      setError(batchError instanceof Error ? batchError.message : 'No fue posible preparar el pago digital.');
+    } finally {
+      setPayingId(null);
+    }
+  }
+
+  async function submitBatchCash(transactionRows: CrudRow[]) {
+    if (!batchCashModal) return;
+    setPayingId('batch');
+    try {
+      const payload = buildTransactionBatchPayload(transactionRows);
+      await apiRequest('/transactions/pending/pay-batch', {
+        method: 'POST',
+        body: JSON.stringify({
+          pendingIds: batchCashModal.pendings.map((row) => row.database_id),
+          method: 'EFECTIVO',
+          rates: payload.rates,
+          settlement: payload.settlement,
+        }),
+      });
+      setBatchCashModal(null);
+      await finishBatchPayment(batchCashModal.pendings, 'efectivo');
+    } catch (batchError) {
+      setError(batchError instanceof Error ? batchError.message : 'No fue posible liquidar los pendientes.');
+    } finally {
+      setPayingId(null);
+    }
+  }
+
+  async function submitBatchDigital() {
+    if (!batchDigitalModal) return;
+    setPayingId('batch');
+    try {
+      const rate = readExchangeRate();
+      await apiRequest('/transactions/pending/pay-batch', {
+        method: 'POST',
+        body: JSON.stringify({
+          pendingIds: batchDigitalModal.pendings.map((row) => row.database_id),
+          method: 'DIGITAL',
+          rates: { buy: parseExchangeRate(rate.buy), sell: parseExchangeRate(rate.sell) },
+          digital: { entityCode: batchDigitalModal.entity, movementCode: batchDigitalModal.movementCode },
+        }),
+      });
+      setBatchDigitalModal(null);
+      await finishBatchPayment(batchDigitalModal.pendings, 'digital');
+    } catch (batchError) {
+      setError(batchError instanceof Error ? batchError.message : 'No fue posible liquidar los pendientes.');
+    } finally {
+      setPayingId(null);
+    }
+  }
+
+  async function finishBatchPayment(pendings: PendingApiRow[], method: string) {
+    const paidIds = new Set(pendings.map((row) => row.database_id));
+    setRows((current) => current.map((row) => paidIds.has(row.database_id) ? { ...row, estado: 'PAGADO', saldo_pendiente: '0' } : row));
+    setSelectedPendingIds([]);
+    setShowPaid(true);
+    setMessage(`${pendings.length} pendientes fueron liquidados completamente en ${method}.`);
+    announceOperationalDataChange();
+  }
+
   return (
     <section className="screen-stack">
       <article className="panel">
@@ -5034,6 +5163,12 @@ function PendingScreen({ currentUser }: { currentUser: AuthUser }) {
             <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Buscar pendientes" />
           </label>
           <div className="table-toolbar-controls">
+            <button type="button" className="secondary-button" disabled={!selectedPendingIds.length || Boolean(payingId)} onClick={() => void openBatchCashPayment()}>
+              <Banknote size={17} /> Liquidar en efectivo
+            </button>
+            <button type="button" className="primary-button" disabled={!selectedPendingIds.length || Boolean(payingId)} onClick={() => void openBatchDigitalPayment()}>
+              <Landmark size={17} /> Liquidar digital
+            </button>
             <label className="switch-control switch-control--small">
               <input checked={showPaid} type="checkbox" onChange={(event) => setShowPaid(event.target.checked)} />
               <span />
@@ -5055,6 +5190,17 @@ function PendingScreen({ currentUser }: { currentUser: AuthUser }) {
           <table className="pending-table">
             <thead>
               <tr>
+                <th className="selection-column">
+                  <input
+                    type="checkbox"
+                    aria-label="Seleccionar pendientes visibles"
+                    checked={pageRows.some((row) => !['PAGADO', 'CANCELADO'].includes(row.estado)) && pageRows.filter((row) => !['PAGADO', 'CANCELADO'].includes(row.estado)).every((row) => selectedPendingIds.includes(row.database_id))}
+                    onChange={(event) => {
+                      const visibleIds = pageRows.filter((row) => !['PAGADO', 'CANCELADO'].includes(row.estado)).map((row) => row.database_id);
+                      setSelectedPendingIds((current) => event.target.checked ? [...new Set([...current, ...visibleIds])] : current.filter((id) => !visibleIds.includes(id)));
+                    }}
+                  />
+                </th>
                 <th className="number-column"><div className="th-stack"><span>N°</span></div></th>
                 {columns.map((column) => (
                   <th key={column.key} className={filters[column.key] || sortKey === column.key ? 'table-header--modified' : undefined}>
@@ -5080,6 +5226,15 @@ function PendingScreen({ currentUser }: { currentUser: AuthUser }) {
                   onClick={() => setSelectedId(row.database_id)}
                   onDoubleClick={() => void openPendingDetail(row)}
                 >
+                  <td className="selection-column" onClick={(event) => event.stopPropagation()}>
+                    <input
+                      type="checkbox"
+                      aria-label={`Seleccionar ${row.id}`}
+                      disabled={['PAGADO', 'CANCELADO'].includes(row.estado)}
+                      checked={selectedPendingIds.includes(row.database_id)}
+                      onChange={(event) => setSelectedPendingIds((current) => event.target.checked ? [...current, row.database_id] : current.filter((id) => id !== row.database_id))}
+                    />
+                  </td>
                   <td className="number-column">{processedRows.length - ((page - 1) * pageSize + index)}</td>
                   <td>{row.id}</td>
                   <td className="multi-line-cell">{coerceTransactionDateTime(row.fecha_creacion)}</td>
@@ -5104,7 +5259,7 @@ function PendingScreen({ currentUser }: { currentUser: AuthUser }) {
                   </td>
                 </tr>
               ))}
-              {pageRows.length === 0 && <tr><td colSpan={columns.length + 2} className="empty-table-cell">No hay pendientes para mostrar.</td></tr>}
+              {pageRows.length === 0 && <tr><td colSpan={columns.length + 3} className="empty-table-cell">No hay pendientes para mostrar.</td></tr>}
             </tbody>
           </table>
         </div>
@@ -5157,6 +5312,52 @@ function PendingScreen({ currentUser }: { currentUser: AuthUser }) {
           onSave={payPending}
         />
       )}
+      {batchCashModal && (
+        <TransactionModal
+          key={`pending-batch-cash-${batchCashModal.pendings.map((row) => row.database_id).join('-')}`}
+          mode="pay"
+          row={batchCashModal.row}
+          isSaving={payingId === 'batch'}
+          saveError={error}
+          onCancel={() => { if (!payingId) setBatchCashModal(null); }}
+          onSave={submitBatchCash}
+        />
+      )}
+      {batchDigitalModal && (() => {
+        const expectedDirection = batchDigitalModal.pendings[0].tipo === 'POR_COBRAR' ? 'Ingreso' : 'Salida';
+        const movements = batchDigitalModal.shift.availableMovements.filter((movement) => movement.affectsAccount && movement.accountDirection === expectedDirection && movement.currencies.includes(batchDigitalModal.pendings[0].moneda));
+        const entities = [...new Set(movements.map((movement) => movement.entity))];
+        const entityMovements = movements.filter((movement) => movement.entity === batchDigitalModal.entity);
+        const total = batchDigitalModal.pendings.reduce((sum, row) => sum + Number(row.saldo_pendiente), 0);
+        return (
+          <div className="modal-backdrop" role="dialog" aria-modal="true">
+            <section className="system-dialog pending-batch-dialog">
+              <div className="system-dialog__icon"><Landmark size={24} /></div>
+              <div className="system-dialog__content">
+                <p>Liquidacion multiple</p>
+                <h2>Pago digital</h2>
+                <span>{batchDigitalModal.pendings.length} pendientes por {formatCashCountMoney(total, batchDigitalModal.pendings[0].moneda)}</span>
+                <label className="form-field">Cuenta bancaria
+                  <select value={batchDigitalModal.entity} onChange={(event) => {
+                    const entity = event.target.value;
+                    const firstMovement = movements.find((movement) => movement.entity === entity);
+                    setBatchDigitalModal((current) => current ? { ...current, entity, movementCode: firstMovement?.code ?? '' } : current);
+                  }}>{entities.map((entity) => <option key={entity}>{entity}</option>)}</select>
+                </label>
+                <label className="form-field">Movimiento de {expectedDirection.toLowerCase()}
+                  <select value={batchDigitalModal.movementCode} onChange={(event) => setBatchDigitalModal((current) => current ? { ...current, movementCode: event.target.value } : current)}>
+                    {entityMovements.map((movement) => <option key={movement.code} value={movement.code}>{movement.code} - {movement.name}</option>)}
+                  </select>
+                </label>
+              </div>
+              <div className="system-dialog__actions">
+                <button type="button" className="secondary-button danger-button" disabled={payingId === 'batch'} onClick={() => setBatchDigitalModal(null)}><X size={17} />Cancelar</button>
+                <button type="button" className="primary-button" disabled={payingId === 'batch' || !batchDigitalModal.movementCode} onClick={() => void submitBatchDigital()}><CheckCircle2 size={17} />{payingId === 'batch' ? 'Procesando...' : 'Liquidar'}</button>
+              </div>
+            </section>
+          </div>
+        );
+      })()}
     </section>
   );
 }

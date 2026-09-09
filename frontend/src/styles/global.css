@@ -4052,6 +4052,35 @@ tbody tr:hover td {
   min-width: 1180px;
 }
 
+/* Reserva un ancho estable para seleccionar pendientes sin desplazar sus datos. */
+.pending-table .selection-column {
+  min-width: 44px;
+  padding-inline: 12px;
+  text-align: center;
+  width: 44px;
+}
+
+.pending-table .selection-column input {
+  accent-color: var(--primary);
+  cursor: pointer;
+  height: 17px;
+  width: 17px;
+}
+
+/* Ordena los selectores del pago digital dentro del dialogo del sistema. */
+.pending-batch-dialog {
+  width: min(520px, calc(100vw - 32px));
+}
+
+.pending-batch-dialog .system-dialog__content {
+  display: grid;
+  gap: 12px;
+}
+
+.pending-batch-dialog .form-field {
+  margin-top: 4px;
+}
+
 .pending-table th,
 .pending-table td {
   padding-block: 8px;

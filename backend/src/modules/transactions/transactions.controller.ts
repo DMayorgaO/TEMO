@@ -13,6 +13,7 @@ import { DatabaseService } from '../database/database.service';
 import { AuthenticatedUser } from '../auth/auth.service';
 import {
   createTransactionBatchSchema,
+  payPendingBatchSchema,
   payPendingSchema,
   updateTransactionSchema,
 } from './transaction-batch.schema';
@@ -181,5 +182,20 @@ export class TransactionsController {
       });
     }
     return this.transactions.payPending(id, parsed.data, request.user);
+  }
+
+  @Post('pending/pay-batch')
+  payPendingBatch(
+    @Body() body: unknown,
+    @Req() request: { user: AuthenticatedUser },
+  ) {
+    const parsed = payPendingBatchSchema.safeParse(body);
+    if (!parsed.success) {
+      throw new BadRequestException({
+        message: 'Los datos de la liquidacion multiple no son validos.',
+        errors: parsed.error.flatten(),
+      });
+    }
+    return this.transactions.payPendingBatch(parsed.data, request.user);
   }
 }

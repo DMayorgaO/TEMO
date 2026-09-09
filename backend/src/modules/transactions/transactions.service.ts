@@ -9,6 +9,7 @@ import { AuthenticatedUser } from '../auth/auth.service';
 import { DatabaseService } from '../database/database.service';
 import {
   CreateTransactionBatchInput,
+  PayPendingBatchInput,
   PayPendingInput,
   UpdateTransactionInput,
 } from './transaction-batch.schema';
@@ -487,6 +488,7 @@ export class TransactionsService {
            upper(substr(replace(pp.id_pendiente::text, '-', ''), 1, 8))
          ) as id,
          t.id_transaccion as transaction_database_id,
+         t.id_turno as shift_database_id,
          concat(
            'TRA-',
            lpad(g.codigo_operacion::text, 6, '0'),
@@ -566,6 +568,7 @@ export class TransactionsService {
         pending_balance: string | null;
         descripcion: string;
         id_cajero: string;
+        id_contraparte: string;
         estado_turno: string;
         tasa_compra_usada: string;
         tasa_venta_usada: string;
@@ -1162,6 +1165,219 @@ export class TransactionsService {
         appliedShiftId: activeShift?.id_turno ?? null,
         cashierNotified: user.roleCode === 'JEFA' && Boolean(activeShift),
       };
+    });
+  }
+
+  payPendingBatch(input: PayPendingBatchInput, user: AuthenticatedUser) {
+    return this.db.transaction(async (client) => {
+      // Bloquea todos los pendientes para liquidarlos como una sola operacion atomica.
+      const result = await client.query<{
+        id_pendiente: string;
+        estado: string;
+        id_transaccion: string;
+        id_turno: string;
+        id_sucursal: string;
+        id_caja: string;
+        id_cajero: string;
+        tipo: 'POR_COBRAR' | 'POR_PAGAR';
+        id_moneda: string;
+        moneda: CurrencyCode;
+        saldo_pendiente: string;
+        contraparte: string;
+      } & QueryResultRow>(
+        `select pp.id_pendiente, pp.estado, pp.id_transaccion,
+           t.id_turno, t.id_sucursal, t.id_caja, t.id_cajero,
+           pp.tipo, pp.id_moneda, pp.id_contraparte, m.codigo as moneda,
+           pp.saldo_pendiente, cp.nombre as contraparte
+         from temo.pagos_pendientes pp
+         join temo.transacciones t on t.id_transaccion = pp.id_transaccion
+         join temo.monedas m on m.id_moneda = pp.id_moneda
+         join temo.contrapartes cp on cp.id_contraparte = pp.id_contraparte
+         where pp.id_pendiente = any($1::uuid[])
+         order by pp.fecha_creacion
+         for update of pp`,
+        [input.pendingIds],
+      );
+      if (result.rowCount !== input.pendingIds.length) {
+        throw new NotFoundException('Uno o mas pendientes seleccionados no existen.');
+      }
+      const pendings = result.rows;
+      const reference = pendings[0];
+      if (pendings.some((pending) => pending.estado !== 'PENDIENTE' && pending.estado !== 'ABONADO' && pending.estado !== 'VENCIDO')) {
+        throw new ConflictException('Todos los pendientes seleccionados deben estar disponibles para pago.');
+      }
+      if (pendings.some((pending) => pending.tipo !== reference.tipo || pending.moneda !== reference.moneda || pending.id_turno !== reference.id_turno)) {
+        throw new ConflictException('Seleccione pendientes del mismo tipo, moneda y turno.');
+      }
+      if (user.roleCode !== 'JEFA' && pendings.some((pending) => pending.id_cajero !== user.id)) {
+        throw new ForbiddenException('No tiene permiso para pagar uno o mas pendientes seleccionados.');
+      }
+
+      const shiftResult = await client.query<ShiftRow>(
+        `select id_turno, id_sucursal, id_caja, id_cajero
+         from temo.turnos
+         where id_turno = $1 and estado in ('ABIERTO', 'PENDIENTE_APROBACION')
+         for update`,
+        [reference.id_turno],
+      );
+      const activeShift = shiftResult.rows[0];
+      if (!activeShift) {
+        throw new ConflictException('El turno de los pendientes seleccionados ya no esta activo.');
+      }
+
+      const totalAmount = pendings.reduce((sum, pending) => sum + Number(pending.saldo_pendiente), 0);
+      const primaryDirection: MoneyDirection = reference.tipo === 'POR_COBRAR' ? 'ENTRA' : 'SALE';
+      const rateId = await this.resolveExchangeRate(client, input, user.id);
+      const paymentIds: string[] = [];
+
+      // Registra un abono total por cada pendiente, conservando su trazabilidad individual.
+      for (const pending of pendings) {
+        const payment = await client.query<{ id_abono: string } & QueryResultRow>(
+          `insert into temo.abonos_pendientes (
+             id_pendiente, id_transaccion, id_turno_aplicacion, id_moneda,
+             monto, id_tipo_cambio, tasa_compra_usada, tasa_venta_usada,
+             id_usuario_creacion, observaciones
+           ) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+           returning id_abono`,
+          [pending.id_pendiente, pending.id_transaccion, activeShift.id_turno,
+            pending.id_moneda, Number(pending.saldo_pendiente), rateId,
+            input.rates.buy, input.rates.sell, user.id,
+            `Liquidacion multiple en ${input.method.toLowerCase()}.`],
+        );
+        paymentIds.push(payment.rows[0].id_abono);
+      }
+
+      if (input.method === 'EFECTIVO') {
+        const settlement = input.settlement!;
+        const primaryTotals = this.cashTotals(settlement.primaryCounts);
+        const changeTotals = this.cashTotals(settlement.changeCounts);
+        if (primaryTotals.NIO <= 0 && primaryTotals.USD <= 0) {
+          throw new ConflictException('Debe completar el conteo fisico de la liquidacion.');
+        }
+        if (reference.tipo === 'POR_PAGAR' && (changeTotals.NIO > 0 || changeTotals.USD > 0)) {
+          throw new ConflictException('Una cuenta por pagar no puede registrar vuelto.');
+        }
+        const currencies = await this.loadCurrencies(client);
+        const denominations = await this.loadDenominations(client);
+        const primaryType = primaryDirection === 'ENTRA' ? 'PENDIENTE_RECIBIDO' : 'PENDIENTE_ENTREGADO';
+
+        // El primer abono identifica el arqueo compartido del lote completo.
+        for (const currency of ['NIO', 'USD'] as const) {
+          const expectedAmount = currency === reference.moneda ? totalAmount : 0;
+          if (primaryTotals[currency] > 0 || expectedAmount > 0) {
+            await this.persistPendingCashCount(client, {
+              paymentId: paymentIds[0], userId: user.id, rateId,
+              rateKind: settlement.primaryRateKind,
+              rateValue: this.rateValue(input, settlement.primaryRateKind),
+              currency, currencyId: currencies[currency], type: primaryType,
+              expectedAmount, lines: settlement.primaryCounts[currency], denominations,
+            });
+          }
+          if (changeTotals[currency] > 0 || settlement.expectedChange[currency] > 0) {
+            await this.persistPendingCashCount(client, {
+              paymentId: paymentIds[0], userId: user.id, rateId,
+              rateKind: settlement.changeRateKind,
+              rateValue: this.rateValue(input, settlement.changeRateKind),
+              currency, currencyId: currencies[currency], type: 'PENDIENTE_VUELTO',
+              expectedAmount: settlement.expectedChange[currency],
+              lines: settlement.changeCounts[currency], denominations,
+            });
+          }
+          if (primaryTotals[currency] > 0) {
+            await this.persistPendingCashMovement(client, paymentIds[0], activeShift, currencies[currency], primaryDirection, primaryTotals[currency]);
+          }
+          if (changeTotals[currency] > 0) {
+            await this.persistPendingCashMovement(client, paymentIds[0], activeShift, currencies[currency], 'SALE', changeTotals[currency]);
+          }
+        }
+        await this.applySettlementToCurrentCashCount(client, activeShift.id_turno, primaryDirection, settlement.primaryCounts, settlement.changeCounts);
+      } else {
+        // El pago digital usa exclusivamente un movimiento bancario configurado para la sucursal.
+        const movement = await this.resolveMovement(
+          client, activeShift.id_sucursal, input.digital!.entityCode,
+          reference.moneda, input.digital!.movementCode,
+        );
+        if (!movement.afecta_cuenta || movement.direccion_cuenta !== primaryDirection) {
+          throw new ConflictException(`El movimiento digital debe ser de ${primaryDirection === 'ENTRA' ? 'ingreso' : 'egreso'} bancario.`);
+        }
+        const methodResult = await client.query<{ id_metodo_pago: string } & QueryResultRow>(
+          `select id_metodo_pago from temo.metodos_pago
+           where codigo = 'TRANSFERENCIA' and estado = 'ACTIVO' limit 1`,
+        );
+        if (!methodResult.rows[0]) {
+          throw new ConflictException('El metodo de pago TRANSFERENCIA no esta configurado.');
+        }
+        const groupResult = await client.query<{ id_grupo_transacciones: string } & QueryResultRow>(
+          `insert into temo.grupos_transacciones (
+             id_turno,id_contraparte,estado,observaciones,id_usuario_creacion
+           ) values ($1,$2,'CERRADO',$3,$4)
+           returning id_grupo_transacciones`,
+          [activeShift.id_turno, reference.id_contraparte, 'Liquidacion digital multiple de pendientes.', user.id],
+        );
+        const consecutiveResult = await client.query<{ next_value: number } & QueryResultRow>(
+          `select coalesce(max(consecutivo_turno),0) + 1 as next_value
+           from temo.transacciones where id_turno = $1`,
+          [activeShift.id_turno],
+        );
+        const firstConsecutive = Number(consecutiveResult.rows[0].next_value);
+
+        // Cada pendiente genera una transaccion bancaria visible y vinculada con su abono.
+        for (const [index, pending] of pendings.entries()) {
+          const amount = Number(pending.saldo_pendiente);
+          const transactionResult = await client.query<{ id_transaccion: string } & QueryResultRow>(
+            `insert into temo.transacciones (
+               id_turno,id_sucursal,id_caja,id_cajero,id_grupo_transacciones,orden_grupo,
+               id_cuenta_movimiento,id_contraparte,id_metodo_pago,id_moneda_original,
+               monto_original,id_tipo_cambio,tasa_compra_usada,tasa_venta_usada,
+               descripcion,consecutivo_turno,id_usuario_creacion
+             ) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
+             returning id_transaccion`,
+            [activeShift.id_turno, activeShift.id_sucursal, activeShift.id_caja,
+              activeShift.id_cajero, groupResult.rows[0].id_grupo_transacciones, index + 1,
+              movement.id_cuenta_movimiento, pending.id_contraparte,
+              methodResult.rows[0].id_metodo_pago, movement.id_moneda, amount, rateId,
+              input.rates.buy, input.rates.sell,
+              `Liquidacion digital del pendiente ${pending.id_pendiente}.`,
+              firstConsecutive + index, user.id],
+          );
+          const paymentTransactionId = transactionResult.rows[0].id_transaccion;
+          await client.query(
+            `insert into temo.movimientos_cuentas (id_transaccion,id_cuenta,id_moneda,direccion,monto)
+             values ($1,$2,$3,$4,$5)`,
+            [paymentTransactionId, movement.id_cuenta, movement.id_moneda, primaryDirection, amount],
+          );
+          await client.query(
+            `insert into temo.transacciones_montos (id_transaccion,direccion,medio,id_moneda,monto,id_cuenta,observaciones)
+             values ($1,$2,'CUENTA_BANCARIA',$3,$4,$5,'Liquidacion digital de pendiente')`,
+            [paymentTransactionId, primaryDirection, movement.id_moneda, amount, movement.id_cuenta],
+          );
+          await client.query(
+            `update temo.abonos_pendientes set id_transaccion = $2 where id_abono = $1`,
+            [paymentIds[index], paymentTransactionId],
+          );
+        }
+        await this.refreshShiftAccountBalances(client, activeShift.id_turno);
+      }
+
+      // Finaliza todos los pendientes y registra historial y auditoria del lote.
+      await client.query(
+        `update temo.pagos_pendientes set estado='PAGADO', saldo_pendiente=0, fecha_modificacion=now()
+         where id_pendiente = any($1::uuid[])`,
+        [input.pendingIds],
+      );
+      for (const pending of pendings) {
+        await client.query(
+          `insert into temo.historial_pendientes (id_pendiente,estado_anterior,estado_nuevo,id_usuario,motivo)
+           values ($1,$2::temo.estado_pendiente,'PAGADO',$3,$4)`,
+          [pending.id_pendiente, pending.estado, user.id, `Liquidacion multiple en ${input.method.toLowerCase()}`],
+        );
+      }
+      await client.query(
+        `insert into temo.bitacora (id_usuario,accion,tabla,id_registro,datos_nuevos)
+         values ($1,'ACTUALIZAR','pagos_pendientes',$2,$3::jsonb)`,
+        [user.id, reference.id_pendiente, JSON.stringify({ pendingIds: input.pendingIds, method: input.method, totalAmount })],
+      );
+      return { ids: input.pendingIds, estado: 'PAGADO', method: input.method, totalAmount };
     });
   }
 

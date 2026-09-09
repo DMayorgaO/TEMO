@@ -890,6 +890,8 @@ export class ShiftsService {
          cm.codigo_operativo as code,
          cm.nombre_operativo as name,
          case ef.direccion_efectivo when 'SALE' then 'Salida' else 'Ingreso' end as direction,
+         case ef.direccion_cuenta when 'SALE' then 'Salida' when 'ENTRA' then 'Ingreso' end as "accountDirection",
+         coalesce(ef.afecta_cuenta, false) as "affectsAccount",
          array_agg(distinct m.codigo order by m.codigo) as currencies
        from temo.cuentas_movimientos cm
        join temo.cuentas_bancarias cb on cb.id_cuenta = cm.id_cuenta
@@ -914,7 +916,8 @@ export class ShiftsService {
                and branch_scope.id_sucursal = $1
            )
          )
-       group by eb.codigo, cm.codigo_operativo, cm.nombre_operativo, ef.direccion_efectivo
+       group by eb.codigo, cm.codigo_operativo, cm.nombre_operativo,
+         ef.direccion_efectivo, ef.direccion_cuenta, ef.afecta_cuenta
        order by eb.codigo, min(cm.prioridad), cm.nombre_operativo`,
       [branchId],
     );
