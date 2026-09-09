@@ -501,10 +501,11 @@ export class ShiftsService {
            fecha_cierre = now(),
            efectivo_final_nio = $3,
            efectivo_final_usd = $4,
-           observaciones_cierre = nullif($5, ''),
+           cambio_nio = $5,
+           observaciones_cierre = nullif($6, ''),
            fecha_modificacion = now()
          where id_turno = $1`,
-        [shiftId, user.id, totals.NIO, totals.USD, input.observations],
+        [shiftId, user.id, totals.NIO, totals.USD, input.changeNio, input.observations],
       );
       await client.query(
         `update temo.solicitudes_cierre_turno

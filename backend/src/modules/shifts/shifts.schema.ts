@@ -13,7 +13,8 @@ export const cashCountsSchema = z.object({
 
 const bankBalanceSchema = z.object({
   account: z.string().trim().min(1).max(80),
-  amount: z.number().nonnegative().max(9999999999.9999),
+  // Los saldos operativos pueden quedar negativos cuando los egresos superan el saldo inicial.
+  amount: z.number().min(-9999999999.9999).max(9999999999.9999),
 });
 
 export const saveBalancesSchema = z.object({
@@ -41,6 +42,7 @@ export type UpdateShiftInput = z.infer<typeof updateShiftSchema>;
 export const closeShiftSchema = z.object({
   counts: cashCountsSchema,
   balances: z.array(bankBalanceSchema).max(100),
+  changeNio: z.number().min(-9999999999.9999).max(9999999999.9999),
   observations: z.string().trim().max(2000).default(''),
 });
 

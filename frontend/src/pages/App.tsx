@@ -3611,15 +3611,13 @@ function ShiftClosureModal({
     setSaving(true);
     setError('');
     try {
-      await apiRequest(`/shifts/${shift.database_id}/cash-count`, {
-        method: 'PUT',
-        body: JSON.stringify({ counts: cashCountPayload(cashDraft), changeNio: parseMoneyValue(changeNio) }),
-      });
+      // Envía arqueo, cambio, saldos y cierre en una única transacción del servidor.
       await apiRequest(`/shifts/${shift.database_id}/close`, {
         method: 'POST',
         body: JSON.stringify({
           counts: cashCountPayload(cashDraft),
           balances: shift.balances.map((balance) => ({ account: balance.account, amount: parseMoneyValue(balances[balance.account]) })),
+          changeNio: parseMoneyValue(changeNio),
           observations,
         }),
       });
