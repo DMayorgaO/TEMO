@@ -1928,6 +1928,26 @@ function toApiRateKind(value?: string): 'COMPRA' | 'VENTA' {
   return value === 'Venta' ? 'VENTA' : 'COMPRA';
 }
 
+// Traduce el arqueo propio de una pestaña al contrato de la API.
+function transactionSettlementPayload(row: CrudRow) {
+  return {
+    primaryRateKind: toApiRateKind(row.settlementExchangeRateType || row.exchangeRateType),
+    changeRateKind: toApiRateKind(row.changeExchangeRateType),
+    expectedChange: {
+      NIO: parseMoneyValue(row.expectedChangeNio),
+      USD: parseMoneyValue(row.expectedChangeUsd),
+    },
+    primaryCounts: {
+      NIO: cashCountLines(row.cashCountNio, 'NIO'),
+      USD: cashCountLines(row.cashCountUsd, 'USD'),
+    },
+    changeCounts: {
+      NIO: cashCountLines(row.changeCashCountNio, 'NIO'),
+      USD: cashCountLines(row.changeCashCountUsd, 'USD'),
+    },
+  };
+}
+
 function buildTransactionBatchPayload(rows: CrudRow[]) {
   const settlementRow = rows[0];
   const rate = readExchangeRate();
@@ -1943,26 +1963,9 @@ function buildTransactionBatchPayload(rows: CrudRow[]) {
       amount: parseMoneyValue(row.amountValue),
       pendingName: row.pendingName.trim(),
       description: row.description.trim(),
+      settlement: transactionSettlementPayload(row),
     })),
-    settlement: {
-      primaryRateKind: toApiRateKind(
-        settlementRow.settlementExchangeRateType ||
-          settlementRow.exchangeRateType,
-      ),
-      changeRateKind: toApiRateKind(settlementRow.changeExchangeRateType),
-      expectedChange: {
-        NIO: parseMoneyValue(settlementRow.expectedChangeNio),
-        USD: parseMoneyValue(settlementRow.expectedChangeUsd),
-      },
-      primaryCounts: {
-        NIO: cashCountLines(settlementRow.cashCountNio, 'NIO'),
-        USD: cashCountLines(settlementRow.cashCountUsd, 'USD'),
-      },
-      changeCounts: {
-        NIO: cashCountLines(settlementRow.changeCashCountNio, 'NIO'),
-        USD: cashCountLines(settlementRow.changeCashCountUsd, 'USD'),
-      },
-    },
+    settlement: transactionSettlementPayload(settlementRow),
   };
 }
 
@@ -2148,6 +2151,39 @@ function calculateMultiTransactionCashDifference({
     rateKind,
     rateValue,
   };
+}
+
+// Conserva el efectivo favorable de una pestaña de ingreso para las siguientes.
+function calculateTransactionCarryNio(
+  rows: CrudRow[],
+  stopBefore: number,
+  rate: ExchangeRate,
+  subtractEnteredChange = true,
+) {
+  let carryNio = 0;
+  for (let index = 0; index < stopBefore; index += 1) {
+    const row = rows[index];
+    if (row.pendingName.trim() || row.direction !== 'Ingreso') continue;
+    const counts = {
+      NIO: calculateCashPileTotal(cashDenominations.NIO, readTransactionCashCount(row.cashCountNio)),
+      USD: calculateCashPileTotal(cashDenominations.USD, readTransactionCashCount(row.cashCountUsd)),
+    };
+    const change = {
+      NIO: calculateCashPileTotal(cashDenominations.NIO, readTransactionCashCount(row.changeCashCountNio)),
+      USD: calculateCashPileTotal(cashDenominations.USD, readTransactionCashCount(row.changeCashCountUsd)),
+    };
+    const difference = calculateTransactionCashDifference({
+      cashTotals: counts,
+      currency: row.currency === 'USD' ? 'USD' : 'NIO',
+      direction: 'Ingreso',
+      expectedAmount: parseMoneyValue(row.amountValue),
+      rate,
+    });
+    const changeRate = getTransactionRateValue(rate, row.changeExchangeRateType === 'Venta' ? 'Venta' : 'Compra');
+    const enteredChangeNio = subtractEnteredChange ? change.NIO + change.USD * changeRate : 0;
+    carryNio = Math.max(0, carryNio + difference.differenceNio - enteredChangeNio);
+  }
+  return carryNio;
 }
 
 function calculateChangeCashDifference({
@@ -7712,14 +7748,15 @@ function TransactionModal({
   const transactionGroupIdRef = useRef(
     row.transactionGroupId || `GRP-${Date.now().toString(36).toUpperCase()}`,
   );
-  const [cashCounts, setCashCounts] = useState<Record<CashCurrency, Record<string, CashPileDraft>>>(() => ({
-    NIO: readTransactionCashCount(row.cashCountNio),
-    USD: readTransactionCashCount(row.cashCountUsd),
-  }));
-  const [changeCashCounts, setChangeCashCounts] = useState<Record<CashCurrency, Record<string, CashPileDraft>>>(() => ({
-    NIO: readTransactionCashCount(row.changeCashCountNio),
-    USD: readTransactionCashCount(row.changeCashCountUsd),
-  }));
+  // Cada borrador conserva sus propios arqueos al cambiar entre pestañas.
+  const cashCounts: Record<CashCurrency, Record<string, CashPileDraft>> = {
+    NIO: readTransactionCashCount(draft.cashCountNio),
+    USD: readTransactionCashCount(draft.cashCountUsd),
+  };
+  const changeCashCounts: Record<CashCurrency, Record<string, CashPileDraft>> = {
+    NIO: readTransactionCashCount(draft.changeCashCountNio),
+    USD: readTransactionCashCount(draft.changeCashCountUsd),
+  };
   const [cashView, setCashView] = useState<'received' | 'change'>('received');
   const [showExchangeCalculator, setShowExchangeCalculator] = useState(false);
   const [showDirectoryLookup, setShowDirectoryLookup] = useState(false);
@@ -7779,21 +7816,22 @@ function TransactionModal({
     NIO: calculateCashPileTotal(cashDenominations.NIO, cashCounts.NIO),
     USD: calculateCashPileTotal(cashDenominations.USD, cashCounts.USD),
   };
-  const transactionDifference =
-    drafts.length === 1
-      ? calculateTransactionCashDifference({
-          cashTotals,
-          currency: draft.currency === 'USD' ? 'USD' : 'NIO',
-          direction: draft.direction || 'Ingreso',
-          expectedAmount,
-          rate: exchangeRate,
-        })
-      : calculateMultiTransactionCashDifference({
-          cashTotals,
-          transactions: drafts,
-          settlementTransaction: draft,
-          rate: exchangeRate,
-        });
+  const baseTransactionDifference = calculateTransactionCashDifference({
+    cashTotals,
+    currency: draft.currency === 'USD' ? 'USD' : 'NIO',
+    direction: draft.direction || 'Ingreso',
+    expectedAmount,
+    rate: exchangeRate,
+  });
+  const carriedNio = draft.direction === 'Ingreso'
+    ? calculateTransactionCarryNio(drafts, activeTabIndex, exchangeRate)
+    : 0;
+  const activeRate = baseTransactionDifference.rateValue > 0 ? baseTransactionDifference.rateValue : 1;
+  const transactionDifference = {
+    ...baseTransactionDifference,
+    differenceNio: baseTransactionDifference.differenceNio + carriedNio,
+    differenceUsd: baseTransactionDifference.differenceUsd + carriedNio / activeRate,
+  };
   const hasPositiveChange =
     transactionDifference.differenceNio > 0.005 &&
     (drafts.length > 1 || draft.direction === 'Ingreso');
@@ -7801,6 +7839,8 @@ function TransactionModal({
     NIO: Math.max(0, transactionDifference.differenceNio),
     USD: Math.max(0, transactionDifference.differenceUsd),
   };
+  const totalGroupChangeNio = calculateTransactionCarryNio(drafts, drafts.length, exchangeRate, false);
+  const totalGroupChangeUsd = totalGroupChangeNio / (parseExchangeRate(exchangeRate.buy) || 1);
   const [changeRateKind, setChangeRateKind] = useState<ExchangeRateKind>(() =>
     draft.changeExchangeRateType === 'Compra' || draft.changeExchangeRateType === 'Venta'
       ? draft.changeExchangeRateType
@@ -7823,6 +7863,11 @@ function TransactionModal({
       setCashView('received');
     }
   }, [cashView, hasPositiveChange]);
+
+  useEffect(() => {
+    const rowRateKind = draft.changeExchangeRateType === 'Venta' ? 'Venta' : 'Compra';
+    setChangeRateKind(rowRateKind);
+  }, [activeTabIndex, draft.changeExchangeRateType]);
 
   function setDraft(updater: (current: CrudRow) => CrudRow) {
     setDrafts((currentDrafts) =>
@@ -7903,7 +7948,8 @@ function TransactionModal({
       .filter((account) => normalizeLookupValue(account.entity) === normalizeLookupValue(value))
       .map((account) => account.currency);
     const defaultCurrency: CashCurrency = availableEntityCurrencies.includes('NIO') ? 'NIO' : availableEntityCurrencies[0] ?? 'NIO';
-    setChangeRateKind(invertExchangeRateKind(getTransactionExchangeRateKind('Ingreso', defaultCurrency)));
+    const nextChangeRateKind = invertExchangeRateKind(getTransactionExchangeRateKind('Ingreso', defaultCurrency));
+    setChangeRateKind(nextChangeRateKind);
     setDraft((current) => ({
       ...current,
       entity: value,
@@ -7911,6 +7957,7 @@ function TransactionModal({
       movement: '',
       direction: '',
       currency: defaultCurrency,
+      changeExchangeRateType: nextChangeRateKind,
     }));
   }
 
@@ -7923,15 +7970,15 @@ function TransactionModal({
       (currency) => !restrictToShiftAccounts || entityCurrencies.has(currency),
     );
     const currency: CashCurrency = movementCurrencies.includes('NIO') ? 'NIO' : movementCurrencies[0] ?? 'NIO';
-    setChangeRateKind(
-      invertExchangeRateKind(getTransactionExchangeRateKind(direction || 'Ingreso', currency)),
-    );
+    const nextChangeRateKind = invertExchangeRateKind(getTransactionExchangeRateKind(direction || 'Ingreso', currency));
+    setChangeRateKind(nextChangeRateKind);
     setDraft((current) => ({
       ...current,
       movement: value,
       movementCode: movementRow?.code || '',
       direction,
       currency,
+      changeExchangeRateType: nextChangeRateKind,
     }));
   }
 
@@ -7945,15 +7992,15 @@ function TransactionModal({
       (currency) => !restrictToShiftAccounts || entityCurrencies.has(currency),
     );
     const currency: CashCurrency = movementCurrencies.includes('NIO') ? 'NIO' : movementCurrencies[0] ?? 'NIO';
-    setChangeRateKind(
-      invertExchangeRateKind(getTransactionExchangeRateKind(direction || 'Ingreso', currency)),
-    );
+    const nextChangeRateKind = invertExchangeRateKind(getTransactionExchangeRateKind(direction || 'Ingreso', currency));
+    setChangeRateKind(nextChangeRateKind);
     setDraft((current) => ({
       ...current,
       movementCode,
       movement: movementRow?.name || '',
       direction,
       currency,
+      changeExchangeRateType: nextChangeRateKind,
     }));
   }
 
@@ -7961,42 +8008,41 @@ function TransactionModal({
     if (!selectedMovement || !allowedCurrencies.includes(currency)) {
       return;
     }
-    setChangeRateKind(
-      invertExchangeRateKind(getTransactionExchangeRateKind(draft.direction || 'Ingreso', currency)),
-    );
-    updateField('currency', currency);
+    const nextChangeRateKind = invertExchangeRateKind(getTransactionExchangeRateKind(draft.direction || 'Ingreso', currency));
+    setChangeRateKind(nextChangeRateKind);
+    setDraft((current) => ({ ...current, currency, changeExchangeRateType: nextChangeRateKind }));
   }
 
   function toggleChangeRateKind() {
-    setChangeRateKind((current) => (current === 'Compra' ? 'Venta' : 'Compra'));
+    const nextKind = changeRateKind === 'Compra' ? 'Venta' : 'Compra';
+    setChangeRateKind(nextKind);
+    updateField('changeExchangeRateType', nextKind);
   }
 
   function updateCashCount(currency: CashCurrency, denominationId: string, field: 'groups' | 'loose', value: string) {
     const cleanValue = value.replace(/\D/g, '');
-    setCashCounts((current) => ({
-      ...current,
-      [currency]: {
-        ...current[currency],
-        [denominationId]: {
-          ...current[currency][denominationId],
-          [field]: cleanValue ? String(Number(cleanValue)) : '',
-        },
-      },
-    }));
+    setDraft((current) => {
+      const key = currency === 'NIO' ? 'cashCountNio' : 'cashCountUsd';
+      const currentCounts = readTransactionCashCount(current[key]);
+      currentCounts[denominationId] = {
+        ...currentCounts[denominationId],
+        [field]: cleanValue ? String(Number(cleanValue)) : '',
+      };
+      return { ...current, [key]: serializeTransactionCashCount(currentCounts) };
+    });
   }
 
   function updateChangeCashCount(currency: CashCurrency, denominationId: string, field: 'groups' | 'loose', value: string) {
     const cleanValue = value.replace(/\D/g, '');
-    setChangeCashCounts((current) => ({
-      ...current,
-      [currency]: {
-        ...current[currency],
-        [denominationId]: {
-          ...current[currency][denominationId],
-          [field]: cleanValue ? String(Number(cleanValue)) : '',
-        },
-      },
-    }));
+    setDraft((current) => {
+      const key = currency === 'NIO' ? 'changeCashCountNio' : 'changeCashCountUsd';
+      const currentCounts = readTransactionCashCount(current[key]);
+      currentCounts[denominationId] = {
+        ...currentCounts[denominationId],
+        [field]: cleanValue ? String(Number(cleanValue)) : '',
+      };
+      return { ...current, [key]: serializeTransactionCashCount(currentCounts) };
+    });
   }
 
   function handleTransactionAmountKeyDown(event: KeyboardEvent<HTMLInputElement>) {
@@ -8035,22 +8081,39 @@ function TransactionModal({
           currency,
         );
         const exchangeRateValue = getTransactionRateValue(exchangeRate, exchangeRateType);
+        const rowCashTotals = {
+          NIO: calculateCashPileTotal(cashDenominations.NIO, readTransactionCashCount(transactionDraft.cashCountNio)),
+          USD: calculateCashPileTotal(cashDenominations.USD, readTransactionCashCount(transactionDraft.cashCountUsd)),
+        };
+        const rowDifference = calculateTransactionCashDifference({
+          cashTotals: rowCashTotals,
+          currency,
+          direction: transactionDraft.direction || 'Ingreso',
+          expectedAmount: parseMoneyValue(transactionDraft.amountValue),
+          rate: exchangeRate,
+        });
+        const rowCarry = transactionDraft.direction === 'Ingreso'
+          ? calculateTransactionCarryNio(drafts, index, exchangeRate)
+          : 0;
+        const rowDifferenceNio = rowDifference.differenceNio + rowCarry;
+        const rowChangeKind = transactionDraft.changeExchangeRateType === 'Venta' ? 'Venta' : 'Compra';
+        const rowChangeRate = getTransactionRateValue(exchangeRate, rowChangeKind);
         return {
           ...transactionDraft,
-          cashCountNio: serializeTransactionCashCount(cashCounts.NIO),
-          cashCountUsd: serializeTransactionCashCount(cashCounts.USD),
-          changeCashCountNio: serializeTransactionCashCount(changeCashCounts.NIO),
-          changeCashCountUsd: serializeTransactionCashCount(changeCashCounts.USD),
+          cashCountNio: transactionDraft.cashCountNio,
+          cashCountUsd: transactionDraft.cashCountUsd,
+          changeCashCountNio: transactionDraft.changeCashCountNio,
+          changeCashCountUsd: transactionDraft.changeCashCountUsd,
           exchangeRateType,
           exchangeRateValue: formatRateDisplay(String(exchangeRateValue)),
-          changeExchangeRateType: changeRateKind,
-          changeExchangeRateValue: formatRateDisplay(String(changeRateValue)),
-          settlementExchangeRateType: transactionDifference.rateKind,
+          changeExchangeRateType: rowChangeKind,
+          changeExchangeRateValue: formatRateDisplay(String(rowChangeRate)),
+          settlementExchangeRateType: rowDifference.rateKind,
           settlementExchangeRateValue: formatRateDisplay(
-            String(transactionDifference.rateValue),
+            String(rowDifference.rateValue),
           ),
-          expectedChangeNio: String(expectedChange.NIO),
-          expectedChangeUsd: String(expectedChange.USD),
+          expectedChangeNio: String(Math.max(0, rowDifferenceNio)),
+          expectedChangeUsd: String(Math.max(0, rowDifferenceNio / (rowDifference.rateValue || 1))),
           transactionGroupId: transactionGroupIdRef.current,
           transactionGroupOrder: String(index + 1),
         };
@@ -8248,6 +8311,11 @@ function TransactionModal({
             <textarea value={draft.description} rows={1} onChange={(event) => updateField('description', event.target.value)} readOnly={isTransactionLocked} />
           </label>
           <div className="transaction-cash-count-section">
+            <div className="transaction-group-change-summary" aria-label="Vuelto total disponible">
+              <span>Vuelto total del grupo</span>
+              <strong>{formatCashCountMoney(totalGroupChangeNio, 'NIO')}</strong>
+              <strong>{formatCashCountMoney(totalGroupChangeUsd, 'USD')}</strong>
+            </div>
             <div className="transaction-cash-carousel">
               <div className={`transaction-cash-carousel__track ${cashView === 'change' ? 'transaction-cash-carousel__track--change' : ''}`}>
                 <div
@@ -8261,7 +8329,7 @@ function TransactionModal({
                 >
                   <div className="transaction-cash-count-heading">
                     <div>
-                      <span>{drafts.length > 1 ? `Arqueo compartido - ${drafts.length} transacciones` : 'Arqueo de transaccion'}</span>
+                      <span>{drafts.length > 1 ? `Arqueo de transaccion ${activeTabIndex + 1}` : 'Arqueo de transaccion'}</span>
                       <strong>Conteo fisico {draft.direction === 'Salida' ? 'entregado' : 'recibido'}</strong>
                     </div>
                     <div className="transaction-rate-chip" aria-label="Tasa de cambio utilizada">
@@ -8306,7 +8374,7 @@ function TransactionModal({
                     differenceUsd={transactionDifference.differenceUsd}
                     mode="transaction"
                     direction={draft.direction === 'Salida' ? 'Salida' : 'Ingreso'}
-                    title={drafts.length > 1 ? 'Diferencia Contra Total Acumulado' : 'Diferencia Contra Monto Digitado'}
+                    title={carriedNio > 0.005 ? 'Diferencia con saldo recibido anteriormente' : 'Diferencia contra monto digitado'}
                   />
                 </div>
               </div>

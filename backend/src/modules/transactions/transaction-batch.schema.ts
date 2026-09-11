@@ -67,6 +67,7 @@ export const createTransactionBatchSchema = z
             amount: amountSchema,
             pendingName: z.string().trim().max(160).optional().default(''),
             description: z.string().trim().max(2000).optional().default(''),
+            settlement: settlementSchema.optional(),
           })
           .strict(),
       )

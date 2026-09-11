@@ -1819,6 +1819,30 @@ td {
   padding-top: 10px;
 }
 
+/* Mantiene visible el vuelto acumulado mientras se cambia de pestaña. */
+.transaction-group-change-summary {
+  align-items: center;
+  background: #fff4c7;
+  border: 1px solid #e4c75b;
+  display: flex;
+  gap: 14px;
+  justify-content: flex-end;
+  margin: 0 0 10px;
+  padding: 8px 12px;
+}
+
+.transaction-group-change-summary span {
+  color: #66551c;
+  font-size: .75rem;
+  font-weight: 700;
+  margin-right: auto;
+}
+
+.transaction-group-change-summary strong {
+  color: #263238;
+  font-size: .85rem;
+}
+
 .transaction-cash-carousel {
   overflow: hidden;
   width: 100%;

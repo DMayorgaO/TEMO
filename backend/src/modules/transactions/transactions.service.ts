@@ -75,6 +75,7 @@ interface EditableTransactionRow extends QueryResultRow {
 type CashCounts = CreateTransactionBatchInput['settlement']['primaryCounts'];
 
 interface StoredSettlement {
+  independent: boolean;
   primaryDirection: MoneyDirection;
   primaryCounts: CashCounts;
   changeCounts: CashCounts;
@@ -345,14 +346,23 @@ export class TransactionsService {
       // Un pendiente representa el monto completo a credito y no mueve efectivo al crearse.
       if (
         input.transactions.some((transaction) => transaction.pendingName) &&
-        (primaryTotals.NIO > 0 || primaryTotals.USD > 0 || changeTotals.NIO > 0 || changeTotals.USD > 0)
+        input.transactions.some((transaction) => {
+          const settlement = transaction.settlement ?? input.settlement;
+          const primary = this.cashTotals(settlement.primaryCounts);
+          const change = this.cashTotals(settlement.changeCounts);
+          return primary.NIO > 0 || primary.USD > 0 || change.NIO > 0 || change.USD > 0;
+        })
       ) {
         throw new ConflictException(
           'Un pendiente total no puede guardarse con billetes ni vuelto. Limpie el arqueo e intente nuevamente.',
         );
       }
 
-      for (const currency of ['NIO', 'USD'] as const) {
+      const hasIndependentSettlements = input.transactions.some((transaction) => transaction.settlement);
+      if (hasIndependentSettlements) {
+        await this.persistIndependentSettlements(client, input, persisted, shift, rateId, userId, currencies, denominations);
+      } else {
+        for (const currency of ['NIO', 'USD'] as const) {
         if (
           primaryTotals[currency] > 0 ||
           Math.abs(expectedNet[currency]) > 0
@@ -419,15 +429,16 @@ export class TransactionsService {
             changeTotals[currency],
           );
         }
-      }
+        }
 
-      await this.applySettlementToCurrentCashCount(
-        client,
-        shift.id_turno,
-        primaryDirection,
-        input.settlement.primaryCounts,
-        input.settlement.changeCounts,
-      );
+        await this.applySettlementToCurrentCashCount(
+          client,
+          shift.id_turno,
+          primaryDirection,
+          input.settlement.primaryCounts,
+          input.settlement.changeCounts,
+        );
+      }
 
       await this.refreshShiftAccountBalances(client, shift.id_turno);
 
@@ -658,10 +669,13 @@ export class TransactionsService {
          join temo.monedas m on m.id_moneda = a.id_moneda
          left join temo.arqueos_denominaciones ad on ad.id_arqueo = a.id_arqueo
          left join temo.denominaciones d on d.id_denominacion = ad.id_denominacion
-         where a.id_grupo_transacciones = $1
+         where (
+             a.id_transaccion = $1
+             or (a.id_transaccion is null and a.id_grupo_transacciones = $2)
+           )
            and a.tipo in ('TRANSACCION_RECIBIDO', 'TRANSACCION_ENTREGADO', 'TRANSACCION_VUELTO')
          order by a.tipo, m.codigo, d.valor desc nulls last`,
-        [transaction.id_grupo_transacciones],
+        [transaction.id_transaccion, transaction.id_grupo_transacciones],
       );
 
       const emptyCounts = (): CashCounts => ({ NIO: [], USD: [] });
@@ -721,6 +735,7 @@ export class TransactionsService {
       const previousSettlement = await this.loadStoredSettlement(
         client,
         transaction.id_grupo_transacciones,
+        transaction.id_transaccion,
       );
       const rateId = await this.resolveExchangeRate(client, input, user.id);
       const movement = await this.resolveMovement(
@@ -894,6 +909,7 @@ export class TransactionsService {
         previousSettlement,
         rateId,
         user.id,
+        movement.direccion_efectivo,
       );
       await this.refreshShiftAccountBalances(client, transaction.id_turno);
 
@@ -1450,6 +1466,7 @@ export class TransactionsService {
   private async loadStoredSettlement(
     client: PoolClient,
     groupId: string,
+    transactionId: string,
   ): Promise<StoredSettlement> {
     const result = await client.query<{
       tipo: string;
@@ -1457,6 +1474,7 @@ export class TransactionsService {
       denomination: string | null;
       piles25: number | null;
       loose: number | null;
+      independent: boolean;
     } & QueryResultRow>(
       `select
          a.tipo,
@@ -1464,13 +1482,14 @@ export class TransactionsService {
          d.valor as denomination,
          ad.montones_25 as piles25,
          ad.sueltos as loose
+         ,(a.id_transaccion is not null) as independent
        from temo.arqueos a
        join temo.monedas m on m.id_moneda = a.id_moneda
        left join temo.arqueos_denominaciones ad on ad.id_arqueo = a.id_arqueo
        left join temo.denominaciones d on d.id_denominacion = ad.id_denominacion
-       where a.id_grupo_transacciones = $1
+       where (a.id_transaccion = $2 or (a.id_transaccion is null and a.id_grupo_transacciones = $1))
          and a.tipo in ('TRANSACCION_RECIBIDO', 'TRANSACCION_ENTREGADO', 'TRANSACCION_VUELTO')`,
-      [groupId],
+      [groupId, transactionId],
     );
     const primaryCounts: CashCounts = { NIO: [], USD: [] };
     const changeCounts: CashCounts = { NIO: [], USD: [] };
@@ -1486,7 +1505,7 @@ export class TransactionsService {
         loose: Number(row.loose || 0),
       });
     }
-    return { primaryDirection, primaryCounts, changeCounts };
+    return { independent: result.rows.some((row) => row.independent), primaryDirection, primaryCounts, changeCounts };
   }
 
   private async replaceGroupSettlement(
@@ -1496,6 +1515,7 @@ export class TransactionsService {
     previous: StoredSettlement,
     rateId: string,
     userId: string,
+    transactionDirection: MoneyDirection,
   ) {
     await client.query(
       `update temo.transacciones
@@ -1513,6 +1533,13 @@ export class TransactionsService {
         userId,
       ],
     );
+
+    if (previous.independent) {
+      await this.replaceIndependentSettlement(
+        client, transaction, input, previous, rateId, userId, transactionDirection,
+      );
+      return;
+    }
 
     const groupTransactions = await client.query<{
       direccion: MoneyDirection;
@@ -1647,6 +1674,7 @@ export class TransactionsService {
       transaction.id_turno,
       previous,
       {
+        independent: false,
         primaryDirection,
         primaryCounts: input.settlement.primaryCounts,
         changeCounts: input.settlement.changeCounts,
@@ -1667,6 +1695,70 @@ export class TransactionsService {
         userId,
       ],
     );
+  }
+
+  // Reemplaza sólo el arqueo de la transaccion editada sin alterar otras pestañas.
+  private async replaceIndependentSettlement(
+    client: PoolClient,
+    transaction: EditableTransactionRow,
+    input: UpdateTransactionInput,
+    previous: StoredSettlement,
+    rateId: string,
+    userId: string,
+    direction: MoneyDirection,
+  ) {
+    const primaryTotals = this.cashTotals(input.settlement.primaryCounts);
+    const changeTotals = this.cashTotals(input.settlement.changeCounts);
+    if (input.pendingName && (primaryTotals.NIO > 0 || primaryTotals.USD > 0 || changeTotals.NIO > 0 || changeTotals.USD > 0)) {
+      throw new ConflictException('Un pendiente total no puede guardarse con billetes ni vuelto.');
+    }
+    const currencies = await this.loadCurrencies(client);
+    const denominations = await this.loadDenominations(client);
+    const shift: ShiftRow = {
+      id_turno: transaction.id_turno,
+      id_sucursal: transaction.id_sucursal,
+      id_caja: transaction.id_caja,
+      id_cajero: transaction.id_cajero,
+    };
+    await client.query(`delete from temo.movimientos_efectivo where id_transaccion = $1 and es_reverso = false`, [transaction.id_transaccion]);
+    await client.query(`delete from temo.arqueos where id_transaccion = $1`, [transaction.id_transaccion]);
+
+    for (const currency of ['NIO', 'USD'] as const) {
+      const expectedAmount = currency === input.currencyCode ? input.amount : 0;
+      if (primaryTotals[currency] > 0 || expectedAmount > 0) {
+        await this.persistCashCount(client, {
+          transactionId: transaction.id_transaccion, shift, userId, rateId,
+          rateKind: this.transactionRateKind(direction, input.currencyCode),
+          rateValue: this.rateValue(input, this.transactionRateKind(direction, input.currencyCode)),
+          currency, currencyId: currencies[currency],
+          type: direction === 'ENTRA' ? 'TRANSACCION_RECIBIDO' : 'TRANSACCION_ENTREGADO',
+          expectedAmount, lines: input.settlement.primaryCounts[currency], denominations,
+        });
+      }
+      if (changeTotals[currency] > 0 || input.settlement.expectedChange[currency] > 0) {
+        await this.persistCashCount(client, {
+          transactionId: transaction.id_transaccion, shift, userId, rateId,
+          rateKind: input.settlement.changeRateKind,
+          rateValue: this.rateValue(input, input.settlement.changeRateKind),
+          currency, currencyId: currencies[currency], type: 'TRANSACCION_VUELTO',
+          expectedAmount: input.settlement.expectedChange[currency],
+          lines: input.settlement.changeCounts[currency], denominations,
+        });
+      }
+      if (primaryTotals[currency] > 0) {
+        await this.persistTransactionCashMovement(client, transaction.id_transaccion, shift, currencies[currency], direction, primaryTotals[currency]);
+      }
+      if (changeTotals[currency] > 0) {
+        await this.persistTransactionCashMovement(client, transaction.id_transaccion, shift, currencies[currency], 'SALE', changeTotals[currency]);
+      }
+    }
+
+    await this.applySettlementDeltaToCurrentCashCount(client, transaction.id_turno, previous, {
+      independent: true,
+      primaryDirection: direction,
+      primaryCounts: input.settlement.primaryCounts,
+      changeCounts: input.settlement.changeCounts,
+    });
   }
 
   private async applySettlementDeltaToCurrentCashCount(
@@ -2114,10 +2206,83 @@ export class TransactionsService {
     );
   }
 
+  // Persiste el arqueo y el movimiento fisico de cada pestaña por separado.
+  private async persistIndependentSettlements(
+    client: PoolClient,
+    input: CreateTransactionBatchInput,
+    persisted: PersistedTransaction[],
+    shift: ShiftRow,
+    rateId: string,
+    userId: string,
+    currencies: Record<CurrencyCode, string>,
+    denominations: Map<string, string>,
+  ) {
+    for (const [index, transaction] of input.transactions.entries()) {
+      const settlement = transaction.settlement ?? input.settlement;
+      const saved = persisted[index];
+      const primaryTotals = this.cashTotals(settlement.primaryCounts);
+      const changeTotals = this.cashTotals(settlement.changeCounts);
+      const direction = saved.direction;
+      const primaryType = direction === 'ENTRA' ? 'TRANSACCION_RECIBIDO' : 'TRANSACCION_ENTREGADO';
+      const rateKind = this.transactionRateKind(direction, transaction.currencyCode);
+
+      for (const currency of ['NIO', 'USD'] as const) {
+        const expectedAmount = currency === transaction.currencyCode ? transaction.amount : 0;
+        if (primaryTotals[currency] > 0 || expectedAmount > 0) {
+          await this.persistCashCount(client, {
+            transactionId: saved.id,
+            shift,
+            userId,
+            rateId,
+            rateKind,
+            rateValue: this.rateValue(input, rateKind),
+            currency,
+            currencyId: currencies[currency],
+            type: primaryType,
+            expectedAmount,
+            lines: settlement.primaryCounts[currency],
+            denominations,
+          });
+        }
+        if (changeTotals[currency] > 0 || settlement.expectedChange[currency] > 0) {
+          await this.persistCashCount(client, {
+            transactionId: saved.id,
+            shift,
+            userId,
+            rateId,
+            rateKind: settlement.changeRateKind,
+            rateValue: this.rateValue(input, settlement.changeRateKind),
+            currency,
+            currencyId: currencies[currency],
+            type: 'TRANSACCION_VUELTO',
+            expectedAmount: settlement.expectedChange[currency],
+            lines: settlement.changeCounts[currency],
+            denominations,
+          });
+        }
+        if (primaryTotals[currency] > 0) {
+          await this.persistTransactionCashMovement(client, saved.id, shift, currencies[currency], direction, primaryTotals[currency]);
+        }
+        if (changeTotals[currency] > 0) {
+          await this.persistTransactionCashMovement(client, saved.id, shift, currencies[currency], 'SALE', changeTotals[currency]);
+        }
+      }
+
+      await this.applySettlementToCurrentCashCount(
+        client,
+        shift.id_turno,
+        direction,
+        settlement.primaryCounts,
+        settlement.changeCounts,
+      );
+    }
+  }
+
   private async persistCashCount(
     client: PoolClient,
     data: {
-      groupId: string;
+      groupId?: string;
+      transactionId?: string;
       shift: ShiftRow;
       userId: string;
       rateId: string;
@@ -2141,12 +2306,13 @@ export class TransactionsService {
          id_moneda,
          id_usuario_creacion,
          id_grupo_transacciones,
+         id_transaccion,
          id_tipo_cambio,
          tipo_tasa,
          tasa_usada,
          monto_esperado
        )
-       values ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+       values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
        returning id_arqueo`,
       [
         data.shift.id_caja,
@@ -2154,6 +2320,7 @@ export class TransactionsService {
         data.currencyId,
         data.userId,
         data.groupId,
+        data.transactionId ?? null,
         data.rateId,
         data.rateKind,
         data.rateValue,
@@ -2281,6 +2448,23 @@ export class TransactionsService {
         direction,
         amount,
       ],
+    );
+  }
+
+  // Vincula el efectivo con la pestaña que lo recibió o entregó dentro del grupo.
+  private persistTransactionCashMovement(
+    client: PoolClient,
+    transactionId: string,
+    shift: ShiftRow,
+    currencyId: string,
+    direction: MoneyDirection,
+    amount: number,
+  ) {
+    return client.query(
+      `insert into temo.movimientos_efectivo (
+         id_transaccion,id_turno,id_caja,id_moneda,direccion,monto
+       ) values ($1,$2,$3,$4,$5,$6)`,
+      [transactionId, shift.id_turno, shift.id_caja, currencyId, direction, amount],
     );
   }
 
