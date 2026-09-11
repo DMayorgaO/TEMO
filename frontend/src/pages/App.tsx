@@ -205,6 +205,7 @@ type ShiftDetail = {
   observaciones_cierre?: string;
   cashCounts: Record<string, Partial<Record<CashCurrency, ShiftCashCount>>>;
   expectedCash: Record<CashCurrency, number>;
+  pendingCash: Record<CashCurrency, number>;
   balances: Array<{
     account_id: string;
     account: string;
@@ -2178,18 +2179,17 @@ function calculateChangeCashDifference({
 function calculateShiftCashDifference({
   actual,
   expected,
-  changeNio,
   buyRate,
 }: {
   actual: Record<CashCurrency, number>;
   expected: Record<CashCurrency, number>;
-  changeNio: number;
   buyRate: number;
 }) {
   const safeRate = buyRate > 0 ? buyRate : 1;
   const actualEquivalentNio = actual.NIO + actual.USD * safeRate;
   const expectedEquivalentNio = expected.NIO + expected.USD * safeRate;
-  const differenceNio = actualEquivalentNio - expectedEquivalentNio - changeNio;
+  // La diferencia siempre compara el efectivo contado contra el esperado.
+  const differenceNio = actualEquivalentNio - expectedEquivalentNio;
   return {
     differenceNio,
     differenceUsd: differenceNio / safeRate,
@@ -2281,7 +2281,7 @@ function cashCountPayload(draft: Record<string, CashPileDraft>) {
       [currency]: cashDenominations[currency].map((denomination) => ({
         denomination: denomination.value,
         piles25: Number(draft[denomination.id]?.groups || 0),
-        loose: Math.min(24, Number(draft[denomination.id]?.loose || 0)),
+        loose: Number(draft[denomination.id]?.loose || 0),
       })),
     }),
     { NIO: [], USD: [] },
@@ -3567,7 +3567,6 @@ function ShiftClosureModal({
   const { differenceNio, differenceUsd } = calculateShiftCashDifference({
     actual: { NIO: finalNio, USD: finalUsd },
     expected: shift.expectedCash,
-    changeNio: parseMoneyValue(changeNio),
     buyRate: rate,
   });
 
@@ -3607,9 +3606,14 @@ function ShiftClosureModal({
       focusSelector('[data-shift-close-observations]');
       return true;
     };
-    if (event.key === 'Enter' || event.key === 'ArrowDown') {
+    if (event.key === 'Enter' || event.key === 'ArrowDown' || event.key === 'ArrowRight') {
       event.preventDefault();
       next();
+    } else if (event.key === 'ArrowUp' || event.key === 'ArrowLeft') {
+      event.preventDefault();
+      if (rowIndex > 0) {
+        focusSelector(`[data-shift-close-balance-currency="${currency}"][data-shift-close-balance-row="${rowIndex - 1}"]`);
+      }
     } else if (event.key === 'Tab') {
       if (event.shiftKey && rowIndex > 0) {
         event.preventDefault();
@@ -3663,9 +3667,9 @@ function ShiftClosureModal({
                 <div><strong>Diferencia NIO</strong>{renderDifference(differenceNio, 'NIO', { positiveLabel: '' })}</div>
                 <div><strong>Diferencia USD</strong>{renderDifference(differenceUsd, 'USD', { positiveLabel: '' })}</div>
                 <label>
-                  <strong>Cambio</strong>
+                  <strong>Diferencia registrada</strong>
                   <span className="cash-change-entry"><span>C$</span><input value={changeNio} inputMode="decimal" onChange={(event) => setChangeNio(normalizeSignedAccountingMoneyRaw(event.target.value))} /></span>
-                  <button type="button" className="secondary-button" onClick={() => setChangeNio(formatAccountingMoneyRaw(parseMoneyValue(changeNio) + differenceNio))}>Agregar diferencia</button>
+                  <button type="button" className="secondary-button" onClick={() => setChangeNio(formatAccountingMoneyRaw(differenceNio))}>Registrar diferencia</button>
                 </label>
               </div>
             </div>
@@ -4088,7 +4092,7 @@ function ScreenContent({
   }
 
   if (screen === 'cash-count') {
-    return <CashCountScreen />;
+    return <CashCountScreen currentUser={currentUser} />;
   }
 
   if (screen === 'exchange-rate') {
@@ -4271,13 +4275,16 @@ function ExchangeRateScreen() {
   );
 }
 
-function CashCountScreen() {
+function CashCountScreen({ currentUser }: { currentUser: AuthUser }) {
   const [pileDrafts, setPileDrafts] = useState<Record<string, CashPileDraft>>({});
   const [exchangeRate] = useState<ExchangeRate>(() => readExchangeRate());
   const [shift, setShift] = useState<ShiftDetail | null>(null);
   const [changeNio, setChangeNio] = useState('0.00');
   const [isLoaded, setIsLoaded] = useState(false);
   const [message, setMessage] = useState('');
+  const [activeShifts, setActiveShifts] = useState<ShiftDetail[]>([]);
+  const [selectedShiftId, setSelectedShiftId] = useState('');
+  const isBoss = currentUser.roleCode === 'JEFA';
 
   const totals = useMemo(
     () => ({
@@ -4291,14 +4298,21 @@ function CashCountScreen() {
   const { differenceNio, differenceUsd } = calculateShiftCashDifference({
     actual: totals,
     expected,
-    changeNio: parseMoneyValue(changeNio),
     buyRate,
   });
 
   useEffect(() => {
     let isMounted = true;
-    apiRequest<ShiftDetail | null>('/shifts/current')
-      .then((currentShift) => {
+    const request = isBoss
+      ? apiRequest<ShiftDetail[]>('/shifts').then((shifts) => {
+          const openShifts = shifts.filter((item) => ['ABIERTO', 'PENDIENTE_APROBACION'].includes(item.estado));
+          setActiveShifts(openShifts);
+          const targetId = selectedShiftId || openShifts[0]?.database_id || '';
+          setSelectedShiftId(targetId);
+          return targetId ? apiRequest<ShiftDetail>(`/shifts/${targetId}`) : null;
+        })
+      : apiRequest<ShiftDetail | null>('/shifts/current');
+    request.then((currentShift) => {
         if (!isMounted) {
           return;
         }
@@ -4311,10 +4325,23 @@ function CashCountScreen() {
     return () => {
       isMounted = false;
     };
-  }, []);
+  }, [currentUser.id, isBoss]);
 
   useEffect(() => {
-    if (!isLoaded || !shift || shift.estado === 'CERRADO') {
+    if (!isBoss || !selectedShiftId) return;
+    setIsLoaded(false);
+    apiRequest<ShiftDetail>(`/shifts/${selectedShiftId}`)
+      .then((selectedShift) => {
+        setShift(selectedShift);
+        setChangeNio(formatAccountingMoneyRaw(selectedShift.cambio_nio));
+        setPileDrafts(cashDraftFromShiftCounts(selectedShift.cashCounts.ACTUAL));
+        setIsLoaded(true);
+      })
+      .catch((error) => setMessage(error instanceof Error ? error.message : 'No fue posible cargar el arqueo seleccionado.'));
+  }, [isBoss, selectedShiftId]);
+
+  useEffect(() => {
+    if (isBoss || !isLoaded || !shift || shift.estado === 'CERRADO') {
       return;
     }
     const timer = window.setTimeout(() => {
@@ -4324,7 +4351,7 @@ function CashCountScreen() {
       }).then(setShift).catch((error) => setMessage(error instanceof Error ? error.message : 'No fue posible guardar el arqueo.'));
     }, 500);
     return () => window.clearTimeout(timer);
-  }, [pileDrafts, changeNio, isLoaded, shift?.database_id]);
+  }, [pileDrafts, changeNio, isBoss, isLoaded, shift?.database_id]);
 
   function updatePileField(denominationId: string, field: 'groups' | 'loose', value: string) {
     const cleanValue = value.replace(/\D/g, '');
@@ -4379,16 +4406,33 @@ function CashCountScreen() {
               <strong>{formatCashCountMoney(parseMoneyValue(shift?.efectivo_inicial_nio), 'NIO')}</strong>
               <strong>{formatCashCountMoney(parseMoneyValue(shift?.efectivo_inicial_usd), 'USD')}</strong>
             </div>
+            <div className="cash-opening-chip cash-summary-chip cash-summary-chip--pending" aria-label="Pendientes del turno">
+              <div><span>Pendientes</span><small>No afectan efectivo hasta pagarse</small></div>
+              <strong>{formatCashCountMoney(shift?.pendingCash?.NIO ?? 0, 'NIO')}</strong>
+              <strong>{formatCashCountMoney(shift?.pendingCash?.USD ?? 0, 'USD')}</strong>
+            </div>
+            <div className="cash-opening-chip cash-summary-chip cash-summary-chip--expected" aria-label="Efectivo esperado del turno">
+              <div><span>Efectivo esperado</span><small>Inicial más movimientos aplicables</small></div>
+              <strong>{formatCashCountMoney(expected.NIO, 'NIO')}</strong>
+              <strong>{formatCashCountMoney(expected.USD, 'USD')}</strong>
+            </div>
           </div>
           <div className="action-row">
-            <button type="button" className="secondary-button" onClick={clearCount}>
+            {isBoss && (
+              <label className="cash-shift-selector">Turno activo
+                <select value={selectedShiftId} onChange={(event) => setSelectedShiftId(event.target.value)}>
+                  {activeShifts.map((item) => <option key={item.database_id} value={item.database_id}>{item.cajero} - {item.caja}</option>)}
+                </select>
+              </label>
+            )}
+            {!isBoss && <button type="button" className="secondary-button" onClick={clearCount}>
               <X size={17} />
               Limpiar
-            </button>
-            <button type="button" className="primary-button" onClick={requestClose} disabled={!shift || shift.solicitud_estado === 'PENDIENTE'}>
+            </button>}
+            {!isBoss && <button type="button" className="primary-button" onClick={requestClose} disabled={!shift || shift.solicitud_estado === 'PENDIENTE'}>
               <LockKeyhole size={17} />
               {shift?.solicitud_estado === 'PENDIENTE' ? 'Cierre solicitado' : 'Cierre'}
-            </button>
+            </button>}
           </div>
         </div>
 
@@ -4402,6 +4446,7 @@ function CashCountScreen() {
             focusScope="general-cash-count"
             pileDrafts={pileDrafts}
             conversionRate={buyRate}
+            readOnly={isBoss}
             nextFocusSelector={'[data-cash-scope="general-cash-count"][data-cash-currency="USD"][data-cash-row="0"][data-cash-column="0"]'}
             onPileFieldChange={updatePileField}
           />
@@ -4412,6 +4457,7 @@ function CashCountScreen() {
             focusScope="general-cash-count"
             pileDrafts={pileDrafts}
             conversionRate={buyRate}
+            readOnly={isBoss}
             nextFocusSelector='[data-general-cash-change]'
             onPileFieldChange={updatePileField}
           />
@@ -4419,9 +4465,9 @@ function CashCountScreen() {
             <div><strong>Diferencia NIO</strong>{renderDifference(differenceNio, 'NIO', { positiveLabel: '' })}</div>
             <div><strong>Diferencia USD</strong>{renderDifference(differenceUsd, 'USD', { positiveLabel: '' })}</div>
             <label>
-              <strong>Cambio</strong>
-              <span className="cash-change-entry"><span>C$</span><input data-general-cash-change value={changeNio} inputMode="decimal" onChange={(event) => setChangeNio(normalizeSignedAccountingMoneyRaw(event.target.value))} /></span>
-              <button type="button" className="secondary-button" onClick={() => setChangeNio(formatAccountingMoneyRaw(parseMoneyValue(changeNio) + differenceNio))}>Agregar diferencia</button>
+              <strong>Diferencia registrada</strong>
+              <span className="cash-change-entry"><span>C$</span><input data-general-cash-change value={changeNio} inputMode="decimal" readOnly={isBoss} onChange={(event) => setChangeNio(normalizeSignedAccountingMoneyRaw(event.target.value))} /></span>
+              {!isBoss && <button type="button" className="secondary-button" onClick={() => setChangeNio(formatAccountingMoneyRaw(differenceNio))}>Registrar diferencia</button>}
             </label>
           </div>
           </div>
@@ -6990,10 +7036,10 @@ function ShiftBankBalanceTables({
       : focusNextBalanceSection(currency);
     const goPrevious = () => rowIndex > 0 && (focusBalanceInput(phase, currency, rowIndex - 1), true);
 
-    if (event.key === 'Enter' || event.key === 'ArrowDown') {
+    if (event.key === 'Enter' || event.key === 'ArrowDown' || event.key === 'ArrowRight') {
       event.preventDefault();
       goNext();
-    } else if (event.key === 'ArrowUp') {
+    } else if (event.key === 'ArrowUp' || event.key === 'ArrowLeft') {
       event.preventDefault();
       goPrevious();
     } else if (event.key === 'Tab') {

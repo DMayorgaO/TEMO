@@ -1702,11 +1702,13 @@ export class TransactionsService {
         id_denominacion: string;
         value: string;
         quantity: number;
+        piles25: number;
       } & QueryResultRow>(
         `select
            d.id_denominacion,
            d.valor as value,
-           coalesce(ad.cantidad, 0)::integer as quantity
+           coalesce(ad.cantidad, 0)::integer as quantity,
+           coalesce(ad.montones_25, 0)::integer as "piles25"
          from temo.denominaciones d
          join temo.monedas m on m.id_moneda = d.id_moneda
          left join temo.arqueos_denominaciones ad
@@ -1724,6 +1726,7 @@ export class TransactionsService {
           (newPrimary.get(value) ?? 0) * (next.primaryDirection === 'ENTRA' ? 1 : -1) -
           (newChange.get(value) ?? 0);
         const quantity = Math.max(0, Number(row.quantity) + newNet - oldNet);
+        const keepsLooseCounting = Number(row.piles25) === 0;
         await client.query(
           `insert into temo.arqueos_denominaciones (
              id_arqueo, id_denominacion, cantidad, monto, montones_25, sueltos
@@ -1732,15 +1735,15 @@ export class TransactionsService {
              $2,
              $3::integer,
              $3::integer * $4::numeric,
-             floor($3::integer / 25.0)::integer,
-             mod($3::integer, 25)
+             case when $5::boolean then 0 else floor($3::integer / 25.0)::integer end,
+             case when $5::boolean then $3::integer else mod($3::integer, 25) end
            )
            on conflict (id_arqueo, id_denominacion) do update
            set cantidad = excluded.cantidad,
                monto = excluded.monto,
                montones_25 = excluded.montones_25,
                sueltos = excluded.sueltos`,
-          [cashCountId, row.id_denominacion, quantity, value],
+          [cashCountId, row.id_denominacion, quantity, value, keepsLooseCounting],
         );
       }
       await client.query(
@@ -1776,8 +1779,9 @@ export class TransactionsService {
       }
       const primaryByValue = new Map(primary[currency].map((line) => [line.denomination, line.piles25 * 25 + line.loose]));
       const changeByValue = new Map(change[currency].map((line) => [line.denomination, line.piles25 * 25 + line.loose]));
-      const rows = await client.query<{ id: string; value: string; quantity: number } & QueryResultRow>(
-        `select ad.id_arqueo_denominacion as id, d.valor as value, ad.cantidad as quantity
+      const rows = await client.query<{ id: string; value: string; quantity: number; piles25: number; loose: number } & QueryResultRow>(
+        `select ad.id_arqueo_denominacion as id, d.valor as value, ad.cantidad as quantity,
+           ad.montones_25 as "piles25", ad.sueltos as loose
          from temo.arqueos_denominaciones ad
          join temo.denominaciones d on d.id_denominacion = ad.id_denominacion
          where ad.id_arqueo = $1`,
@@ -1788,15 +1792,16 @@ export class TransactionsService {
         const primaryDelta = (primaryByValue.get(value) ?? 0) * (primaryDirection === 'ENTRA' ? 1 : -1);
         const changeDelta = changeByValue.get(value) ?? 0;
         const quantity = Math.max(0, Number(row.quantity) + primaryDelta - changeDelta);
+        const keepsLooseCounting = Number(row.piles25) === 0;
         await client.query(
           `update temo.arqueos_denominaciones
            set
              cantidad = $2::integer,
-             montones_25 = floor($2::integer / 25.0)::integer,
-             sueltos = mod($2::integer, 25),
+             montones_25 = case when $4::boolean then 0 else floor($2::integer / 25.0)::integer end,
+             sueltos = case when $4::boolean then $2::integer else mod($2::integer, 25) end,
              monto = $2::integer * $3::numeric
            where id_arqueo_denominacion = $1`,
-          [row.id, quantity, value],
+          [row.id, quantity, value, keepsLooseCounting],
         );
       }
       await client.query(

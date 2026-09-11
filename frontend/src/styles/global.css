@@ -722,6 +722,27 @@ textarea:disabled {
   color: var(--usd-dark);
 }
 
+/* Distingue saldos informativos y efectivo esperado sin competir con el arqueo. */
+.cash-summary-chip--pending {
+  border-top-color: #d9a514;
+}
+
+.cash-summary-chip--expected {
+  border-top-color: var(--primary);
+}
+
+.cash-shift-selector {
+  color: var(--muted);
+  display: grid;
+  font-size: .75rem;
+  font-weight: 700;
+  gap: 4px;
+}
+
+.cash-shift-selector select {
+  min-width: 220px;
+}
+
 .cash-count-grid {
   display: grid;
   gap: 14px;
