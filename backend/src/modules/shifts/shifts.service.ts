@@ -971,7 +971,7 @@ export class ShiftsService {
          where tf.id_turno = t.id_turno
            and tf.id_moneda = m.id_moneda
            and tf.tipo = 'EFECTIVO'
-           and tf.estado <> 'ANULADA'
+           and tf.estado = 'ACTIVO'
        ) transfer_cash on true
        /* Expone el saldo informativo que aun no debe formar parte del arqueo. */
        left join lateral (
