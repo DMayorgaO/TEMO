@@ -646,6 +646,7 @@ export class TransactionsService {
         throw new ForbiddenException('No tiene permiso para consultar esta transaccion.');
       }
 
+      // Recupera primero el arqueo propio de la transaccion y conserva compatibilidad con grupos antiguos.
       const cashRows = await client.query<{
         tipo: string;
         moneda: CurrencyCode;
@@ -675,7 +676,7 @@ export class TransactionsService {
            )
            and a.tipo in ('TRANSACCION_RECIBIDO', 'TRANSACCION_ENTREGADO', 'TRANSACCION_VUELTO')
          order by a.tipo, m.codigo, d.valor desc nulls last`,
-        [transaction.id_transaccion, transaction.id_grupo_transacciones],
+        [transaction.database_id, transaction.id_grupo_transacciones],
       );
 
       const emptyCounts = (): CashCounts => ({ NIO: [], USD: [] });
