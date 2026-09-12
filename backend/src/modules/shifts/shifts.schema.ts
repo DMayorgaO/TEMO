@@ -3,7 +3,8 @@ import { z } from 'zod';
 const cashLineSchema = z.object({
   denomination: z.number().positive().max(1000000),
   piles25: z.number().int().nonnegative().max(1000000),
-  loose: z.number().int().nonnegative().max(24),
+  // Los sueltos admiten conteos completos para monedas y cajeros que no usan montones de 25.
+  loose: z.number().int().nonnegative().max(1000000),
 });
 
 export const cashCountsSchema = z.object({

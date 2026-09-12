@@ -2334,7 +2334,17 @@ function parseConsolidationValue(value?: string) {
 }
 
 function getAccountingMoneyKeyValue(event: KeyboardEvent<HTMLInputElement>, currentValue?: string) {
-  const allowedControlKeys = ['Tab', 'ArrowLeft', 'ArrowRight', 'Home', 'End'];
+  // Deja pasar las teclas de navegacion para que las tablas administren el cambio de campo.
+  const allowedControlKeys = [
+    'Tab',
+    'Enter',
+    'ArrowUp',
+    'ArrowDown',
+    'ArrowLeft',
+    'ArrowRight',
+    'Home',
+    'End',
+  ];
   if (event.ctrlKey || event.metaKey || allowedControlKeys.includes(event.key)) {
     return undefined;
   }
