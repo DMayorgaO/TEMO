@@ -2801,18 +2801,8 @@ function coerceTransactionDateTime(value?: string) {
 }
 
 function normalizeTransactionMovement(value?: string) {
-  const movement = String(value ?? '').trim();
-  const knownMovements: Record<string, string> = {
-    'Pago remesa': 'Pago Remesas',
-    'Pago de remesa': 'Pago Remesas',
-    'Retiro efectivo': 'Retiro efectivo',
-    'Retiro de efectivo': 'Retiro efectivo',
-    'Deposito a cuenta': 'Depositos a cuenta',
-    'Depositos a cuenta': 'Depositos a cuenta',
-    'Envio de remesa': 'Envio Remesas',
-    'Envio remesas': 'Envio Remesas',
-  };
-  return knownMovements[movement] ?? movement;
+  // Conserva el nombre oficial recibido del catalogo para que coincida con el selector.
+  return String(value ?? '').trim();
 }
 
 function formatTransactionMoney(row: CrudRow) {
@@ -7822,7 +7812,10 @@ function TransactionModal({
   const movementCodeSuggestions = movementRows.filter((movement) =>
     !movementCodeQuery || movement.code.toUpperCase().includes(movementCodeQuery),
   );
+  // El codigo es la referencia estable; el nombre se usa como respaldo para registros antiguos.
   const selectedMovement = movementRows.find(
+    (movement) => normalizeLookupValue(movement.code) === normalizeLookupValue(draft.movementCode),
+  ) ?? movementRows.find(
     (movement) => normalizeLookupValue(movement.name) === normalizeLookupValue(draft.movement),
   );
   const allowedCurrencies = getMovementCurrencies(selectedMovement).filter(
@@ -8285,7 +8278,7 @@ function TransactionModal({
           </label>
           <label className="form-field transaction-form-movement">
             Movimiento
-            <select value={draft.movement} onChange={(event) => updateMovement(event.target.value)} disabled={isTransactionLocked || !movementOptions.length}>
+            <select value={selectedMovement?.name ?? draft.movement} onChange={(event) => updateMovement(event.target.value)} disabled={isTransactionLocked || !movementOptions.length}>
               <option value="">{movementOptions.length ? '---' : 'Sin movimientos activos'}</option>
               {movementOptions.map((option) => (
                 <option key={option}>{option}</option>
