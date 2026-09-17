@@ -7635,7 +7635,10 @@ function TransactionTable({ config, currentUser }: { config: CrudConfig; current
                   <td>{row.id}</td>
                   <td>{row.registeredAt}</td>
                   <td>{row.entity}</td>
-                  <td>{row.movement}</td>
+                  <td className="multi-line-cell transaction-movement-cell">
+                    <strong>{row.movement || 'Movimiento no disponible'}</strong>
+                    <small>{row.movementCode || '---'}</small>
+                  </td>
                   <td>
                     <span className={`transaction-amount transaction-amount--${row.direction === 'Salida' ? 'out' : 'in'}`}>
                       {row.direction === 'Salida' ? <ArrowUpRight size={16} /> : <ArrowDownLeft size={16} />}
@@ -7914,7 +7917,7 @@ function TransactionModal({
     const nextDraft = normalizeTransactionRow({
       id: offsetReadableId(initialDraft.id, idOffset),
       registeredAt: '',
-      entity: draft.entity || entityOptions[0] || '',
+      entity: entityOptions[0] || '',
       movementCode: '',
       movement: '',
       direction: '',
@@ -7945,7 +7948,7 @@ function TransactionModal({
     setActiveTabIndex(nextIndex);
     setCashView('received');
     window.setTimeout(() => {
-      document.querySelector<HTMLInputElement>('.transaction-form-code input')?.focus();
+      document.querySelector<HTMLSelectElement>('.transaction-form-bank select')?.focus();
     }, 0);
   }
 
@@ -8038,6 +8041,21 @@ function TransactionModal({
     const nextChangeRateKind = invertExchangeRateKind(getTransactionExchangeRateKind(draft.direction || 'Ingreso', currency));
     setChangeRateKind(nextChangeRateKind);
     setDraft((current) => ({ ...current, currency, changeExchangeRateType: nextChangeRateKind }));
+  }
+
+  function handleCurrencyKeyDown(event: KeyboardEvent<HTMLButtonElement>, currency: CashCurrency) {
+    if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(event.key)) return;
+    const availableCurrencies = (['NIO', 'USD'] as CashCurrency[]).filter((item) => allowedCurrencies.includes(item));
+    if (availableCurrencies.length < 2) return;
+    event.preventDefault();
+    // Las flechas recorren únicamente las monedas habilitadas para el movimiento seleccionado.
+    const currentIndex = availableCurrencies.indexOf(currency);
+    const direction = event.key === 'ArrowLeft' || event.key === 'ArrowUp' ? -1 : 1;
+    const nextCurrency = availableCurrencies[(currentIndex + direction + availableCurrencies.length) % availableCurrencies.length];
+    updateCurrency(nextCurrency);
+    window.setTimeout(() => {
+      document.querySelector<HTMLButtonElement>(`[data-transaction-currency="${nextCurrency}"]`)?.focus();
+    }, 0);
   }
 
   function toggleChangeRateKind() {
@@ -8205,7 +8223,7 @@ function TransactionModal({
                 }}
               >
                 <span>Transaccion {index + 1}</span>
-                <small>{transactionDraft.movementCode || '---'}</small>
+                <small>{transactionDraft.movement || 'Sin movimiento'}{transactionDraft.movementCode ? ` · ${transactionDraft.movementCode}` : ''}</small>
               </button>
               {mode === 'create' && drafts.length > 1 && (
                 <button
@@ -8296,8 +8314,10 @@ function TransactionModal({
               <div className="currency-filter currency-filter--form" aria-label="Seleccionar moneda">
                 <button
                   type="button"
+                  data-transaction-currency="NIO"
                   className={`currency-filter__button currency-filter__button--nio ${draft.currency === 'NIO' ? 'currency-filter__button--active' : ''}`}
                   onClick={() => updateCurrency('NIO')}
+                  onKeyDown={(event) => handleCurrencyKeyDown(event, 'NIO')}
                   disabled={isTransactionLocked || !selectedMovement || !allowedCurrencies.includes('NIO')}
                   title={selectedMovement && !allowedCurrencies.includes('NIO') ? 'No disponible para este movimiento' : 'Cordobas'}
                 >
@@ -8305,8 +8325,10 @@ function TransactionModal({
                 </button>
                 <button
                   type="button"
+                  data-transaction-currency="USD"
                   className={`currency-filter__button currency-filter__button--usd ${draft.currency === 'USD' ? 'currency-filter__button--active' : ''}`}
                   onClick={() => updateCurrency('USD')}
+                  onKeyDown={(event) => handleCurrencyKeyDown(event, 'USD')}
                   disabled={isTransactionLocked || !selectedMovement || !allowedCurrencies.includes('USD')}
                   title={selectedMovement && !allowedCurrencies.includes('USD') ? 'No disponible para este movimiento' : 'Dolares'}
                 >

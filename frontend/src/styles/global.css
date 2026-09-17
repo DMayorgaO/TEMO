@@ -1728,6 +1728,21 @@ td {
   min-width: 132px;
 }
 
+.transaction-movement-cell {
+  min-width: 180px;
+}
+
+.transaction-movement-cell strong,
+.transaction-movement-cell small {
+  display: block;
+}
+
+.transaction-movement-cell small {
+  color: var(--muted);
+  font-size: 0.7rem;
+  margin-top: 2px;
+}
+
 .transaction-amount {
   align-items: center;
   display: inline-flex;
@@ -2844,6 +2859,8 @@ tbody tr:hover td {
   color: #71808b;
   font-size: 0.62rem;
   font-weight: 750;
+  line-height: 1.25;
+  white-space: normal;
 }
 
 .transaction-tab__close {
