@@ -1213,6 +1213,14 @@ textarea:disabled {
   width: 100%;
 }
 
+.login-preparation-status {
+  /* Estado discreto del despertar anticipado de la API gratuita. */
+  color: var(--muted);
+  font-size: 0.82rem;
+  margin: 0;
+  text-align: center;
+}
+
 .login-recovery-link {
   /* Acción secundaria discreta para abrir o reiniciar la recuperación. */
   align-items: center;

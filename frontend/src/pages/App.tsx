@@ -2215,17 +2215,19 @@ function calculateChangeCashDifference({
 function calculateShiftCashDifference({
   actual,
   expected,
+  registeredDifferenceNio,
   buyRate,
 }: {
   actual: Record<CashCurrency, number>;
   expected: Record<CashCurrency, number>;
+  registeredDifferenceNio: number;
   buyRate: number;
 }) {
   const safeRate = buyRate > 0 ? buyRate : 1;
   const actualEquivalentNio = actual.NIO + actual.USD * safeRate;
   const expectedEquivalentNio = expected.NIO + expected.USD * safeRate;
-  // La diferencia siempre compara el efectivo contado contra el esperado.
-  const differenceNio = actualEquivalentNio - expectedEquivalentNio;
+  // La diferencia pendiente descuenta el sobrante o faltante que el cajero ya reconocio.
+  const differenceNio = actualEquivalentNio - expectedEquivalentNio - registeredDifferenceNio;
   return {
     differenceNio,
     differenceUsd: differenceNio / safeRate,
@@ -3613,6 +3615,7 @@ function ShiftClosureModal({
   const { differenceNio, differenceUsd } = calculateShiftCashDifference({
     actual: { NIO: finalNio, USD: finalUsd },
     expected: shift.expectedCash,
+    registeredDifferenceNio: parseMoneyValue(changeNio),
     buyRate: rate,
   });
 
@@ -3715,7 +3718,7 @@ function ShiftClosureModal({
                 <label>
                   <strong>Diferencia registrada</strong>
                   <span className="cash-change-entry"><span>C$</span><input value={changeNio} inputMode="decimal" onChange={(event) => setChangeNio(normalizeSignedAccountingMoneyRaw(event.target.value))} /></span>
-                  <button type="button" className="secondary-button" onClick={() => setChangeNio(formatAccountingMoneyRaw(differenceNio))}>Registrar diferencia</button>
+                  <button type="button" className="secondary-button" onClick={() => setChangeNio(formatAccountingMoneyRaw(parseMoneyValue(changeNio) + differenceNio))}>Registrar diferencia</button>
                 </label>
               </div>
             </div>
@@ -3894,7 +3897,19 @@ function LoginScreen({ onLogin }: { onLogin: (response: LoginResponse) => void }
   const [success, setSuccess] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isRecoveryOpen, setIsRecoveryOpen] = useState(false);
+  const [isApiReady, setIsApiReady] = useState(false);
   const loginRef = useAutoFocusFirstField<HTMLFormElement>();
+
+  useEffect(() => {
+    let active = true;
+    // Despierta anticipadamente la instancia gratuita mientras el usuario completa sus credenciales.
+    void apiRequest<{ status: string }>('/health')
+      .then(() => active && setIsApiReady(true))
+      .catch(() => active && setIsApiReady(false));
+    return () => {
+      active = false;
+    };
+  }, []);
 
   async function submitLogin(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -3975,10 +3990,11 @@ function LoginScreen({ onLogin }: { onLogin: (response: LoginResponse) => void }
 
           {error && <p className="login-error" role="alert">{error}</p>}
           {success && <p className="login-success" role="status">{success}</p>}
+          {!isApiReady && <p className="login-preparation-status" role="status">Preparando conexión segura...</p>}
 
           <button type="submit" className="primary-button login-submit" disabled={isSubmitting}>
             <LogIn size={19} strokeWidth={2.25} />
-            {isSubmitting ? 'Ingresando...' : 'Ingresar'}
+            {isSubmitting ? (isApiReady ? 'Ingresando...' : 'Iniciando sistema...') : 'Ingresar'}
           </button>
         </form>
       </section>
@@ -4344,6 +4360,7 @@ function CashCountScreen({ currentUser }: { currentUser: AuthUser }) {
   const { differenceNio, differenceUsd } = calculateShiftCashDifference({
     actual: totals,
     expected,
+    registeredDifferenceNio: parseMoneyValue(changeNio),
     buyRate,
   });
 
@@ -4513,7 +4530,7 @@ function CashCountScreen({ currentUser }: { currentUser: AuthUser }) {
             <label>
               <strong>Diferencia registrada</strong>
               <span className="cash-change-entry"><span>C$</span><input data-general-cash-change value={changeNio} inputMode="decimal" readOnly={isBoss} onChange={(event) => setChangeNio(normalizeSignedAccountingMoneyRaw(event.target.value))} /></span>
-              {!isBoss && <button type="button" className="secondary-button" onClick={() => setChangeNio(formatAccountingMoneyRaw(differenceNio))}>Registrar diferencia</button>}
+              {!isBoss && <button type="button" className="secondary-button" onClick={() => setChangeNio(formatAccountingMoneyRaw(parseMoneyValue(changeNio) + differenceNio))}>Registrar diferencia</button>}
             </label>
           </div>
           </div>
