@@ -2155,7 +2155,9 @@ function calculateMultiTransactionCashDifference({
 
 type TransactionCustomerBalanceStep = {
   balanceBeforeChangeNio: number;
+  balanceBeforeChangeUsd: number;
   balanceNio: number;
+  balanceUsd: number;
   rateKind: ExchangeRateKind;
   rateValue: number;
   changeRateKind: ExchangeRateKind;
@@ -2168,6 +2170,20 @@ const transactionRoundingToleranceNio = 0.05;
 // Calcula en secuencia cuánto efectivo se debe entregar o recibir del cliente en todo el grupo.
 function calculateTransactionCustomerBalanceSteps(rows: CrudRow[], rate: ExchangeRate) {
   let balanceNio = 0;
+  let balanceUsd = 0;
+
+  // Compensa monedas distintas solo cuando sus saldos tienen signos opuestos.
+  function offsetCurrencyBalances(rateValue: number) {
+    if (balanceNio < 0 && balanceUsd > 0) {
+      const usdUsed = Math.min(balanceUsd, -balanceNio / rateValue);
+      balanceUsd -= usdUsed;
+      balanceNio += usdUsed * rateValue;
+    } else if (balanceUsd < 0 && balanceNio > 0) {
+      const nioUsed = Math.min(balanceNio, -balanceUsd * rateValue);
+      balanceNio -= nioUsed;
+      balanceUsd += nioUsed / rateValue;
+    }
+  }
 
   return rows.map<TransactionCustomerBalanceStep>((row) => {
     const currency: CashCurrency = row.currency === 'USD' ? 'USD' : 'NIO';
@@ -2185,7 +2201,9 @@ function calculateTransactionCustomerBalanceSteps(rows: CrudRow[], rate: Exchang
     if (!row.direction || !row.movement || row.pendingName.trim()) {
       return {
         balanceBeforeChangeNio: balanceNio,
+        balanceBeforeChangeUsd: balanceUsd,
         balanceNio,
+        balanceUsd,
         rateKind,
         rateValue,
         changeRateKind,
@@ -2194,30 +2212,40 @@ function calculateTransactionCustomerBalanceSteps(rows: CrudRow[], rate: Exchang
     }
 
     const amount = parseMoneyValue(row.amountValue);
-    const amountNio = currency === 'USD' ? amount * rateValue : amount;
     const primaryNio = calculateCashPileTotal(
       cashDenominations.NIO,
       readTransactionCashCount(row.cashCountNio),
-    ) + calculateCashPileTotal(
+    );
+    const primaryUsd = calculateCashPileTotal(
       cashDenominations.USD,
       readTransactionCashCount(row.cashCountUsd),
-    ) * rateValue;
+    );
 
-    // Un retiro y el efectivo recibido favorecen al cliente; un depósito y el efectivo entregado lo consumen.
-    balanceNio += direction === 'Salida' ? amountNio - primaryNio : primaryNio - amountNio;
+    // Conserva cada moneda por separado para restar USD contra USD antes de aplicar una tasa de cambio.
+    if (currency === 'NIO') balanceNio += direction === 'Salida' ? amount : -amount;
+    else balanceUsd += direction === 'Salida' ? amount : -amount;
+    balanceNio += direction === 'Ingreso' ? primaryNio : -primaryNio;
+    balanceUsd += direction === 'Ingreso' ? primaryUsd : -primaryUsd;
+    offsetCurrencyBalances(rateValue);
     const balanceBeforeChangeNio = balanceNio;
+    const balanceBeforeChangeUsd = balanceUsd;
     const changeNio = calculateCashPileTotal(
       cashDenominations.NIO,
       readTransactionCashCount(row.changeCashCountNio),
-    ) + calculateCashPileTotal(
+    );
+    const changeUsd = calculateCashPileTotal(
       cashDenominations.USD,
       readTransactionCashCount(row.changeCashCountUsd),
-    ) * changeRateValue;
+    );
     balanceNio -= changeNio;
+    balanceUsd -= changeUsd;
+    offsetCurrencyBalances(changeRateValue);
 
     return {
       balanceBeforeChangeNio,
+      balanceBeforeChangeUsd,
       balanceNio,
+      balanceUsd,
       rateKind,
       rateValue,
       changeRateKind,
@@ -7883,9 +7911,11 @@ function TransactionModal({
   const activeBalanceStep = customerBalanceSteps[activeTabIndex];
   const activeRate = activeBalanceStep?.rateValue || 1;
   const activeBalanceBeforeChangeNio = activeBalanceStep?.balanceBeforeChangeNio || 0;
+  const activeBalanceBeforeChangeUsd = activeBalanceStep?.balanceBeforeChangeUsd || 0;
+  const activeBalanceEquivalentNio = activeBalanceBeforeChangeNio + activeBalanceBeforeChangeUsd * activeRate;
   const transactionDifference = {
-    differenceNio: activeBalanceBeforeChangeNio,
-    differenceUsd: activeBalanceBeforeChangeNio / activeRate,
+    differenceNio: activeBalanceEquivalentNio,
+    differenceUsd: activeBalanceBeforeChangeUsd + activeBalanceBeforeChangeNio / activeRate,
     rateKind: activeBalanceStep?.rateKind || 'Compra' as ExchangeRateKind,
     rateValue: activeRate,
   };
@@ -7895,13 +7925,15 @@ function TransactionModal({
       : invertExchangeRateKind(transactionDifference.rateKind),
   );
   const changeRateValue = getTransactionRateValue(exchangeRate, changeRateKind);
-  const hasPositiveChange = transactionDifference.differenceNio > 0.005;
+  const hasPositiveChange = draft.direction === 'Ingreso' && transactionDifference.differenceNio > 0.005;
   const expectedChange = {
     NIO: Math.max(0, transactionDifference.differenceNio),
-    USD: Math.max(0, transactionDifference.differenceNio / (changeRateValue || 1)),
+    USD: Math.max(0, transactionDifference.differenceUsd),
   };
-  const totalGroupBalanceNio = customerBalanceSteps[customerBalanceSteps.length - 1]?.balanceNio || 0;
-  const totalGroupBalanceUsd = totalGroupBalanceNio / (parseExchangeRate(exchangeRate.buy) || 1);
+  const finalBalanceStep = customerBalanceSteps[customerBalanceSteps.length - 1];
+  const groupDisplayRate = parseExchangeRate(exchangeRate.buy) || 1;
+  const totalGroupBalanceNio = (finalBalanceStep?.balanceNio || 0) + (finalBalanceStep?.balanceUsd || 0) * groupDisplayRate;
+  const totalGroupBalanceUsd = (finalBalanceStep?.balanceUsd || 0) + (finalBalanceStep?.balanceNio || 0) / groupDisplayRate;
   const customerBalanceTone = totalGroupBalanceNio > 0.005
     ? 'deliver'
     : totalGroupBalanceNio < -0.005
@@ -8154,7 +8186,9 @@ function TransactionModal({
       return;
     }
     const customerBalanceSteps = calculateTransactionCustomerBalanceSteps(drafts, exchangeRate);
-    const finalBalanceNio = customerBalanceSteps[customerBalanceSteps.length - 1]?.balanceNio || 0;
+    const finalBalanceStep = customerBalanceSteps[customerBalanceSteps.length - 1];
+    const finalBalanceNio = (finalBalanceStep?.balanceNio || 0)
+      + (finalBalanceStep?.balanceUsd || 0) * (parseExchangeRate(exchangeRate.buy) || 1);
     const hasMinorRoundingDifference = Math.abs(finalBalanceNio) > 0.005
       && Math.abs(finalBalanceNio) <= transactionRoundingToleranceNio;
     if (hasMinorRoundingDifference) {
@@ -8172,7 +8206,6 @@ function TransactionModal({
         );
         const exchangeRateValue = getTransactionRateValue(exchangeRate, exchangeRateType);
         const rowBalanceStep = customerBalanceSteps[index];
-        const rowDifferenceNio = rowBalanceStep?.balanceBeforeChangeNio || 0;
         const rowChangeKind = rowBalanceStep?.changeRateKind || 'Compra';
         const rowChangeRate = rowBalanceStep?.changeRateValue || 1;
         return {
@@ -8189,8 +8222,8 @@ function TransactionModal({
           settlementExchangeRateValue: formatRateDisplay(
             String(rowBalanceStep?.rateValue || exchangeRateValue),
           ),
-          expectedChangeNio: String(Math.max(0, rowDifferenceNio)),
-          expectedChangeUsd: String(Math.max(0, rowDifferenceNio / rowChangeRate)),
+          expectedChangeNio: String(Math.max(0, rowBalanceStep?.balanceBeforeChangeNio || 0)),
+          expectedChangeUsd: String(Math.max(0, rowBalanceStep?.balanceBeforeChangeUsd || 0)),
           transactionGroupId: transactionGroupIdRef.current,
           transactionGroupOrder: String(index + 1),
         };
