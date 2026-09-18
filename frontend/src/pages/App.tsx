@@ -2162,12 +2162,8 @@ type TransactionCustomerBalanceStep = {
   changeRateValue: number;
 };
 
-// Tolera residuos menores a la moneda fisica minima sin bloquear el registro.
+// Permite residuos menores a la moneda fisica minima sin descartar su valor contable.
 const transactionRoundingToleranceNio = 0.05;
-
-function normalizeTransactionRounding(value: number) {
-  return Math.abs(value) <= transactionRoundingToleranceNio ? 0 : value;
-}
 
 // Calcula en secuencia cuánto efectivo se debe entregar o recibir del cliente en todo el grupo.
 function calculateTransactionCustomerBalanceSteps(rows: CrudRow[], rate: ExchangeRate) {
@@ -7886,9 +7882,7 @@ function TransactionModal({
   const customerBalanceSteps = calculateTransactionCustomerBalanceSteps(drafts, exchangeRate);
   const activeBalanceStep = customerBalanceSteps[activeTabIndex];
   const activeRate = activeBalanceStep?.rateValue || 1;
-  const activeBalanceBeforeChangeNio = normalizeTransactionRounding(
-    activeBalanceStep?.balanceBeforeChangeNio || 0,
-  );
+  const activeBalanceBeforeChangeNio = activeBalanceStep?.balanceBeforeChangeNio || 0;
   const transactionDifference = {
     differenceNio: activeBalanceBeforeChangeNio,
     differenceUsd: activeBalanceBeforeChangeNio / activeRate,
@@ -7906,8 +7900,7 @@ function TransactionModal({
     NIO: Math.max(0, transactionDifference.differenceNio),
     USD: Math.max(0, transactionDifference.differenceNio / (changeRateValue || 1)),
   };
-  const rawTotalGroupBalanceNio = customerBalanceSteps[customerBalanceSteps.length - 1]?.balanceNio || 0;
-  const totalGroupBalanceNio = normalizeTransactionRounding(rawTotalGroupBalanceNio);
+  const totalGroupBalanceNio = customerBalanceSteps[customerBalanceSteps.length - 1]?.balanceNio || 0;
   const totalGroupBalanceUsd = totalGroupBalanceNio / (parseExchangeRate(exchangeRate.buy) || 1);
   const customerBalanceTone = totalGroupBalanceNio > 0.005
     ? 'deliver'
@@ -8166,7 +8159,7 @@ function TransactionModal({
       && Math.abs(finalBalanceNio) <= transactionRoundingToleranceNio;
     if (hasMinorRoundingDifference) {
       await requestSystemAlert(
-        `Existe una diferencia de redondeo de ${formatCashCountMoney(Math.abs(finalBalanceNio), 'NIO')}. Se registrara como C$ 0.00 porque no puede representarse con una denominacion fisica.`,
+        `Existe una diferencia de redondeo de ${formatCashCountMoney(Math.abs(finalBalanceNio), 'NIO')}. Se conservara completa como saldo contable aunque no pueda representarse con una denominacion fisica.`,
         'Diferencia minima permitida',
       );
     }
@@ -8179,9 +8172,7 @@ function TransactionModal({
         );
         const exchangeRateValue = getTransactionRateValue(exchangeRate, exchangeRateType);
         const rowBalanceStep = customerBalanceSteps[index];
-        const rowDifferenceNio = normalizeTransactionRounding(
-          rowBalanceStep?.balanceBeforeChangeNio || 0,
-        );
+        const rowDifferenceNio = rowBalanceStep?.balanceBeforeChangeNio || 0;
         const rowChangeKind = rowBalanceStep?.changeRateKind || 'Compra';
         const rowChangeRate = rowBalanceStep?.changeRateValue || 1;
         return {
