@@ -244,7 +244,7 @@ type BranchCatalogRow = {
 
 type ShiftNotification = {
   id: string;
-  kind: 'CLOSE_REQUEST' | 'SHIFT_CLOSED' | 'PENDING_PAID';
+  kind: 'CLOSE_REQUEST' | 'SHIFT_CLOSED' | 'PENDING_PAID' | 'TRANSFER_RECORDED';
   shift_id: string;
   shift_code: string;
   cashier: string;
@@ -253,6 +253,8 @@ type ShiftNotification = {
   observations: string;
   amount: string | null;
   currency: CashCurrency | null;
+  transfer_type: 'EFECTIVO' | 'CUENTA_BANCARIA' | null;
+  transfer_direction: 'ENTRA' | 'SALE' | null;
 };
 
 type TransactionApiRow = {
@@ -3432,7 +3434,7 @@ export function App() {
     await openShiftClosure(notification.shift_id);
   }
 
-  async function acknowledgeClosedShift(notification: ShiftNotification) {
+  async function acknowledgeNotification(notification: ShiftNotification) {
     await apiRequest(`/shifts/notifications/${notification.id}/acknowledge`, { method: 'POST' });
     setNotifications((current) => current.filter((item) => item.id !== notification.id));
   }
@@ -3589,18 +3591,22 @@ export function App() {
     {visibleNotification && (
       <div className="modal-backdrop shift-notification-backdrop" role="dialog" aria-modal="true">
         <section className="shift-notification-modal">
-          <div className="shift-notification-icon"><Banknote size={24} /></div>
+          <div className="shift-notification-icon">
+            {visibleNotification.kind === 'TRANSFER_RECORDED' ? <ArrowRightLeft size={24} /> : <Banknote size={24} />}
+          </div>
           <div>
             <p>{
               visibleNotification.kind === 'CLOSE_REQUEST'
                 ? 'Solicitud de cierre de caja'
                 : visibleNotification.kind === 'PENDING_PAID'
                   ? 'Pendiente marcado como pagado'
-                  : 'Caja cerrada exitosamente'
+                  : visibleNotification.kind === 'TRANSFER_RECORDED'
+                    ? `Transferencia ${visibleNotification.transfer_type === 'EFECTIVO' ? 'en efectivo' : 'digital'} de ${visibleNotification.transfer_direction === 'ENTRA' ? 'ingreso' : 'egreso'}`
+                    : 'Caja cerrada exitosamente'
             }</p>
             <h2>{visibleNotification.cashier}</h2>
             <span>
-              {visibleNotification.kind === 'PENDING_PAID' && visibleNotification.currency
+              {['PENDING_PAID', 'TRANSFER_RECORDED'].includes(visibleNotification.kind) && visibleNotification.currency
                 ? formatCashCountMoney(Number(visibleNotification.amount || 0), visibleNotification.currency)
                 : `${visibleNotification.branch} · ${visibleNotification.register}`}
             </span>
@@ -3613,7 +3619,7 @@ export function App() {
                 <button type="button" className="primary-button" onClick={() => void acceptCloseRequest(visibleNotification)}>Aceptar</button>
               </>
             ) : (
-              <button type="button" className="primary-button" onClick={() => void acknowledgeClosedShift(visibleNotification)}>Aceptar</button>
+              <button type="button" className="primary-button" onClick={() => void acknowledgeNotification(visibleNotification)}>Aceptar</button>
             )}
           </div>
         </section>

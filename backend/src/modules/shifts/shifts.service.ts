@@ -389,7 +389,9 @@ export class ShiftsService {
            sc.fecha_solicitud as created_at,
            null::text as observations,
            null::numeric as amount,
-           null::text as currency
+           null::text as currency,
+           null::text as transfer_type,
+           null::text as transfer_direction
          from temo.solicitudes_cierre_turno sc
          join temo.turnos t on t.id_turno = sc.id_turno
          join temo.usuarios u on u.id_usuario = t.id_cajero
@@ -413,7 +415,9 @@ export class ShiftsService {
          sc.fecha_revision as created_at,
          coalesce(sc.observaciones_cierre, '') as observations,
          null::numeric as amount,
-         null::text as currency
+         null::text as currency,
+         null::text as transfer_type,
+         null::text as transfer_direction
        from temo.solicitudes_cierre_turno sc
        join temo.turnos t on t.id_turno = sc.id_turno
        join temo.usuarios u on u.id_usuario = t.id_cajero
@@ -425,7 +429,7 @@ export class ShiftsService {
        union all
        select
          n.id_notificacion as id,
-         'PENDING_PAID' as kind,
+         case when n.tipo = 'TRANSFERENCIA_REGISTRADA' then 'TRANSFER_RECORDED' else 'PENDING_PAID' end as kind,
          n.id_turno as shift_id,
          concat('TUR-', upper(substr(replace(t.id_turno::text, '-', ''), 1, 8))) as shift_code,
          coalesce(cp.nombre, u.nombre_completo) as cashier,
@@ -433,8 +437,10 @@ export class ShiftsService {
          c.nombre as register,
          n.fecha_creacion as created_at,
          n.mensaje as observations,
-         payment.monto as amount,
-         payment.moneda as currency
+         coalesce(tr.monto, payment.monto) as amount,
+         coalesce(tm.codigo, payment.moneda) as currency,
+         tr.tipo::text as transfer_type,
+         tr.direccion::text as transfer_direction
        from temo.notificaciones_usuarios n
        left join temo.turnos t on t.id_turno = n.id_turno
        left join temo.usuarios u on u.id_usuario = t.id_cajero
@@ -442,6 +448,8 @@ export class ShiftsService {
        left join temo.cajas c on c.id_caja = t.id_caja
        left join temo.pagos_pendientes pp on pp.id_pendiente = n.id_pendiente
        left join temo.contrapartes cp on cp.id_contraparte = pp.id_contraparte
+       left join temo.transferencias tr on tr.id_transferencia = n.id_transferencia
+       left join temo.monedas tm on tm.id_moneda = tr.id_moneda
        left join lateral (
          select ap.monto, m.codigo as moneda
          from temo.abonos_pendientes ap

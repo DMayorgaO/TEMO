@@ -89,6 +89,7 @@ export class TransfersService {
       const id = inserted.rows[0].id_transferencia;
       await this.persistCashLines(client, id, normalized.currencyId, input.cashLines);
       await this.applyEffect(client, id, shift, normalized, input.cashLines, 1);
+      await this.notifyAffectedCashier(client, id, shift, normalized, input.description, user);
       return this.detailWithin(client, id);
     });
   }
@@ -236,6 +237,34 @@ export class TransfersService {
     } else {
       await client.query(`insert into temo.movimientos_cuentas(id_transferencia,id_cuenta,id_moneda,direccion,monto,es_reverso) values($1,$2,$3,$4,$5,$6)`, [id, effect.accountId, effect.currencyId, direction, effect.amount, factor === -1]);
     }
+  }
+
+  // Avisa al cajero cuando otro usuario modifica su efectivo o saldo digital mediante una transferencia.
+  private async notifyAffectedCashier(
+    client: PoolClient,
+    transferId: string,
+    shift: Record<string, string>,
+    transfer: { type: string; direction: string; amount: number },
+    description: string,
+    user: AuthenticatedUser,
+  ) {
+    if (shift.id_cajero === user.id) return;
+    const medium = transfer.type === 'EFECTIVO' ? 'efectivo' : 'digital';
+    const direction = transfer.direction === 'ENTRA' ? 'ingreso' : 'egreso';
+    const detail = description.trim() || 'Sin descripcion adicional.';
+    await client.query(
+      `insert into temo.notificaciones_usuarios (
+         id_usuario_destino, tipo, titulo, mensaje, id_transferencia, id_turno, id_usuario_origen
+       ) values ($1, 'TRANSFERENCIA_REGISTRADA', $2, $3, $4, $5, $6)`,
+      [
+        shift.id_cajero,
+        'Transferencia aplicada a tu turno',
+        `Se registro una transferencia de ${medium} de ${direction}. ${detail}`,
+        transferId,
+        shift.id_turno,
+        user.id,
+      ],
+    );
   }
 
   private async adjustCurrentCash(client: PoolClient, shift: Record<string,string>, currencyId: string, lines: Array<{denomination:number;piles25:number;loose:number}>, sign: number) {
