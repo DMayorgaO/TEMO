@@ -836,7 +836,9 @@ export class ShiftsService {
            select mc.direccion, mc.monto
            from temo.movimientos_cuentas mc
            join temo.transferencias tf on tf.id_transferencia = mc.id_transferencia
-           where mc.id_cuenta = stc.id_cuenta and tf.id_turno = stc.id_turno
+           where mc.id_cuenta = stc.id_cuenta
+             and tf.id_turno = stc.id_turno
+             and tf.estado = 'ACTIVO'
          ) mc
        ) movements on true
        where stc.id_turno = $1
@@ -1058,7 +1060,9 @@ export class ShiftsService {
                select mc.direccion, mc.monto
                from temo.movimientos_cuentas mc
                join temo.transferencias tf on tf.id_transferencia = mc.id_transferencia
-               where mc.id_cuenta = stc.id_cuenta and tf.id_turno = $1
+               where mc.id_cuenta = stc.id_cuenta
+                 and tf.id_turno = $1
+                 and tf.estado = 'ACTIVO'
              ) mc
            ), 0),
            saldo_final_sistema = $3,

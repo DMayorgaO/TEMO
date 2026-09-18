@@ -1926,12 +1926,24 @@ export class TransactionsService {
     await client.query(
       `update temo.saldos_turno_cuentas stc
        set saldo_final_calculado = stc.saldo_inicial + coalesce((
-         select sum(case mc.direccion when 'ENTRA' then mc.monto else -mc.monto end)
-         from temo.movimientos_cuentas mc
-         join temo.transacciones tr on tr.id_transaccion = mc.id_transaccion
-         where mc.id_cuenta = stc.id_cuenta
-           and tr.id_turno = stc.id_turno
-           and tr.estado <> 'ANULADA'
+         select sum(case movements.direccion when 'ENTRA' then movements.monto else -movements.monto end)
+         from (
+           /* Suma transacciones vigentes y omite cualquier operacion anulada. */
+           select mc.direccion, mc.monto
+           from temo.movimientos_cuentas mc
+           join temo.transacciones tr on tr.id_transaccion = mc.id_transaccion
+           where mc.id_cuenta = stc.id_cuenta
+             and tr.id_turno = stc.id_turno
+             and tr.estado <> 'ANULADA'
+           union all
+           /* Incluye transferencias digitales activas sin reintroducir sus reversos. */
+           select mc.direccion, mc.monto
+           from temo.movimientos_cuentas mc
+           join temo.transferencias tf on tf.id_transferencia = mc.id_transferencia
+           where mc.id_cuenta = stc.id_cuenta
+             and tf.id_turno = stc.id_turno
+             and tf.estado = 'ACTIVO'
+         ) movements
        ), 0)
        where stc.id_turno = $1`,
       [shiftId],
