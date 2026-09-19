@@ -170,21 +170,6 @@ type ExchangeRate = {
 
 type ExchangeRateKind = 'Compra' | 'Venta';
 
-type OpenShiftApiRow = {
-  id: string;
-  efectivo_inicial_nio: string;
-  efectivo_inicial_usd: string;
-  sucursal: string;
-  caja: string;
-  cajero: string;
-};
-
-type OpeningCashSummary = {
-  nio: number;
-  usd: number;
-  context: string;
-};
-
 type ShiftCashLine = { denomination: number; piles25: number; loose: number };
 type ShiftCashCount = { total: number; lines: ShiftCashLine[] };
 type ShiftDetail = {
@@ -1710,18 +1695,9 @@ function getMovementRowsForEntity(entity: string) {
   );
 }
 
-function getTransactionMovementOptions(entity: string) {
-  return getMovementRowsForEntity(entity).map((row) => row.name).filter(Boolean);
-}
-
 function getTransactionMovementByName(entity: string, movement: string) {
   const normalizedMovement = normalizeLookupValue(normalizeTransactionMovement(movement));
   return getMovementRowsForEntity(entity).find((row) => normalizeLookupValue(row.name) === normalizedMovement);
-}
-
-function getTransactionMovementByCode(entity: string, code: string) {
-  const normalizedCode = normalizeLookupValue(code);
-  return getMovementRowsForEntity(entity).find((row) => normalizeLookupValue(row.code) === normalizedCode);
 }
 
 function getMovementCurrencies(movement?: CrudRow): CashCurrency[] {
@@ -1843,34 +1819,11 @@ function parseCashQuantity(value?: string) {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
-function readCashCountDraft() {
-  const stored = window.localStorage.getItem('temo:cash-count-draft');
-  if (!stored) {
-    return {};
-  }
-  try {
-    return JSON.parse(stored) as Record<string, string>;
-  } catch {
-    return {};
-  }
-}
-
-function readCashPileDraft() {
-  const stored = window.localStorage.getItem('temo:cash-pile-draft');
-  if (!stored) {
-    return {};
-  }
-  try {
-    return JSON.parse(stored) as Record<string, CashPileDraft>;
-  } catch {
-    return {};
-  }
-}
-
 function calculatePileQuantity(pile?: CashPileDraft) {
   return parseCashQuantity(pile?.groups) * 25 + parseCashQuantity(pile?.loose);
 }
 
+// Convierte cantidades antiguas al formato actual de montones y unidades sueltas.
 function splitCashQuantity(value?: string): CashPileDraft {
   const quantity = parseCashQuantity(value);
   const groups = Math.floor(quantity / 25);
@@ -1887,14 +1840,7 @@ function getCashPileDraft(
   pileDrafts: Record<string, CashPileDraft>,
 ) {
   const pile = pileDrafts[denominationId];
-  if (pile?.groups || pile?.loose) {
-    return pile;
-  }
-  return splitCashQuantity(quantities[denominationId]);
-}
-
-function calculateCashTotal(denominations: CashDenomination[], quantities: Record<string, string>) {
-  return denominations.reduce((total, denomination) => total + parseCashQuantity(quantities[denomination.id]) * denomination.value, 0);
+  return pile?.groups || pile?.loose ? pile : splitCashQuantity(quantities[denominationId]);
 }
 
 function calculateCashPileTotal(denominations: CashDenomination[], pileDrafts: Record<string, CashPileDraft>) {
@@ -2063,96 +2009,6 @@ function getTransactionRateValue(rate: ExchangeRate, kind: ExchangeRateKind) {
   return parseExchangeRate(kind === 'Compra' ? rate.buy : rate.sell);
 }
 
-function calculateTransactionCashDifference({
-  cashTotals,
-  currency,
-  direction,
-  expectedAmount,
-  rate,
-}: {
-  cashTotals: Record<CashCurrency, number>;
-  currency: CashCurrency;
-  direction: string;
-  expectedAmount: number;
-  rate: ExchangeRate;
-}) {
-  const rateKind = getTransactionExchangeRateKind(direction, currency);
-  const rateValue = getTransactionRateValue(rate, rateKind);
-
-  if (currency === 'NIO') {
-    const differenceNio = cashTotals.NIO + cashTotals.USD * rateValue - expectedAmount;
-    return {
-      differenceNio,
-      differenceUsd: differenceNio / rateValue,
-      rateKind,
-      rateValue,
-    };
-  }
-
-  const differenceUsd = cashTotals.USD + cashTotals.NIO / rateValue - expectedAmount;
-  return {
-    differenceNio: differenceUsd * rateValue,
-    differenceUsd,
-    rateKind,
-    rateValue,
-  };
-}
-
-function calculateMultiTransactionCashDifference({
-  cashTotals,
-  transactions,
-  settlementTransaction,
-  rate,
-}: {
-  cashTotals: Record<CashCurrency, number>;
-  transactions: CrudRow[];
-  settlementTransaction: CrudRow;
-  rate: ExchangeRate;
-}) {
-  let balanceNio = cashTotals.NIO;
-  let balanceUsd = cashTotals.USD;
-
-  transactions.forEach((transaction) => {
-    if (!transaction.direction || !transaction.movement) {
-      return;
-    }
-    const currency: CashCurrency = transaction.currency === 'USD' ? 'USD' : 'NIO';
-    const amount = parseMoneyValue(transaction.amountValue);
-    const rateKind = getTransactionExchangeRateKind(transaction.direction, currency);
-    const rateValue = getTransactionRateValue(rate, rateKind);
-    const signedAmount = transaction.direction === 'Salida' ? amount : -amount;
-
-    if (currency === 'NIO') {
-      balanceNio += signedAmount;
-    } else {
-      balanceUsd += signedAmount;
-    }
-
-    if (balanceNio < 0 && balanceUsd > 0) {
-      const usdUsed = Math.min(balanceUsd, -balanceNio / rateValue);
-      balanceUsd -= usdUsed;
-      balanceNio += usdUsed * rateValue;
-    } else if (balanceUsd < 0 && balanceNio > 0) {
-      const nioUsed = Math.min(balanceNio, -balanceUsd * rateValue);
-      balanceNio -= nioUsed;
-      balanceUsd += nioUsed / rateValue;
-    }
-  });
-
-  const settlementCurrency: CashCurrency = settlementTransaction.currency === 'USD' ? 'USD' : 'NIO';
-  const settlementDirection = settlementTransaction.direction || 'Ingreso';
-  const rateKind = getTransactionExchangeRateKind(settlementDirection, settlementCurrency);
-  const rateValue = getTransactionRateValue(rate, rateKind);
-  const differenceNio = balanceNio + balanceUsd * rateValue;
-
-  return {
-    differenceNio,
-    differenceUsd: differenceNio / rateValue,
-    rateKind,
-    rateValue,
-  };
-}
-
 type TransactionCustomerBalanceStep = {
   balanceBeforeChangeNio: number;
   balanceBeforeChangeUsd: number;
@@ -2260,9 +2116,9 @@ function calculateChangeCashDifference({
   expectedChange: Record<CashCurrency, number>;
   rateValue: number;
 }) {
-  // Compara el vuelto completo en una sola equivalencia, incluso cuando se entrega en ambas monedas.
+  // NIO y USD muestran el mismo vuelto en dos equivalencias; no deben sumarse entre si.
   const actualNio = cashTotals.NIO + cashTotals.USD * rateValue;
-  const expectedNio = expectedChange.NIO + expectedChange.USD * rateValue;
+  const expectedNio = expectedChange.NIO;
   const differenceNio = actualNio - expectedNio;
   return {
     differenceNio,
@@ -2809,23 +2665,6 @@ function getDatabaseCashiersForBranch(
     getShiftCashiersForBranch(branch),
     currentCashier,
   );
-}
-
-function readLocalOpeningCash(): OpeningCashSummary {
-  const shiftConfig = crudConfigs.shifts[0];
-  const openShift = readStoredRows(shiftConfig.storageKey, shiftConfig.rows)
-    .map(normalizeShiftRow)
-    .find((shift) => shift.status === 'Abierto');
-
-  if (!openShift) {
-    return { nio: 0, usd: 0, context: 'Sin turno abierto' };
-  }
-
-  return {
-    nio: parseMoneyValue(openShift.openingNio),
-    usd: parseMoneyValue(openShift.openingUsd),
-    context: [openShift.branch, openShift.register].filter(Boolean).join(' - '),
-  };
 }
 
 function formatTransactionDateTime(date: Date) {
@@ -4592,7 +4431,8 @@ function CashCountScreen({ currentUser }: { currentUser: AuthUser }) {
   );
 }
 
-function CashDenominationTable({
+// Conserva el formato tabular anterior como referencia aislada durante la transicion de arqueos.
+function _LegacyCashDenominationTable({
   currency,
   denominations,
   generalTotals,
@@ -7900,7 +7740,6 @@ function TransactionModal({
   const allowedCurrencies = getMovementCurrencies(selectedMovement).filter(
     (currency) => !restrictToShiftAccounts || entityCurrencies.has(currency),
   );
-  const expectedAmount = parseMoneyValue(draft.amountValue);
   const hasIncompleteTransactions = drafts.some(
     (transactionDraft) =>
       !transactionDraft.movement ||
