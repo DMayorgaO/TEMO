@@ -560,7 +560,7 @@ const roleCatalogConfig: CrudConfig = {
     { key: 'status', label: 'Estado', inputKind: 'select', options: ['Activo', 'Inactivo'] },
   ],
   rows: [
-    { id: 'ROL-001', code: 'JEFA', name: 'Jefa', description: 'Acceso completo al sistema', status: 'Activo' },
+    { id: 'ROL-001', code: 'JEFA', name: 'Administrador', description: 'Acceso completo al sistema', status: 'Activo' },
     { id: 'ROL-002', code: 'CAJERO', name: 'Cajero', description: 'Operacion diaria sin comisiones', status: 'Activo' },
   ],
 };
@@ -985,11 +985,13 @@ const crudConfigs: Record<ScreenId, CrudConfig[]> = {
         { key: 'lastName', label: 'Apellidos' },
         { key: 'username', label: 'Usuario' },
         { key: 'email', label: 'Correo' },
+        // La clave temporal solo se captura al crear o cambiar el acceso; nunca se muestra en la tabla.
+        { key: 'password', label: 'Contraseña temporal', inputKind: 'password', hiddenInTable: true },
         { key: 'role', label: 'Rol', inputKind: 'select', options: [] },
         { key: 'status', label: 'Estado', inputKind: 'select', options: ['Activo', 'Inactivo', 'Bloqueado'] },
       ],
       rows: [
-        { id: 'USR-001', firstName: 'ROXANA', lastName: 'OLIVERA', username: 'ROXANA', roleId: 'ROL-001', role: 'Jefa', status: 'Activo' },
+        { id: 'USR-001', firstName: 'ROXANA', lastName: 'OLIVERA', username: 'ROXANA', roleId: 'ROL-001', role: 'Administrador', status: 'Activo' },
         { id: 'USR-002', firstName: 'KIMBERLY', lastName: 'MOLINA', username: 'KIMBERLYM', roleId: 'ROL-002', role: 'Cajero', status: 'Activo' },
         { id: 'USR-003', firstName: 'CRISTINA', lastName: '', username: 'CRISTINA', roleId: 'ROL-002', role: 'Cajero', status: 'Activo' },
         { id: 'USR-004', firstName: 'DIEGO', lastName: 'MAYORGA', username: 'DIEGOM', roleId: 'ROL-002', role: 'Cajero', status: 'Activo' },
