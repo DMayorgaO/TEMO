@@ -7934,17 +7934,24 @@ function TransactionModal({
     const availableEntityCurrencies = availableAccounts
       .filter((account) => normalizeLookupValue(account.entity) === normalizeLookupValue(value))
       .map((account) => account.currency);
-    const defaultCurrency: CashCurrency = availableEntityCurrencies.includes('NIO') ? 'NIO' : availableEntityCurrencies[0] ?? 'NIO';
-    const nextChangeRateKind = getTransactionExchangeRateKind('Ingreso', defaultCurrency);
-    setDraft((current) => ({
-      ...current,
-      entity: value,
-      movementCode: '',
-      movement: '',
-      direction: '',
-      currency: defaultCurrency,
-      changeExchangeRateType: nextChangeRateKind,
-    }));
+    setDraft((current) => {
+      // Conserva la moneda de una edicion si el nuevo banco tambien dispone de esa cuenta.
+      const currentCurrency: CashCurrency = current.currency === 'USD' ? 'USD' : 'NIO';
+      const currency: CashCurrency = availableEntityCurrencies.includes(currentCurrency)
+        ? currentCurrency
+        : availableEntityCurrencies.includes('NIO')
+          ? 'NIO'
+          : availableEntityCurrencies[0] ?? 'NIO';
+      return {
+        ...current,
+        entity: value,
+        movementCode: '',
+        movement: '',
+        direction: '',
+        currency,
+        changeExchangeRateType: getTransactionExchangeRateKind('Ingreso', currency),
+      };
+    });
   }
 
   function updateMovement(value: string) {
@@ -7955,16 +7962,23 @@ function TransactionModal({
     const movementCurrencies = getMovementCurrencies(movementRow).filter(
       (currency) => !restrictToShiftAccounts || entityCurrencies.has(currency),
     );
-    const currency: CashCurrency = movementCurrencies.includes('NIO') ? 'NIO' : movementCurrencies[0] ?? 'NIO';
-    const nextChangeRateKind = getTransactionExchangeRateKind(direction || 'Ingreso', currency);
-    setDraft((current) => ({
-      ...current,
-      movement: value,
-      movementCode: movementRow?.code || '',
-      direction,
-      currency,
-      changeExchangeRateType: nextChangeRateKind,
-    }));
+    setDraft((current) => {
+      // Cambiar el movimiento no debe convertir silenciosamente una transaccion USD a NIO.
+      const currentCurrency: CashCurrency = current.currency === 'USD' ? 'USD' : 'NIO';
+      const currency: CashCurrency = movementCurrencies.includes(currentCurrency)
+        ? currentCurrency
+        : movementCurrencies.includes('NIO')
+          ? 'NIO'
+          : movementCurrencies[0] ?? 'NIO';
+      return {
+        ...current,
+        movement: value,
+        movementCode: movementRow?.code || '',
+        direction,
+        currency,
+        changeExchangeRateType: getTransactionExchangeRateKind(direction || 'Ingreso', currency),
+      };
+    });
   }
 
   function updateMovementCode(value: string) {
@@ -7976,16 +7990,23 @@ function TransactionModal({
     const movementCurrencies = getMovementCurrencies(movementRow).filter(
       (currency) => !restrictToShiftAccounts || entityCurrencies.has(currency),
     );
-    const currency: CashCurrency = movementCurrencies.includes('NIO') ? 'NIO' : movementCurrencies[0] ?? 'NIO';
-    const nextChangeRateKind = getTransactionExchangeRateKind(direction || 'Ingreso', currency);
-    setDraft((current) => ({
-      ...current,
-      movementCode,
-      movement: movementRow?.name || '',
-      direction,
-      currency,
-      changeExchangeRateType: nextChangeRateKind,
-    }));
+    setDraft((current) => {
+      // La seleccion por codigo aplica la misma preservacion de moneda que el combobox.
+      const currentCurrency: CashCurrency = current.currency === 'USD' ? 'USD' : 'NIO';
+      const currency: CashCurrency = movementCurrencies.includes(currentCurrency)
+        ? currentCurrency
+        : movementCurrencies.includes('NIO')
+          ? 'NIO'
+          : movementCurrencies[0] ?? 'NIO';
+      return {
+        ...current,
+        movementCode,
+        movement: movementRow?.name || '',
+        direction,
+        currency,
+        changeExchangeRateType: getTransactionExchangeRateKind(direction || 'Ingreso', currency),
+      };
+    });
   }
 
   function updateCurrency(currency: CashCurrency) {
