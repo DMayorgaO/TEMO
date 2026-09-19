@@ -5545,8 +5545,8 @@ function GeneralConsolidationScreen() {
   }));
   const [apiBalances, setApiBalances] = useState<Record<string, { initial?: string; system?: string }>>({});
   const [apiBalanceAccounts, setApiBalanceAccounts] = useState<Record<string, string>>({});
-  const shiftConfig = crudConfigs.shifts[0];
-  const [shiftRows, setShiftRows] = usePersistentRows(shiftConfig.storageKey, shiftConfig.rows);
+  // Esta vista conserva su propia lista para no reemplazar el historial compartido de Turnos.
+  const [shiftRows, setShiftRows] = useState<CrudRow[]>([]);
   const normalizedShifts = useMemo(
     () => shiftRows.map(normalizeShiftRow).filter((shift) => shift.status === 'Abierto'),
     [shiftRows],
@@ -6651,6 +6651,7 @@ function ShiftModal({
     USD: calculateCashPileTotal(cashDenominations.USD, openingCashCounts.USD),
   };
   const shiftAccounts = useMemo(() => getShiftAccountsForBranch(draft.branch), [draft.branch]);
+  // La API ya entrega los cierres desde el mas reciente; se permite reutilizar el mismo cajero.
   const copyCandidates = useMemo(
     () =>
       [...shifts]
@@ -6658,11 +6659,9 @@ function ShiftModal({
         .filter(
           (shift) =>
             shift.id !== draft.id &&
-            shift.status === 'Cerrado' &&
-            getShiftCashierIdentity(shift.cashier) !== getShiftCashierIdentity(draft.cashier),
-        )
-        .sort((first, second) => second.id.localeCompare(first.id, undefined, { numeric: true })),
-    [draft.cashier, draft.id, shifts],
+            shift.status === 'Cerrado',
+        ),
+    [draft.id, shifts],
   );
   const selectedCopyShift = copyCandidates.find((shift) => shift.id === copyShiftId);
 
