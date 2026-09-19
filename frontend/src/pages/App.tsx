@@ -5538,7 +5538,7 @@ function PendingScreen({ currentUser }: { currentUser: AuthUser }) {
 function GeneralConsolidationScreen() {
   const authenticatedUser = readAuthenticatedUser();
   const isCashier = authenticatedUser?.roleCode === 'CAJERO';
-  const [currentShiftLoaded, setCurrentShiftLoaded] = useState(!isCashier);
+  const [currentShiftLoaded, setCurrentShiftLoaded] = useState(false);
   const [movementSummary, setMovementSummary] = useState<Record<CashCurrency, Record<string, { income: number; expense: number }>>>(() => ({
     NIO: {},
     USD: {},
@@ -5547,11 +5547,14 @@ function GeneralConsolidationScreen() {
   const [apiBalanceAccounts, setApiBalanceAccounts] = useState<Record<string, string>>({});
   const shiftConfig = crudConfigs.shifts[0];
   const [shiftRows, setShiftRows] = usePersistentRows(shiftConfig.storageKey, shiftConfig.rows);
-  const normalizedShifts = useMemo(() => shiftRows.map(normalizeShiftRow), [shiftRows]);
+  const normalizedShifts = useMemo(
+    () => shiftRows.map(normalizeShiftRow).filter((shift) => shift.status === 'Abierto'),
+    [shiftRows],
+  );
   const [selectedShiftId, setSelectedShiftId] = useState(
     () => normalizedShifts.find((shift) => shift.status === 'Abierto')?.id || normalizedShifts[0]?.id || '',
   );
-  const selectedShift = isCashier && !currentShiftLoaded
+  const selectedShift = !currentShiftLoaded
     ? undefined
     : normalizedShifts.find((shift) => shift.id === selectedShiftId) ||
       normalizedShifts.find((shift) => shift.status === 'Abierto') ||
@@ -5591,6 +5594,21 @@ function GeneralConsolidationScreen() {
   );
   const nioSummary = movementSummary.NIO;
   const usdSummary = movementSummary.USD;
+
+  useEffect(() => {
+    if (isCashier) return;
+    // La Jefa consulta los turnos abiertos de la API y no datos antiguos del navegador.
+    void apiRequest<ShiftDetail[]>('/shifts')
+      .then((details) => {
+        const openRows = details
+          .filter((detail) => ['ABIERTO', 'PENDIENTE_APROBACION'].includes(detail.estado))
+          .map(shiftDetailToCrudRow);
+        setShiftRows(openRows);
+        setSelectedShiftId((current) => openRows.some((row) => row.id === current) ? current : openRows[0]?.id || '');
+      })
+      .catch(() => setShiftRows([]))
+      .finally(() => setCurrentShiftLoaded(true));
+  }, [isCashier]);
 
   useEffect(() => {
     if (!isCashier) {
