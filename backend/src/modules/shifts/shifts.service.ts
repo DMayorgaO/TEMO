@@ -935,7 +935,7 @@ export class ShiftsService {
   }
 
   private async loadCashSummary(shiftId: string) {
-    const result = await this.db.query<{
+    const [result, rateResult] = await Promise.all([this.db.query<{
       currency: CurrencyCode;
       expected_amount: string;
       pending_amount: string;
@@ -944,22 +944,45 @@ export class ShiftsService {
          m.codigo as currency,
          (
            case when m.codigo = 'NIO' then t.efectivo_inicial_nio else t.efectivo_inicial_usd end
-           + coalesce(physical_cash.amount, 0)
+           + coalesce(transaction_cash.amount, 0)
+           + coalesce(paid_pending_cash.amount, 0)
+           + coalesce(transfer_cash.amount, 0)
          ) as expected_amount,
          coalesce(open_pending.amount, 0) as pending_amount
        from temo.turnos t
        cross join temo.monedas m
-       /* Usa el movimiento fisico persistido: incluye recibido, entregado, vuelto, pagos y transferencias. */
+       /* Los importes nominales en efectivo forman el fondo general; el credito queda excluido. */
        left join lateral (
-         select sum(case me.direccion when 'ENTRA' then me.monto else -me.monto end) as amount
-         from temo.movimientos_efectivo me
-         left join temo.transacciones tr on tr.id_transaccion = me.id_transaccion
-         left join temo.transferencias tf on tf.id_transferencia = me.id_transferencia
-         where me.id_turno = t.id_turno
-           and me.id_moneda = m.id_moneda
-           and (me.id_transaccion is null or tr.estado <> 'ANULADA')
-           and (me.id_transferencia is null or tf.estado = 'ACTIVO')
-       ) physical_cash on true
+         select sum(case tm.direccion when 'ENTRA' then tm.monto else -tm.monto end) as amount
+         from temo.transacciones tr
+         join temo.transacciones_montos tm on tm.id_transaccion = tr.id_transaccion
+         where tr.id_turno = t.id_turno
+           and tr.estado <> 'ANULADA'
+           and tm.id_moneda = m.id_moneda
+           and tm.medio = 'EFECTIVO'
+       ) transaction_cash on true
+       /* Las liquidaciones en efectivo se agregan cuando el pendiente deja de estar abierto. */
+       left join lateral (
+         select sum(case pp.tipo when 'POR_COBRAR' then ap.monto else -ap.monto end) as amount
+         from temo.abonos_pendientes ap
+         join temo.pagos_pendientes pp on pp.id_pendiente = ap.id_pendiente
+         where ap.id_turno_aplicacion = t.id_turno
+           and ap.id_moneda = m.id_moneda
+           and not exists (
+             select 1 from temo.transacciones_montos payment_tm
+             where payment_tm.id_transaccion = ap.id_transaccion
+               and payment_tm.medio = 'CUENTA_BANCARIA'
+           )
+       ) paid_pending_cash on true
+       /* Solo las transferencias activas de efectivo modifican el fondo general. */
+       left join lateral (
+         select sum(case tf.direccion when 'ENTRA' then tf.monto else -tf.monto end) as amount
+         from temo.transferencias tf
+         where tf.id_turno = t.id_turno
+           and tf.id_moneda = m.id_moneda
+           and tf.tipo = 'EFECTIVO'
+           and tf.estado = 'ACTIVO'
+       ) transfer_cash on true
        /* Expone el saldo informativo que aun no debe formar parte del arqueo. */
        left join lateral (
          select sum(pp.saldo_pendiente) as amount
@@ -971,10 +994,15 @@ export class ShiftsService {
            and pp.estado in ('PENDIENTE', 'ABONADO', 'VENCIDO')
        ) open_pending on true
        where t.id_turno = $1 and m.codigo in ('NIO', 'USD')
-       order by m.codigo`,
+      order by m.codigo`,
       [shiftId],
-    );
-    return result.rows.reduce<{
+    ), this.db.query<{ buy_rate: string } & QueryResultRow>(
+      `select coalesce((
+         select tasa_compra from temo.tipos_cambio
+         order by vigente_desde desc, fecha_creacion desc limit 1
+       ), 36.40) as buy_rate`,
+    )]);
+    const summary = result.rows.reduce<{
       expectedCash: Record<CurrencyCode, number>;
       pendingCash: Record<CurrencyCode, number>;
     }>((summary, row) => {
@@ -982,6 +1010,16 @@ export class ShiftsService {
       summary.pendingCash[row.currency] = Number(row.pending_amount);
       return summary;
     }, { expectedCash: { NIO: 0, USD: 0 }, pendingCash: { NIO: 0, USD: 0 } });
+    const buyRate = Number(rateResult.rows[0]?.buy_rate || 36.4);
+    const expectedGeneralNio = summary.expectedCash.NIO + summary.expectedCash.USD * buyRate;
+
+    // Expone una sola base contable en NIO; USD es únicamente su equivalente informativo.
+    return {
+      expectedCash: { NIO: expectedGeneralNio, USD: 0 },
+      expectedGeneral: { NIO: expectedGeneralNio, USD: expectedGeneralNio / buyRate },
+      expectedGeneralRate: buyRate,
+      pendingCash: summary.pendingCash,
+    };
   }
 
   private async persistOpeningBalances(

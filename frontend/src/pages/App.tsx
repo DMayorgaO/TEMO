@@ -190,6 +190,8 @@ type ShiftDetail = {
   observaciones_cierre?: string;
   cashCounts: Record<string, Partial<Record<CashCurrency, ShiftCashCount>>>;
   expectedCash: Record<CashCurrency, number>;
+  expectedGeneral?: Record<CashCurrency, number>;
+  expectedGeneralRate?: number;
   pendingCash: Record<CashCurrency, number>;
   balances: Array<{
     account_id: string;
@@ -3503,7 +3505,7 @@ function ShiftClosureModal({
   const [changeNio, setChangeNio] = useState(() => formatAccountingMoneyRaw(shift.cambio_nio));
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
-  const rate = parseExchangeRate(readExchangeRate().buy);
+  const rate = shift.expectedGeneralRate ?? parseExchangeRate(readExchangeRate().buy);
   const finalNio = calculateCashPileTotal(cashDenominations.NIO, cashDraft);
   const finalUsd = calculateCashPileTotal(cashDenominations.USD, cashDraft);
   const { differenceNio, differenceUsd } = calculateShiftCashDifference({
@@ -4250,12 +4252,17 @@ function CashCountScreen({ currentUser }: { currentUser: AuthUser }) {
     [pileDrafts],
   );
   const buyRate = parseExchangeRate(exchangeRate.buy);
+  const generalRate = shift?.expectedGeneralRate ?? buyRate;
   const expected = shift?.expectedCash ?? { NIO: 0, USD: 0 };
+  const expectedGeneral = shift?.expectedGeneral ?? {
+    NIO: expected.NIO + expected.USD * generalRate,
+    USD: expected.USD + expected.NIO / generalRate,
+  };
   const { differenceNio, differenceUsd } = calculateShiftCashDifference({
     actual: totals,
     expected,
     registeredDifferenceNio: parseMoneyValue(changeNio),
-    buyRate,
+    buyRate: generalRate,
   });
 
   useEffect(() => {
@@ -4373,10 +4380,10 @@ function CashCountScreen({ currentUser }: { currentUser: AuthUser }) {
               <strong>{formatCashCountMoney(shift?.pendingCash?.NIO ?? 0, 'NIO')}</strong>
               <strong>{formatCashCountMoney(shift?.pendingCash?.USD ?? 0, 'USD')}</strong>
             </div>
-            <div className="cash-opening-chip cash-summary-chip cash-summary-chip--expected" aria-label="Efectivo esperado del turno">
-              <div><span>Efectivo esperado</span><small>Inicial más movimientos aplicables</small></div>
-              <strong>{formatCashCountMoney(expected.NIO, 'NIO')}</strong>
-              <strong>{formatCashCountMoney(expected.USD, 'USD')}</strong>
+            <div className="cash-opening-chip cash-summary-chip cash-summary-chip--expected" aria-label="Monto esperado general del turno">
+              <div><span>Monto esperado general</span><small>Fondo consolidado</small></div>
+              <strong>{formatCashCountMoney(expectedGeneral.NIO, 'NIO')}</strong>
+              <strong>{formatCashCountMoney(expectedGeneral.USD, 'USD')}</strong>
             </div>
           </div>
           <div className="action-row">
@@ -7149,7 +7156,7 @@ function TransactionTable({ config, currentUser }: { config: CrudConfig; current
   const normalizedRows = useMemo(() => rows.map(normalizeTransactionRow), [rows]);
   const shiftCashDifference = useMemo(() => {
     if (!currentShift) return null;
-    const rate = parseExchangeRate(readExchangeRate().buy);
+    const rate = currentShift.expectedGeneralRate ?? parseExchangeRate(readExchangeRate().buy);
     return calculateShiftCashDifference({
       actual: {
         NIO: currentShift.cashCounts.ACTUAL?.NIO?.total ?? 0,
