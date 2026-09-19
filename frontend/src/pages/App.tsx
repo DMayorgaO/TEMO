@@ -1271,6 +1271,9 @@ const defaultExchangeRate: ExchangeRate = {
   sell: '37.00',
 };
 
+// Comunica entre pantallas que Transacciones debe abrir directamente un registro nuevo.
+const openTransactionRequestKey = 'temo:open-new-transaction';
+
 // Convierte el hash actual en una pantalla valida para simular rutas sin instalar un router.
 function getScreenFromHash(): ScreenId {
   const currentRoute = window.location.hash.replace('#', '') || '/login';
@@ -4338,6 +4341,11 @@ function CashCountScreen({ currentUser }: { currentUser: AuthUser }) {
     setMessage('Solicitud enviada a la Jefa.');
   }
 
+  function openNewTransaction() {
+    window.sessionStorage.setItem(openTransactionRequestKey, '1');
+    window.location.hash = '/transacciones';
+  }
+
   return (
     <section className="screen-stack">
       <article className="panel">
@@ -4383,7 +4391,11 @@ function CashCountScreen({ currentUser }: { currentUser: AuthUser }) {
               <X size={17} />
               Limpiar
             </button>}
-            {!isBoss && <button type="button" className="primary-button" onClick={requestClose} disabled={!shift || shift.solicitud_estado === 'PENDIENTE'}>
+            {!isBoss && <button type="button" className="primary-button" onClick={openNewTransaction} disabled={!shift}>
+              <Plus size={17} />
+              Agregar transaccion
+            </button>}
+            {!isBoss && <button type="button" className="primary-button cash-close-button" onClick={requestClose} disabled={!shift || shift.solicitud_estado === 'PENDIENTE'}>
               <LockKeyhole size={17} />
               {shift?.solicitud_estado === 'PENDIENTE' ? 'Cierre solicitado' : 'Cierre'}
             </button>}
@@ -7135,6 +7147,19 @@ function TransactionTable({ config, currentUser }: { config: CrudConfig; current
     [config, isBoss],
   );
   const normalizedRows = useMemo(() => rows.map(normalizeTransactionRow), [rows]);
+  const shiftCashDifference = useMemo(() => {
+    if (!currentShift) return null;
+    const rate = parseExchangeRate(readExchangeRate().buy);
+    return calculateShiftCashDifference({
+      actual: {
+        NIO: currentShift.cashCounts.ACTUAL?.NIO?.total ?? 0,
+        USD: currentShift.cashCounts.ACTUAL?.USD?.total ?? 0,
+      },
+      expected: currentShift.expectedCash,
+      registeredDifferenceNio: parseMoneyValue(currentShift.cambio_nio),
+      buyRate: rate,
+    });
+  }, [currentShift]);
 
   async function reloadTransactions() {
     const databaseRows = await apiRequest<TransactionApiRow[]>('/transactions?limit=200');
@@ -7252,6 +7277,13 @@ function TransactionTable({ config, currentUser }: { config: CrudConfig; current
       },
     });
   }
+
+  useEffect(() => {
+    if (!currentShift || window.sessionStorage.getItem(openTransactionRequestKey) !== '1') return;
+    // Consume la solicitud una sola vez para evitar reabrir el formulario al volver a la pantalla.
+    window.sessionStorage.removeItem(openTransactionRequestKey);
+    openCreateModal();
+  }, [currentShift?.database_id]);
 
   async function openTransactionModal(row: CrudRow, mode: 'edit' | 'view') {
     setTransactionSaveError('');
@@ -7422,6 +7454,19 @@ function TransactionTable({ config, currentUser }: { config: CrudConfig; current
             <p>{config.description}</p>
             <h2>{config.title}</h2>
           </div>
+          {shiftCashDifference && (
+            <div className="transaction-header-difference" aria-label="Diferencia de efectivo del turno">
+              <span>Diferencia de efectivo</span>
+              <div>
+                <strong>C$</strong>
+                {renderDifference(shiftCashDifference.differenceNio, 'NIO')}
+              </div>
+              <div>
+                <strong>$</strong>
+                {renderDifference(shiftCashDifference.differenceUsd, 'USD')}
+              </div>
+            </div>
+          )}
           <div className="action-row">
             <div className="currency-filter currency-filter--header" aria-label="Filtrar por moneda">
               <button

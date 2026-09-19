@@ -944,45 +944,22 @@ export class ShiftsService {
          m.codigo as currency,
          (
            case when m.codigo = 'NIO' then t.efectivo_inicial_nio else t.efectivo_inicial_usd end
-           + coalesce(transaction_cash.amount, 0)
-           + coalesce(paid_pending_cash.amount, 0)
-           + coalesce(transfer_cash.amount, 0)
+           + coalesce(physical_cash.amount, 0)
          ) as expected_amount,
          coalesce(open_pending.amount, 0) as pending_amount
        from temo.turnos t
        cross join temo.monedas m
-       /* Las transacciones de credito no afectan efectivo hasta liquidarse. */
+       /* Usa el movimiento fisico persistido: incluye recibido, entregado, vuelto, pagos y transferencias. */
        left join lateral (
-         select sum(case tm.direccion when 'ENTRA' then tm.monto else -tm.monto end) as amount
-         from temo.transacciones tr
-         join temo.transacciones_montos tm on tm.id_transaccion = tr.id_transaccion
-         where tr.id_turno = t.id_turno
-           and tr.estado <> 'ANULADA'
-           and tm.id_moneda = m.id_moneda
-           and tm.medio = 'EFECTIVO'
-       ) transaction_cash on true
-       /* Una liquidacion afecta efectivo salvo que se haya registrado por cuenta bancaria. */
-       left join lateral (
-         select sum(case pp.tipo when 'POR_COBRAR' then ap.monto else -ap.monto end) as amount
-         from temo.abonos_pendientes ap
-         join temo.pagos_pendientes pp on pp.id_pendiente = ap.id_pendiente
-         where ap.id_turno_aplicacion = t.id_turno
-           and ap.id_moneda = m.id_moneda
-           and not exists (
-             select 1 from temo.transacciones_montos payment_tm
-             where payment_tm.id_transaccion = ap.id_transaccion
-               and payment_tm.medio = 'CUENTA_BANCARIA'
-           )
-       ) paid_pending_cash on true
-       /* Las transferencias de efectivo modifican el valor esperado por su direccion. */
-       left join lateral (
-         select sum(case tf.direccion when 'ENTRA' then tf.monto else -tf.monto end) as amount
-         from temo.transferencias tf
-         where tf.id_turno = t.id_turno
-           and tf.id_moneda = m.id_moneda
-           and tf.tipo = 'EFECTIVO'
-           and tf.estado = 'ACTIVO'
-       ) transfer_cash on true
+         select sum(case me.direccion when 'ENTRA' then me.monto else -me.monto end) as amount
+         from temo.movimientos_efectivo me
+         left join temo.transacciones tr on tr.id_transaccion = me.id_transaccion
+         left join temo.transferencias tf on tf.id_transferencia = me.id_transferencia
+         where me.id_turno = t.id_turno
+           and me.id_moneda = m.id_moneda
+           and (me.id_transaccion is null or tr.estado <> 'ANULADA')
+           and (me.id_transferencia is null or tf.estado = 'ACTIVO')
+       ) physical_cash on true
        /* Expone el saldo informativo que aun no debe formar parte del arqueo. */
        left join lateral (
          select sum(pp.saldo_pendiente) as amount

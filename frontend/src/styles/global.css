@@ -335,6 +335,14 @@ button:disabled {
   color: #fff;
 }
 
+/* El cierre de caja permanece rojo para distinguirlo de las acciones operativas. */
+.cash-close-button,
+.cash-close-button:hover {
+  background: #d92d20;
+  border-color: #d92d20;
+  color: #fff;
+}
+
 .export-button--excel {
   background: #217346;
   border-color: #217346;
@@ -451,6 +459,40 @@ button:disabled {
 .table-panel-header {
   /* Encabezado de tablas CRUD con espacio para exportaciones y alta. */
   align-items: flex-start;
+}
+
+/* Replica en Transacciones la diferencia calculada en Arqueo sin ocupar otra tarjeta. */
+.transaction-header-difference {
+  align-items: center;
+  align-self: center;
+  display: grid;
+  gap: 4px 10px;
+  grid-template-columns: auto auto;
+  justify-items: end;
+  margin-inline: auto;
+}
+
+.transaction-header-difference > span {
+  color: var(--muted);
+  font-size: .68rem;
+  font-weight: 850;
+  grid-column: 1 / -1;
+  text-transform: uppercase;
+}
+
+.transaction-header-difference > div {
+  align-items: center;
+  display: flex;
+  gap: 6px;
+}
+
+.transaction-header-difference > div > strong {
+  font-size: .75rem;
+}
+
+.transaction-header-difference .difference-badge {
+  min-height: 24px;
+  white-space: nowrap;
 }
 
 .panel__header h2,
@@ -4068,6 +4110,11 @@ tbody tr:hover td {
   .panel__header {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .transaction-header-difference {
+    justify-items: start;
+    margin-inline: 0;
   }
 
   .pagination-bar {
