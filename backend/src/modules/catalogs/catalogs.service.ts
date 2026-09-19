@@ -60,7 +60,7 @@ export class CatalogsService {
         `insert into temo.bitacora
            (id_usuario, accion, tabla, id_registro, datos_nuevos, direccion_ip, agente_usuario)
          values ($1, 'ACTUALIZAR', 'usuarios', $2,
-                 jsonb_build_object('evento', 'RESTABLECER_CONTRASENA', 'usuario', $3),
+                 jsonb_build_object('evento', 'RESTABLECER_CONTRASENA', 'usuario', $3::text),
                  nullif($4, '')::inet, nullif($5, ''))`,
         [user.id, target.id, target.username, ip.replace(/^::ffff:/, '').trim().slice(0, 45), userAgent.slice(0, 1000)],
       );
