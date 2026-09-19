@@ -4369,7 +4369,7 @@ function CashCountScreen({ currentUser }: { currentUser: AuthUser }) {
               <strong>{formatCashCountMoney(parseMoneyValue(shift?.efectivo_inicial_usd), 'USD')}</strong>
             </div>
             <div className="cash-opening-chip cash-summary-chip cash-summary-chip--pending" aria-label="Pendientes del turno">
-              <div><span>Pendientes</span><small>No afectan efectivo hasta pagarse</small></div>
+              <div><span>Pendientes</span><small>Fuera del efectivo</small></div>
               <strong>{formatCashCountMoney(shift?.pendingCash?.NIO ?? 0, 'NIO')}</strong>
               <strong>{formatCashCountMoney(shift?.pendingCash?.USD ?? 0, 'USD')}</strong>
             </div>

@@ -683,9 +683,13 @@ textarea:disabled {
 
 .cash-count-title-row {
   align-items: center;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 14px;
+  display: grid;
+  flex: 1;
+  gap: 8px;
+  grid-template-columns:
+    minmax(140px, .8fr)
+    minmax(140px, .7fr)
+    repeat(3, minmax(165px, 1fr));
 }
 
 .cash-rate-chip {
@@ -694,7 +698,7 @@ textarea:disabled {
   border-radius: 8px;
   display: grid;
   gap: 3px;
-  min-width: 172px;
+  min-width: 0;
   padding: 8px 10px;
 }
 
@@ -718,8 +722,8 @@ textarea:disabled {
   border-radius: 8px;
   display: grid;
   gap: 2px 12px;
-  grid-template-columns: minmax(120px, 1fr) auto;
-  min-width: 270px;
+  grid-template-columns: minmax(78px, 1fr) auto;
+  min-width: 0;
   padding: 7px 10px;
 }
 
@@ -742,7 +746,7 @@ textarea:disabled {
 
 .cash-opening-chip small {
   color: var(--muted);
-  font-size: 0.7rem;
+  font-size: 0.64rem;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -3983,6 +3987,10 @@ tbody tr:hover td {
     grid-template-columns: 1fr;
   }
 
+  .cash-count-title-row {
+    grid-template-columns: repeat(2, minmax(180px, 1fr));
+  }
+
   .table-toolbar-controls {
     justify-items: start;
   }
@@ -4110,6 +4118,11 @@ tbody tr:hover td {
   .panel__header {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .cash-count-title-row {
+    grid-template-columns: 1fr;
+    width: 100%;
   }
 
   .transaction-header-difference {
