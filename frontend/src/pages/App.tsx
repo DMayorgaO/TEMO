@@ -2063,10 +2063,6 @@ function getTransactionRateValue(rate: ExchangeRate, kind: ExchangeRateKind) {
   return parseExchangeRate(kind === 'Compra' ? rate.buy : rate.sell);
 }
 
-function invertExchangeRateKind(kind: ExchangeRateKind): ExchangeRateKind {
-  return kind === 'Compra' ? 'Venta' : 'Compra';
-}
-
 function calculateTransactionCashDifference({
   cashTotals,
   currency,
@@ -2194,12 +2190,9 @@ function calculateTransactionCustomerBalanceSteps(rows: CrudRow[], rate: Exchang
     const direction = row.direction === 'Salida' ? 'Salida' : 'Ingreso';
     const rateKind = getTransactionExchangeRateKind(direction, currency);
     const rateValue = getTransactionRateValue(rate, rateKind) || 1;
-    const changeRateKind = row.changeExchangeRateType === 'Venta'
-      ? 'Venta'
-      : row.changeExchangeRateType === 'Compra'
-        ? 'Compra'
-        : invertExchangeRateKind(rateKind);
-    const changeRateValue = getTransactionRateValue(rate, changeRateKind) || 1;
+    // El vuelto conserva la tasa definida por moneda y direccion de la transaccion.
+    const changeRateKind = rateKind;
+    const changeRateValue = rateValue;
 
     // Los pendientes totales no alteran el efectivo hasta que sean cancelados.
     if (!row.direction || !row.movement || row.pendingName.trim()) {
@@ -2260,27 +2253,20 @@ function calculateTransactionCustomerBalanceSteps(rows: CrudRow[], rate: Exchang
 
 function calculateChangeCashDifference({
   cashTotals,
-  currency,
   expectedChange,
   rateValue,
 }: {
   cashTotals: Record<CashCurrency, number>;
-  currency: CashCurrency;
   expectedChange: Record<CashCurrency, number>;
   rateValue: number;
 }) {
-  if (currency === 'NIO') {
-    const differenceNio = cashTotals.NIO + cashTotals.USD * rateValue - expectedChange.NIO;
-    return {
-      differenceNio,
-      differenceUsd: differenceNio / rateValue,
-    };
-  }
-
-  const differenceUsd = cashTotals.USD + cashTotals.NIO / rateValue - expectedChange.USD;
+  // Compara el vuelto completo en una sola equivalencia, incluso cuando se entrega en ambas monedas.
+  const actualNio = cashTotals.NIO + cashTotals.USD * rateValue;
+  const expectedNio = expectedChange.NIO + expectedChange.USD * rateValue;
+  const differenceNio = actualNio - expectedNio;
   return {
-    differenceNio: differenceUsd * rateValue,
-    differenceUsd,
+    differenceNio,
+    differenceUsd: differenceNio / rateValue,
   };
 }
 
@@ -2908,7 +2894,7 @@ function normalizeTransactionRow(row: CrudRow): CrudRow {
     row.exchangeRateType === 'Compra' || row.exchangeRateType === 'Venta'
       ? row.exchangeRateType
       : getTransactionExchangeRateKind(direction || 'Ingreso', currency);
-  const defaultChangeExchangeRateType = invertExchangeRateKind(exchangeRateType);
+  const defaultChangeExchangeRateType = exchangeRateType;
   const changeExchangeRateType: ExchangeRateKind =
     row.changeExchangeRateType === 'Compra' || row.changeExchangeRateType === 'Venta'
       ? row.changeExchangeRateType
@@ -7420,8 +7406,8 @@ function TransactionTable({ config, currentUser }: { config: CrudConfig; current
         changeCashCountUsd: '{}',
         exchangeRateType: 'Compra',
         exchangeRateValue: formatRateDisplay(readExchangeRate().buy),
-        changeExchangeRateType: 'Venta',
-        changeExchangeRateValue: formatRateDisplay(readExchangeRate().sell),
+        changeExchangeRateType: 'Compra',
+        changeExchangeRateValue: formatRateDisplay(readExchangeRate().buy),
         status: 'Registrada',
       },
     });
@@ -7944,11 +7930,8 @@ function TransactionModal({
     rateKind: activeBalanceStep?.rateKind || 'Compra' as ExchangeRateKind,
     rateValue: activeRate,
   };
-  const [changeRateKind, setChangeRateKind] = useState<ExchangeRateKind>(() =>
-    draft.changeExchangeRateType === 'Compra' || draft.changeExchangeRateType === 'Venta'
-      ? draft.changeExchangeRateType
-      : invertExchangeRateKind(transactionDifference.rateKind),
-  );
+  // La tasa del vuelto no es independiente: sigue la regla de la transaccion activa.
+  const changeRateKind = transactionDifference.rateKind;
   const changeRateValue = getTransactionRateValue(exchangeRate, changeRateKind);
   const hasPositiveChange = draft.direction === 'Ingreso' && transactionDifference.differenceNio > 0.005;
   const expectedChange = {
@@ -7956,7 +7939,8 @@ function TransactionModal({
     USD: Math.max(0, transactionDifference.differenceUsd),
   };
   const finalBalanceStep = customerBalanceSteps[customerBalanceSteps.length - 1];
-  const groupDisplayRate = parseExchangeRate(exchangeRate.buy) || 1;
+  // Presenta ambas equivalencias con la tasa que produjo el saldo final del grupo.
+  const groupDisplayRate = finalBalanceStep?.rateValue || 1;
   const totalGroupBalanceNio = (finalBalanceStep?.balanceNio || 0) + (finalBalanceStep?.balanceUsd || 0) * groupDisplayRate;
   const totalGroupBalanceUsd = (finalBalanceStep?.balanceUsd || 0) + (finalBalanceStep?.balanceNio || 0) / groupDisplayRate;
   const customerBalanceTone = totalGroupBalanceNio > 0.005
@@ -7975,7 +7959,6 @@ function TransactionModal({
   };
   const changeDifference = calculateChangeCashDifference({
     cashTotals: changeCashTotals,
-    currency: draft.currency === 'USD' ? 'USD' : 'NIO',
     expectedChange,
     rateValue: changeRateValue,
   });
@@ -7985,11 +7968,6 @@ function TransactionModal({
       setCashView('received');
     }
   }, [cashView, hasPositiveChange]);
-
-  useEffect(() => {
-    const rowRateKind = draft.changeExchangeRateType === 'Venta' ? 'Venta' : 'Compra';
-    setChangeRateKind(rowRateKind);
-  }, [activeTabIndex, draft.changeExchangeRateType]);
 
   function setDraft(updater: (current: CrudRow) => CrudRow) {
     setDrafts((currentDrafts) =>
@@ -8006,6 +7984,7 @@ function TransactionModal({
       idOffset += 1;
     }
     const currentRate = readExchangeRate();
+    const initialRateKind = getTransactionExchangeRateKind('Ingreso', 'NIO');
     const nextDraft = normalizeTransactionRow({
       id: offsetReadableId(initialDraft.id, idOffset),
       registeredAt: '',
@@ -8021,18 +8000,13 @@ function TransactionModal({
       cashCountUsd: '{}',
       changeCashCountNio: '{}',
       changeCashCountUsd: '{}',
-      exchangeRateType: getTransactionExchangeRateKind('Ingreso', draft.currency),
+      exchangeRateType: initialRateKind,
       exchangeRateValue: formatRateDisplay(
-        getTransactionRateValue(currentRate, getTransactionExchangeRateKind('Ingreso', draft.currency)).toString(),
+        getTransactionRateValue(currentRate, initialRateKind).toString(),
       ),
-      changeExchangeRateType: invertExchangeRateKind(
-        getTransactionExchangeRateKind('Ingreso', draft.currency),
-      ),
+      changeExchangeRateType: initialRateKind,
       changeExchangeRateValue: formatRateDisplay(
-        getTransactionRateValue(
-          currentRate,
-          invertExchangeRateKind(getTransactionExchangeRateKind('Ingreso', draft.currency)),
-        ).toString(),
+        getTransactionRateValue(currentRate, initialRateKind).toString(),
       ),
       status: 'Registrada',
     });
@@ -8070,8 +8044,7 @@ function TransactionModal({
       .filter((account) => normalizeLookupValue(account.entity) === normalizeLookupValue(value))
       .map((account) => account.currency);
     const defaultCurrency: CashCurrency = availableEntityCurrencies.includes('NIO') ? 'NIO' : availableEntityCurrencies[0] ?? 'NIO';
-    const nextChangeRateKind = invertExchangeRateKind(getTransactionExchangeRateKind('Ingreso', defaultCurrency));
-    setChangeRateKind(nextChangeRateKind);
+    const nextChangeRateKind = getTransactionExchangeRateKind('Ingreso', defaultCurrency);
     setDraft((current) => ({
       ...current,
       entity: value,
@@ -8092,8 +8065,7 @@ function TransactionModal({
       (currency) => !restrictToShiftAccounts || entityCurrencies.has(currency),
     );
     const currency: CashCurrency = movementCurrencies.includes('NIO') ? 'NIO' : movementCurrencies[0] ?? 'NIO';
-    const nextChangeRateKind = invertExchangeRateKind(getTransactionExchangeRateKind(direction || 'Ingreso', currency));
-    setChangeRateKind(nextChangeRateKind);
+    const nextChangeRateKind = getTransactionExchangeRateKind(direction || 'Ingreso', currency);
     setDraft((current) => ({
       ...current,
       movement: value,
@@ -8114,8 +8086,7 @@ function TransactionModal({
       (currency) => !restrictToShiftAccounts || entityCurrencies.has(currency),
     );
     const currency: CashCurrency = movementCurrencies.includes('NIO') ? 'NIO' : movementCurrencies[0] ?? 'NIO';
-    const nextChangeRateKind = invertExchangeRateKind(getTransactionExchangeRateKind(direction || 'Ingreso', currency));
-    setChangeRateKind(nextChangeRateKind);
+    const nextChangeRateKind = getTransactionExchangeRateKind(direction || 'Ingreso', currency);
     setDraft((current) => ({
       ...current,
       movementCode,
@@ -8130,8 +8101,7 @@ function TransactionModal({
     if (!selectedMovement || !allowedCurrencies.includes(currency)) {
       return;
     }
-    const nextChangeRateKind = invertExchangeRateKind(getTransactionExchangeRateKind(draft.direction || 'Ingreso', currency));
-    setChangeRateKind(nextChangeRateKind);
+    const nextChangeRateKind = getTransactionExchangeRateKind(draft.direction || 'Ingreso', currency);
     setDraft((current) => ({ ...current, currency, changeExchangeRateType: nextChangeRateKind }));
   }
 
@@ -8148,12 +8118,6 @@ function TransactionModal({
     window.setTimeout(() => {
       document.querySelector<HTMLButtonElement>(`[data-transaction-currency="${nextCurrency}"]`)?.focus();
     }, 0);
-  }
-
-  function toggleChangeRateKind() {
-    const nextKind = changeRateKind === 'Compra' ? 'Venta' : 'Compra';
-    setChangeRateKind(nextKind);
-    updateField('changeExchangeRateType', nextKind);
   }
 
   function updateCashCount(currency: CashCurrency, denominationId: string, field: 'groups' | 'loose', value: string) {
@@ -8213,7 +8177,7 @@ function TransactionModal({
     const customerBalanceSteps = calculateTransactionCustomerBalanceSteps(drafts, exchangeRate);
     const finalBalanceStep = customerBalanceSteps[customerBalanceSteps.length - 1];
     const finalBalanceNio = (finalBalanceStep?.balanceNio || 0)
-      + (finalBalanceStep?.balanceUsd || 0) * (parseExchangeRate(exchangeRate.buy) || 1);
+      + (finalBalanceStep?.balanceUsd || 0) * (finalBalanceStep?.rateValue || 1);
     const hasMinorRoundingDifference = Math.abs(finalBalanceNio) > 0.005
       && Math.abs(finalBalanceNio) <= transactionRoundingToleranceNio;
     if (hasMinorRoundingDifference) {
@@ -8541,21 +8505,9 @@ function TransactionModal({
                       <MoneyAmount currency="NIO" value={expectedChange.NIO} />
                       <MoneyAmount currency="USD" value={expectedChange.USD} />
                     </div>
-                    <div className="transaction-rate-chip transaction-rate-chip--switchable" aria-label="Tasa de cambio utilizada para vuelto">
-                      <div>
-                        <span>Tasa de cambio utilizada</span>
-                        <strong>{changeRateKind} C$ {formatRateDisplay(String(changeRateValue))}</strong>
-                      </div>
-                      <button
-                        type="button"
-                        className="transaction-rate-toggle"
-                        onClick={toggleChangeRateKind}
-                        disabled={isReadOnly}
-                        aria-label={`Cambiar a tasa de ${changeRateKind === 'Compra' ? 'Venta' : 'Compra'}`}
-                        title={`Usar tasa de ${changeRateKind === 'Compra' ? 'Venta' : 'Compra'}`}
-                      >
-                        <RefreshCw size={15} />
-                      </button>
+                    <div className="transaction-rate-chip" aria-label="Tasa de cambio utilizada para vuelto">
+                      <span>Tasa de cambio utilizada</span>
+                      <strong>{changeRateKind} C$ {formatRateDisplay(String(changeRateValue))}</strong>
                     </div>
                   </div>
                   <div className="transaction-cash-count-grid">
