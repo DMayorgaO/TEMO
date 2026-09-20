@@ -4871,12 +4871,18 @@ function PendingScreen({ currentUser }: { currentUser: AuthUser }) {
     row: CrudRow;
   } | null>(null);
   const [selectedPendingIds, setSelectedPendingIds] = useState<string[]>([]);
-  const [batchCashModal, setBatchCashModal] = useState<{ pendings: PendingApiRow[]; row: CrudRow } | null>(null);
+  const [batchCashModal, setBatchCashModal] = useState<{
+    pendings: PendingApiRow[];
+    row: CrudRow;
+    digital?: { entityCode: string; movementCode: string; amount: number };
+  } | null>(null);
   const [batchDigitalModal, setBatchDigitalModal] = useState<{
     pendings: PendingApiRow[];
     shift: ShiftDetail;
     entity: string;
     movementCode: string;
+    method: 'DIGITAL' | 'MIXTO';
+    digitalAmount: string;
   } | null>(null);
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
@@ -5091,7 +5097,7 @@ function PendingScreen({ currentUser }: { currentUser: AuthUser }) {
     }
   }
 
-  async function openBatchDigitalPayment() {
+  async function openBatchDigitalPayment(method: 'DIGITAL' | 'MIXTO' = 'DIGITAL') {
     const selected = await validateBatchSelection();
     if (!selected) return;
     setPayingId('batch');
@@ -5104,7 +5110,15 @@ function PendingScreen({ currentUser }: { currentUser: AuthUser }) {
         await requestSystemAlert(`No hay movimientos digitales de ${expectedDirection.toLowerCase()} configurados para ${selected[0].moneda}.`, 'Movimiento no disponible');
         return;
       }
-      setBatchDigitalModal({ pendings: selected, shift, entity: first.entity, movementCode: first.code });
+      const total = selected.reduce((sum, row) => sum + Number(row.saldo_pendiente), 0);
+      setBatchDigitalModal({
+        pendings: selected,
+        shift,
+        entity: first.entity,
+        movementCode: first.code,
+        method,
+        digitalAmount: method === 'DIGITAL' ? String(total) : '',
+      });
     } catch (batchError) {
       setError(batchError instanceof Error ? batchError.message : 'No fue posible preparar el pago digital.');
     } finally {
@@ -5117,17 +5131,19 @@ function PendingScreen({ currentUser }: { currentUser: AuthUser }) {
     setPayingId('batch');
     try {
       const payload = buildTransactionBatchPayload(transactionRows);
+      const isMixed = Boolean(batchCashModal.digital);
       await apiRequest('/transactions/pending/pay-batch', {
         method: 'POST',
         body: JSON.stringify({
           pendingIds: batchCashModal.pendings.map((row) => row.database_id),
-          method: 'EFECTIVO',
+          method: isMixed ? 'MIXTO' : 'EFECTIVO',
           rates: payload.rates,
           settlement: payload.settlement,
+          ...(batchCashModal.digital ? { digital: batchCashModal.digital } : {}),
         }),
       });
       setBatchCashModal(null);
-      await finishBatchPayment(batchCashModal.pendings, 'efectivo');
+      await finishBatchPayment(batchCashModal.pendings, isMixed ? 'efectivo y digital' : 'efectivo');
     } catch (batchError) {
       setError(batchError instanceof Error ? batchError.message : 'No fue posible liquidar los pendientes.');
     } finally {
@@ -5153,6 +5169,41 @@ function PendingScreen({ currentUser }: { currentUser: AuthUser }) {
       await finishBatchPayment(batchDigitalModal.pendings, 'digital');
     } catch (batchError) {
       setError(batchError instanceof Error ? batchError.message : 'No fue posible liquidar los pendientes.');
+    } finally {
+      setPayingId(null);
+    }
+  }
+
+  async function continueBatchMixedPayment() {
+    if (!batchDigitalModal || batchDigitalModal.method !== 'MIXTO') return;
+    const total = batchDigitalModal.pendings.reduce((sum, row) => sum + Number(row.saldo_pendiente), 0);
+    const digitalAmount = parseMoneyValue(batchDigitalModal.digitalAmount);
+    if (digitalAmount <= 0 || digitalAmount >= total) {
+      setError('El monto digital debe ser mayor que cero y menor que el total pendiente.');
+      return;
+    }
+    setPayingId('batch');
+    try {
+      // El resto del total pasa al arqueo para registrar las denominaciones efectivamente usadas.
+      const baseRow = await loadPendingPaymentRow(batchDigitalModal.pendings[0]);
+      setBatchCashModal({
+        pendings: batchDigitalModal.pendings,
+        row: normalizeTransactionRow({
+          ...baseRow,
+          amountValue: String(total - digitalAmount),
+          pendingName: `${batchDigitalModal.pendings.length} pendientes seleccionados`,
+          direction: batchDigitalModal.pendings[0].tipo === 'POR_COBRAR' ? 'Ingreso' : 'Salida',
+        }),
+        digital: {
+          entityCode: batchDigitalModal.entity,
+          movementCode: batchDigitalModal.movementCode,
+          amount: digitalAmount,
+        },
+      });
+      setBatchDigitalModal(null);
+      setError('');
+    } catch (batchError) {
+      setError(batchError instanceof Error ? batchError.message : 'No fue posible preparar la parte en efectivo.');
     } finally {
       setPayingId(null);
     }
@@ -5186,7 +5237,10 @@ function PendingScreen({ currentUser }: { currentUser: AuthUser }) {
             <button type="button" className="secondary-button" disabled={!selectedPendingIds.length || Boolean(payingId)} onClick={() => void openBatchCashPayment()}>
               <Banknote size={17} /> Liquidar en efectivo
             </button>
-            <button type="button" className="primary-button" disabled={!selectedPendingIds.length || Boolean(payingId)} onClick={() => void openBatchDigitalPayment()}>
+            <button type="button" className="secondary-button" disabled={!selectedPendingIds.length || Boolean(payingId)} onClick={() => void openBatchDigitalPayment('MIXTO')}>
+              <ArrowRightLeft size={17} /> Liquidar combinado
+            </button>
+            <button type="button" className="primary-button" disabled={!selectedPendingIds.length || Boolean(payingId)} onClick={() => void openBatchDigitalPayment('DIGITAL')}>
               <Landmark size={17} /> Liquidar digital
             </button>
             <label className="switch-control switch-control--small">
@@ -5344,6 +5398,7 @@ function PendingScreen({ currentUser }: { currentUser: AuthUser }) {
         />
       )}
       {batchDigitalModal && (() => {
+        const isMixed = batchDigitalModal.method === 'MIXTO';
         const expectedDirection = batchDigitalModal.pendings[0].tipo === 'POR_COBRAR' ? 'Ingreso' : 'Salida';
         const movements = batchDigitalModal.shift.availableMovements.filter((movement) => movement.affectsAccount && movement.accountDirection === expectedDirection && movement.currencies.includes(batchDigitalModal.pendings[0].moneda));
         const entities = [...new Set(movements.map((movement) => movement.entity))];
@@ -5355,7 +5410,7 @@ function PendingScreen({ currentUser }: { currentUser: AuthUser }) {
               <div className="system-dialog__icon"><Landmark size={24} /></div>
               <div className="system-dialog__content">
                 <p>Liquidacion multiple</p>
-                <h2>Pago digital</h2>
+                <h2>{isMixed ? 'Pago combinado' : 'Pago digital'}</h2>
                 <span>{batchDigitalModal.pendings.length} pendientes por {formatCashCountMoney(total, batchDigitalModal.pendings[0].moneda)}</span>
                 <label className="form-field">Cuenta bancaria
                   <select value={batchDigitalModal.entity} onChange={(event) => {
@@ -5369,10 +5424,30 @@ function PendingScreen({ currentUser }: { currentUser: AuthUser }) {
                     {entityMovements.map((movement) => <option key={movement.code} value={movement.code}>{movement.code} - {movement.name}</option>)}
                   </select>
                 </label>
+                {isMixed && (
+                  <label className="form-field">Monto digital
+                    <input
+                      autoFocus
+                      inputMode="decimal"
+                      value={batchDigitalModal.digitalAmount}
+                      onChange={(event) => setBatchDigitalModal((current) => current ? { ...current, digitalAmount: event.target.value } : current)}
+                      placeholder="0.00"
+                    />
+                    <small>El monto restante se completará con el arqueo de efectivo.</small>
+                  </label>
+                )}
               </div>
               <div className="system-dialog__actions">
                 <button type="button" className="secondary-button danger-button" disabled={payingId === 'batch'} onClick={() => setBatchDigitalModal(null)}><X size={17} />Cancelar</button>
-                <button type="button" className="primary-button" disabled={payingId === 'batch' || !batchDigitalModal.movementCode} onClick={() => void submitBatchDigital()}><CheckCircle2 size={17} />{payingId === 'batch' ? 'Procesando...' : 'Liquidar'}</button>
+                <button
+                  type="button"
+                  className="primary-button"
+                  disabled={payingId === 'batch' || !batchDigitalModal.movementCode || (isMixed && !batchDigitalModal.digitalAmount)}
+                  onClick={() => void (isMixed ? continueBatchMixedPayment() : submitBatchDigital())}
+                >
+                  <CheckCircle2 size={17} />
+                  {payingId === 'batch' ? 'Procesando...' : isMixed ? 'Continuar al efectivo' : 'Liquidar'}
+                </button>
               </div>
             </section>
           </div>

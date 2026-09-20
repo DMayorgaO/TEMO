@@ -1245,26 +1245,48 @@ export class TransactionsService {
       const totalAmount = pendings.reduce((sum, pending) => sum + Number(pending.saldo_pendiente), 0);
       const primaryDirection: MoneyDirection = reference.tipo === 'POR_COBRAR' ? 'ENTRA' : 'SALE';
       const rateId = await this.resolveExchangeRate(client, input, user.id);
-      const paymentIds: string[] = [];
+      const digitalTotal = input.method === 'DIGITAL' ? totalAmount : input.method === 'MIXTO' ? Number(input.digital!.amount) : 0;
+      const cashTotal = totalAmount - digitalTotal;
+      if (digitalTotal < 0 || digitalTotal > totalAmount || (input.method === 'MIXTO' && (digitalTotal <= 0 || cashTotal <= 0))) {
+        throw new ConflictException('El monto digital debe ser menor que el total para conservar una parte en efectivo.');
+      }
+      const cashPayments: Array<{ id: string; pendingId: string; amount: number }> = [];
+      const digitalPayments: Array<{ id: string; pendingId: string; counterpartId: string; amount: number }> = [];
+      let remainingDigital = digitalTotal;
 
-      // Registra un abono total por cada pendiente, conservando su trazabilidad individual.
+      // Divide cada pendiente entre sus porciones digital y efectiva sin perder trazabilidad.
       for (const pending of pendings) {
-        const payment = await client.query<{ id_abono: string } & QueryResultRow>(
-          `insert into temo.abonos_pendientes (
-             id_pendiente, id_transaccion, id_turno_aplicacion, id_moneda,
-             monto, id_tipo_cambio, tasa_compra_usada, tasa_venta_usada,
-             id_usuario_creacion, observaciones
-           ) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
-           returning id_abono`,
-          [pending.id_pendiente, pending.id_transaccion, activeShift.id_turno,
-            pending.id_moneda, Number(pending.saldo_pendiente), rateId,
-            input.rates.buy, input.rates.sell, user.id,
-            `Liquidacion multiple en ${input.method.toLowerCase()}.`],
-        );
-        paymentIds.push(payment.rows[0].id_abono);
+        const pendingAmount = Number(pending.saldo_pendiente);
+        const digitalAmount = Math.min(pendingAmount, remainingDigital);
+        const cashAmount = pendingAmount - digitalAmount;
+        remainingDigital -= digitalAmount;
+        for (const portion of [
+          { kind: 'digital', amount: digitalAmount },
+          { kind: 'efectivo', amount: cashAmount },
+        ]) {
+          if (portion.amount <= 0) continue;
+          const payment = await client.query<{ id_abono: string } & QueryResultRow>(
+            `insert into temo.abonos_pendientes (
+               id_pendiente, id_transaccion, id_turno_aplicacion, id_moneda,
+               monto, id_tipo_cambio, tasa_compra_usada, tasa_venta_usada,
+               id_usuario_creacion, observaciones
+             ) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+             returning id_abono`,
+            [pending.id_pendiente, pending.id_transaccion, activeShift.id_turno,
+              pending.id_moneda, portion.amount, rateId,
+              input.rates.buy, input.rates.sell, user.id,
+              `Liquidacion ${portion.kind} de operacion ${input.method.toLowerCase()}.`],
+          );
+          const allocation = { id: payment.rows[0].id_abono, pendingId: pending.id_pendiente, amount: portion.amount };
+          if (portion.kind === 'digital') {
+            digitalPayments.push({ ...allocation, counterpartId: pending.id_contraparte });
+          } else {
+            cashPayments.push(allocation);
+          }
+        }
       }
 
-      if (input.method === 'EFECTIVO') {
+      if (cashTotal > 0) {
         const settlement = input.settlement!;
         const primaryTotals = this.cashTotals(settlement.primaryCounts);
         const changeTotals = this.cashTotals(settlement.changeCounts);
@@ -1278,12 +1300,12 @@ export class TransactionsService {
         const denominations = await this.loadDenominations(client);
         const primaryType = primaryDirection === 'ENTRA' ? 'PENDIENTE_RECIBIDO' : 'PENDIENTE_ENTREGADO';
 
-        // El primer abono identifica el arqueo compartido del lote completo.
+        // El primer abono efectivo identifica el arqueo compartido del lote completo.
         for (const currency of ['NIO', 'USD'] as const) {
-          const expectedAmount = currency === reference.moneda ? totalAmount : 0;
+          const expectedAmount = currency === reference.moneda ? cashTotal : 0;
           if (primaryTotals[currency] > 0 || expectedAmount > 0) {
             await this.persistPendingCashCount(client, {
-              paymentId: paymentIds[0], userId: user.id, rateId,
+              paymentId: cashPayments[0].id, userId: user.id, rateId,
               rateKind: settlement.primaryRateKind,
               rateValue: this.rateValue(input, settlement.primaryRateKind),
               currency, currencyId: currencies[currency], type: primaryType,
@@ -1292,7 +1314,7 @@ export class TransactionsService {
           }
           if (changeTotals[currency] > 0 || settlement.expectedChange[currency] > 0) {
             await this.persistPendingCashCount(client, {
-              paymentId: paymentIds[0], userId: user.id, rateId,
+              paymentId: cashPayments[0].id, userId: user.id, rateId,
               rateKind: settlement.changeRateKind,
               rateValue: this.rateValue(input, settlement.changeRateKind),
               currency, currencyId: currencies[currency], type: 'PENDIENTE_VUELTO',
@@ -1301,15 +1323,17 @@ export class TransactionsService {
             });
           }
           if (primaryTotals[currency] > 0) {
-            await this.persistPendingCashMovement(client, paymentIds[0], activeShift, currencies[currency], primaryDirection, primaryTotals[currency]);
+            await this.persistPendingCashMovement(client, cashPayments[0].id, activeShift, currencies[currency], primaryDirection, primaryTotals[currency]);
           }
           if (changeTotals[currency] > 0) {
-            await this.persistPendingCashMovement(client, paymentIds[0], activeShift, currencies[currency], 'SALE', changeTotals[currency]);
+            await this.persistPendingCashMovement(client, cashPayments[0].id, activeShift, currencies[currency], 'SALE', changeTotals[currency]);
           }
         }
         await this.applySettlementToCurrentCashCount(client, activeShift.id_turno, primaryDirection, settlement.primaryCounts, settlement.changeCounts);
-      } else {
-        // El pago digital usa exclusivamente un movimiento bancario configurado para la sucursal.
+      }
+
+      if (digitalTotal > 0) {
+        // La porcion digital usa exclusivamente un movimiento bancario configurado para la sucursal.
         const movement = await this.resolveMovement(
           client, activeShift.id_sucursal, input.digital!.entityCode,
           reference.moneda, input.digital!.movementCode,
@@ -1327,9 +1351,9 @@ export class TransactionsService {
         const groupResult = await client.query<{ id_grupo_transacciones: string } & QueryResultRow>(
           `insert into temo.grupos_transacciones (
              id_turno,id_contraparte,estado,observaciones,id_usuario_creacion
-           ) values ($1,$2,'CERRADO',$3,$4)
+           ) values ($1,$2,'COMPLETADO',$3,$4)
            returning id_grupo_transacciones`,
-          [activeShift.id_turno, reference.id_contraparte, 'Liquidacion digital multiple de pendientes.', user.id],
+          [activeShift.id_turno, reference.id_contraparte, 'Liquidacion digital de pendientes.', user.id],
         );
         const consecutiveResult = await client.query<{ next_value: number } & QueryResultRow>(
           `select coalesce(max(consecutivo_turno),0) + 1 as next_value
@@ -1338,9 +1362,8 @@ export class TransactionsService {
         );
         const firstConsecutive = Number(consecutiveResult.rows[0].next_value);
 
-        // Cada pendiente genera una transaccion bancaria visible y vinculada con su abono.
-        for (const [index, pending] of pendings.entries()) {
-          const amount = Number(pending.saldo_pendiente);
+        // Cada porcion digital genera una transaccion bancaria visible y vinculada con su abono.
+        for (const [index, payment] of digitalPayments.entries()) {
           const transactionResult = await client.query<{ id_transaccion: string } & QueryResultRow>(
             `insert into temo.transacciones (
                id_turno,id_sucursal,id_caja,id_cajero,id_grupo_transacciones,orden_grupo,
@@ -1351,26 +1374,26 @@ export class TransactionsService {
              returning id_transaccion`,
             [activeShift.id_turno, activeShift.id_sucursal, activeShift.id_caja,
               activeShift.id_cajero, groupResult.rows[0].id_grupo_transacciones, index + 1,
-              movement.id_cuenta_movimiento, pending.id_contraparte,
-              methodResult.rows[0].id_metodo_pago, movement.id_moneda, amount, rateId,
+              movement.id_cuenta_movimiento, payment.counterpartId,
+              methodResult.rows[0].id_metodo_pago, movement.id_moneda, payment.amount, rateId,
               input.rates.buy, input.rates.sell,
-              `Liquidacion digital del pendiente ${pending.id_pendiente}.`,
+              `Liquidacion digital del pendiente ${payment.pendingId}.`,
               firstConsecutive + index, user.id],
           );
           const paymentTransactionId = transactionResult.rows[0].id_transaccion;
           await client.query(
             `insert into temo.movimientos_cuentas (id_transaccion,id_cuenta,id_moneda,direccion,monto)
              values ($1,$2,$3,$4,$5)`,
-            [paymentTransactionId, movement.id_cuenta, movement.id_moneda, primaryDirection, amount],
+            [paymentTransactionId, movement.id_cuenta, movement.id_moneda, primaryDirection, payment.amount],
           );
           await client.query(
             `insert into temo.transacciones_montos (id_transaccion,direccion,medio,id_moneda,monto,id_cuenta,observaciones)
              values ($1,$2,'CUENTA_BANCARIA',$3,$4,$5,'Liquidacion digital de pendiente')`,
-            [paymentTransactionId, primaryDirection, movement.id_moneda, amount, movement.id_cuenta],
+            [paymentTransactionId, primaryDirection, movement.id_moneda, payment.amount, movement.id_cuenta],
           );
           await client.query(
             `update temo.abonos_pendientes set id_transaccion = $2 where id_abono = $1`,
-            [paymentIds[index], paymentTransactionId],
+            [payment.id, paymentTransactionId],
           );
         }
         await this.refreshShiftAccountBalances(client, activeShift.id_turno);

@@ -88,21 +88,25 @@ export const payPendingSchema = z
 export const payPendingBatchSchema = z
   .object({
     pendingIds: z.array(z.string().uuid()).min(1).max(50),
-    method: z.enum(['EFECTIVO', 'DIGITAL']),
+    method: z.enum(['EFECTIVO', 'DIGITAL', 'MIXTO']),
     rates: ratesSchema,
     settlement: settlementSchema.optional(),
     digital: z.object({
       entityCode: z.string().trim().min(1).max(40),
       movementCode: z.string().trim().min(1).max(40),
+      amount: amountSchema.optional(),
     }).strict().optional(),
   })
   .strict()
   .superRefine((value, context) => {
-    if (value.method === 'EFECTIVO' && !value.settlement) {
+    if ((value.method === 'EFECTIVO' || value.method === 'MIXTO') && !value.settlement) {
       context.addIssue({ code: 'custom', message: 'El pago en efectivo requiere arqueo.', path: ['settlement'] });
     }
-    if (value.method === 'DIGITAL' && !value.digital) {
+    if ((value.method === 'DIGITAL' || value.method === 'MIXTO') && !value.digital) {
       context.addIssue({ code: 'custom', message: 'El pago digital requiere una cuenta y movimiento.', path: ['digital'] });
+    }
+    if (value.method === 'MIXTO' && !value.digital?.amount) {
+      context.addIssue({ code: 'custom', message: 'La liquidacion combinada requiere el monto digital.', path: ['digital', 'amount'] });
     }
   });
 
