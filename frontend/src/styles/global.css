@@ -107,8 +107,6 @@ button {
 
 .brand__logo {
   /* Logotipo oficial del sistema dentro del menu. */
-  background: #fff;
-  border-radius: 8px;
   display: block;
   height: 46px;
   object-fit: contain;
@@ -4243,8 +4241,15 @@ tbody tr:hover td {
 }
 
 .pending-table .selection-column input {
+  appearance: auto;
   accent-color: var(--primary);
+  box-sizing: border-box;
   cursor: pointer;
+  display: inline-block;
+  margin: 0;
+  min-height: 17px;
+  min-width: 17px;
+  padding: 0;
   height: 17px;
   width: 17px;
 }

@@ -4694,7 +4694,8 @@ function AnalogTimePicker({ value, label, onChange, onClose }: { value: string; 
         <div><button type="button" className={period === 'AM' ? 'active' : ''} onClick={() => setPeriod('AM')}>AM</button><button type="button" className={period === 'PM' ? 'active' : ''} onClick={() => setPeriod('PM')}>PM</button></div>
       </div>
       <div ref={faceRef} className="analog-clock-face" onPointerDown={(event) => { event.currentTarget.setPointerCapture(event.pointerId); selectFromPointer(event.clientX, event.clientY); }} onPointerMove={(event) => { if (event.currentTarget.hasPointerCapture(event.pointerId)) selectFromPointer(event.clientX, event.clientY); }}>
-        {(phase === 'hour' ? Array.from({ length: 12 }, (_, index) => index + 1) : Array.from({ length: 12 }, (_, index) => index * 5)).map((number, index) => <span key={number} style={{ transform: `rotate(${index * 30}deg) translateY(-92px) rotate(${-index * 30}deg)` }}>{String(number).padStart(phase === 'minute' ? 2 : 1, '0')}</span>)}
+        {/* Las etiquetas comienzan en 12 para coincidir con la geometria usada al leer la manecilla. */}
+        {(phase === 'hour' ? [12, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11] : Array.from({ length: 12 }, (_, index) => index * 5)).map((number, index) => <span key={number} style={{ transform: `rotate(${index * 30}deg) translateY(-92px) rotate(${-index * 30}deg)` }}>{String(number).padStart(phase === 'minute' ? 2 : 1, '0')}</span>)}
         <i className="analog-clock-hand" style={{ transform: `translateX(-50%) rotate(${handAngle}deg)` }}/><b/>
       </div>
       <footer><button type="button" className="secondary-button" onClick={() => setPhase(phase === 'hour' ? 'minute' : 'hour')}>{phase === 'hour' ? 'Elegir minutos' : 'Elegir hora'}</button><button type="button" className="primary-button" onClick={confirm}>Aceptar</button></footer>
@@ -4823,8 +4824,7 @@ function TransfersScreen({ currentUser }: { currentUser: AuthUser }) {
       </div>
       <PeriodFilterControl value={periodFilter} onChange={setPeriodFilter} includeDates />
       <div className="table-toolbar"><label className="search-box"><Search size={17}/><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Buscar transferencias"/></label>
-        <div className="table-toolbar-controls"><label className="switch-control switch-control--small"><input type="checkbox" checked={showInactive} onChange={(event) => setShowInactive(event.target.checked)}/><span/>Mostrar inactivos</label>
-          <label className="page-size-control">Registros<select value={pageSize} onChange={(event) => setPageSize(Number(event.target.value))}>{[10,20,30,50].map((size)=><option key={size}>{size}</option>)}</select></label></div>
+        <div className="table-toolbar-controls"><label className="switch-control switch-control--small"><input type="checkbox" checked={showInactive} onChange={(event) => setShowInactive(event.target.checked)}/><span/>Mostrar inactivos</label></div>
       </div>
       {error && <p className="pending-screen-message transfer-error" role="alert">{error}</p>}
       <div className="table-wrap"><table className="transfer-table"><thead><tr><th className="number-column"><div className="th-stack"><span>N°</span></div></th>{transferHeader('id','ID')}{isBoss && transferHeader('fecha','FECHA')}{transferHeader('tipo','TIPO')}<th><div className="th-stack"><span>BANCO / CUENTA</span></div></th>{transferHeader('monto','MONTO')}<th><div className="th-stack"><span>ACCIONES</span></div></th></tr></thead>
@@ -4835,7 +4835,7 @@ function TransfersScreen({ currentUser }: { currentUser: AuthUser }) {
           <td><span className={`transaction-amount transaction-amount--${row.direccion === 'SALE' ? 'out' : 'in'}`}>{row.direccion === 'SALE' ? <ArrowUpRight size={16}/> : <ArrowDownLeft size={16}/>} {formatCashCountMoney(Number(row.monto), row.moneda)}</span></td>
           <td><div className="row-actions"><button className="icon-action" type="button" title="Editar" disabled={!isBoss && !(row.tipo==='EFECTIVO'&&row.direccion==='SALE'&&row.estado==='ACTIVO')} onClick={(event)=>{event.stopPropagation();void openDetail(row,'edit')}}><Edit3 size={16}/></button><button className="icon-action" type="button" title="Anular" disabled={row.estado !== 'ACTIVO'||(!isBoss&&!(row.tipo==='EFECTIVO'&&row.direccion==='SALE'))} onClick={(event)=>{event.stopPropagation();void voidTransfer(row)}}><Ban size={16}/></button></div></td>
         </tr>)}</tbody></table></div>
-      <div className="pagination-bar"><span>Mostrando {pageRows.length} de {filtered.length} registros</span><div className="action-row"><button className="icon-button" type="button" disabled={page===1} onClick={()=>setPage(1)}><ChevronsLeft size={17}/></button><button className="icon-button" type="button" disabled={page===1} onClick={()=>setPage((value)=>Math.max(1,value-1))}><ChevronLeft size={17}/></button><span>Pagina {page} de {pages}</span><button className="icon-button" type="button" disabled={page===pages} onClick={()=>setPage((value)=>Math.min(pages,value+1))}><ChevronRight size={17}/></button><button className="icon-button" type="button" disabled={page===pages} onClick={()=>setPage(pages)}><ChevronsRight size={17}/></button></div></div>
+      <div className="pagination-bar"><span>Mostrando {pageRows.length} de {filtered.length} registros</span><div className="action-row"><label className="page-size-control page-size-control--pagination">Registros<select value={pageSize} onChange={(event) => setPageSize(Number(event.target.value))}>{[10,20,30,50].map((size)=><option key={size}>{size}</option>)}</select></label><button className="icon-button" type="button" disabled={page===1} onClick={()=>setPage(1)}><ChevronsLeft size={17}/></button><button className="icon-button" type="button" disabled={page===1} onClick={()=>setPage((value)=>Math.max(1,value-1))}><ChevronLeft size={17}/></button><span>Pagina {page} de {pages}</span><button className="icon-button" type="button" disabled={page===pages} onClick={()=>setPage((value)=>Math.min(pages,value+1))}><ChevronRight size={17}/></button><button className="icon-button" type="button" disabled={page===pages} onClick={()=>setPage(pages)}><ChevronsRight size={17}/></button></div></div>
     </article>
     {modal && <TransferModal mode={modal.mode} row={modal.row} context={context} isBoss={isBoss} onClose={()=>setModal(null)} onSaved={async()=>{setModal(null);await reload();announceOperationalDataChange()}} onEdit={modal.mode==='view'?()=>setModal({mode:'edit',row:modal.row}):undefined}/>} </section>
   );
@@ -4983,7 +4983,7 @@ function DirectoryScreen({ currentUser }: { currentUser: AuthUser }) {
 
   return <section className="screen-stack"><article className="panel">
     <div className="panel__header table-panel-header"><div><p>Cuentas, contratos, cedulas y referencias frecuentes</p><h2>Directorio</h2></div>{isBoss && <button type="button" className="primary-button" onClick={() => setModal({ mode: 'create' })}><Plus size={17}/>Agregar</button>}</div>
-    <div className="table-toolbar"><label className="search-box"><Search size={17}/><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Buscar nombre, numero, cedula o referencia"/></label><div className="table-toolbar-controls"><label className="switch-control switch-control--small"><input type="checkbox" checked={showInactive} onChange={(event) => setShowInactive(event.target.checked)}/><span/>Mostrar inactivos</label><label className="page-size-control">Registros<select value={pageSize} onChange={(event) => setPageSize(Number(event.target.value))}>{[10,20,30,50,100].map((size)=><option key={size}>{size}</option>)}</select></label></div></div>
+    <div className="table-toolbar"><label className="search-box"><Search size={17}/><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Buscar nombre, numero, cedula o referencia"/></label><div className="table-toolbar-controls"><label className="switch-control switch-control--small"><input type="checkbox" checked={showInactive} onChange={(event) => setShowInactive(event.target.checked)}/><span/>Mostrar inactivos</label></div></div>
     {error && <p className="transaction-save-error" role="alert">{error}</p>}
     <div className="table-wrap"><table className="directory-table"><thead><tr><th className="number-column"><div className="th-stack"><span>N°</span></div></th>{header('id','ID')}{header('name','NOMBRE')}{header('type','TIPO')}{header('number','NUMERO')}{header('currency','MONEDA')}{header('identity','CEDULA')}{header('reference','REFERENCIA')}<th><div className="th-stack"><span>ACCIONES</span></div></th></tr></thead><tbody>
       {pageRows.map((row,index)=><tr key={row.database_id} className={`${row.status === 'INACTIVO' ? 'inactive-row' : ''} ${selected === row.database_id ? 'selected-row' : ''}`} onClick={()=>setSelected(row.database_id)} onDoubleClick={()=>void openDetail(row,'view')}>
@@ -4997,7 +4997,7 @@ function DirectoryScreen({ currentUser }: { currentUser: AuthUser }) {
       </tr>)}
       {!pageRows.length && <tr><td colSpan={9} className="empty-table-cell">No hay registros que coincidan con la busqueda.</td></tr>}
     </tbody></table></div>
-    <div className="pagination-bar"><span>Mostrando {pageRows.length} de {processed.length} registros</span><div className="action-row"><button type="button" className="icon-button" disabled={page===1} onClick={()=>setPage(1)}><ChevronsLeft size={17}/></button><button type="button" className="icon-button" disabled={page===1} onClick={()=>setPage((value)=>Math.max(1,value-1))}><ChevronLeft size={17}/></button><span>Pagina {page} de {totalPages}</span><button type="button" className="icon-button" disabled={page===totalPages} onClick={()=>setPage((value)=>Math.min(totalPages,value+1))}><ChevronRight size={17}/></button><button type="button" className="icon-button" disabled={page===totalPages} onClick={()=>setPage(totalPages)}><ChevronsRight size={17}/></button></div></div>
+    <div className="pagination-bar"><span>Mostrando {pageRows.length} de {processed.length} registros</span><div className="action-row"><label className="page-size-control page-size-control--pagination">Registros<select value={pageSize} onChange={(event) => setPageSize(Number(event.target.value))}>{[10,20,30,50,100].map((size)=><option key={size}>{size}</option>)}</select></label><button type="button" className="icon-button" disabled={page===1} onClick={()=>setPage(1)}><ChevronsLeft size={17}/></button><button type="button" className="icon-button" disabled={page===1} onClick={()=>setPage((value)=>Math.max(1,value-1))}><ChevronLeft size={17}/></button><span>Pagina {page} de {totalPages}</span><button type="button" className="icon-button" disabled={page===totalPages} onClick={()=>setPage((value)=>Math.min(totalPages,value+1))}><ChevronRight size={17}/></button><button type="button" className="icon-button" disabled={page===totalPages} onClick={()=>setPage(totalPages)}><ChevronsRight size={17}/></button></div></div>
   </article>{modal && <DirectoryModal mode={modal.mode} row={modal.row} onClose={()=>setModal(null)} onEdit={modal.mode==='view'&&isBoss?()=>setModal({...modal,mode:'edit'}):undefined} onSaved={async()=>{setModal(null);await reload();announceOperationalDataChange()}}/>}</section>;
 }
 
@@ -6608,16 +6608,6 @@ function ShiftTable({
               <span />
               Mostrar inactivos
             </label>
-            <label className="page-size-control">
-              Registros
-              <select value={pageSize} onChange={(event) => setPageSize(Number(event.target.value))}>
-                {[10, 20, 30, 50, 100].map((size) => (
-                  <option key={size} value={size}>
-                    {size}
-                  </option>
-                ))}
-              </select>
-            </label>
           </div>
         </div>
 
@@ -6717,6 +6707,12 @@ function ShiftTable({
             Mostrando {pageRows.length} de {processedRows.length} registros
           </span>
           <div className="action-row">
+            <label className="page-size-control page-size-control--pagination">
+              Registros
+              <select value={pageSize} onChange={(event) => setPageSize(Number(event.target.value))}>
+                {[10, 20, 30, 50, 100].map((size) => <option key={size} value={size}>{size}</option>)}
+              </select>
+            </label>
             <button type="button" className="icon-button" onClick={() => setPage(1)} disabled={page === 1}>
               <ChevronsLeft size={17} />
             </button>
@@ -7876,16 +7872,6 @@ function TransactionTable({ config, currentUser }: { config: CrudConfig; current
               <span />
               Mostrar inactivos
             </label>
-            <label className="page-size-control">
-              Registros
-              <select value={pageSize} onChange={(event) => setPageSize(Number(event.target.value))}>
-                {[10, 20, 30, 50, 100].map((size) => (
-                  <option key={size} value={size}>
-                    {size}
-                  </option>
-                ))}
-              </select>
-            </label>
           </div>
         </div>
 
@@ -7985,6 +7971,12 @@ function TransactionTable({ config, currentUser }: { config: CrudConfig; current
             Mostrando {pageRows.length} de {processedRows.length} registros
           </span>
           <div className="action-row">
+            <label className="page-size-control page-size-control--pagination">
+              Registros
+              <select value={pageSize} onChange={(event) => setPageSize(Number(event.target.value))}>
+                {[10, 20, 30, 50, 100].map((size) => <option key={size} value={size}>{size}</option>)}
+              </select>
+            </label>
             <button type="button" className="icon-button" onClick={() => setPage(1)} disabled={page === 1}>
               <ChevronsLeft size={17} />
             </button>
@@ -9484,16 +9476,6 @@ function CrudTable({
             <span />
             Mostrar inactivos
           </label>
-          <label className="page-size-control">
-            Registros
-            <select value={pageSize} onChange={(event) => setPageSize(Number(event.target.value))}>
-              {[10, 20, 30, 50, 100].map((size) => (
-                <option key={size} value={size}>
-                  {size}
-                </option>
-              ))}
-            </select>
-          </label>
         </div>
       </div>
 
@@ -9609,6 +9591,12 @@ function CrudTable({
           Mostrando {pageRows.length} de {processedRows.length} registros
         </span>
         <div className="action-row">
+          <label className="page-size-control page-size-control--pagination">
+            Registros
+            <select value={pageSize} onChange={(event) => setPageSize(Number(event.target.value))}>
+              {[10, 20, 30, 50, 100].map((size) => <option key={size} value={size}>{size}</option>)}
+            </select>
+          </label>
           <button type="button" className="icon-button" onClick={() => setPage(1)} disabled={page === 1}>
             <ChevronsLeft size={17} />
           </button>
