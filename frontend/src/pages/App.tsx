@@ -16,6 +16,7 @@ import {
   Calculator,
   Camera,
   CalendarDays,
+  Clock3,
   CheckCircle2,
   ChevronDown,
   ChevronLeft,
@@ -78,6 +79,7 @@ type ScreenId =
 type InputKind = 'text' | 'select' | 'multiselect' | 'textarea' | 'password';
 type SortDirection = 'asc' | 'desc' | null;
 type StatusFilter = 'all' | 'active' | 'inactive';
+type PeriodFilter = { startDate: string; endDate: string; startTime: string; endTime: string };
 type CrudRow = Record<string, string>;
 type CatalogApiRow = Record<string, string | number | null>;
 
@@ -1932,6 +1934,7 @@ function mapApiTransactionRow(row: TransactionApiRow): CrudRow {
     transactionGroupId: row.id_grupo_transacciones,
     transactionGroupOrder: String(row.orden_grupo),
     registeredAt: coerceTransactionDateTime(row.fecha_transaccion),
+    registeredTimestamp: row.fecha_transaccion,
     entity: row.entidad,
     movementCode: row.codigo_movimiento,
     movement: row.movimiento,
@@ -2976,8 +2979,34 @@ function useOperationalRefresh(
   }, [enabled, intervalMs]);
 }
 
+function CashierShiftWaiting({ user, preparedShift, onOpen, onLogout }: { user: AuthUser; preparedShift: ShiftDetail | null; onOpen: () => Promise<void>; onLogout: () => void }) {
+  const [opening, setOpening] = useState(false);
+  const [error, setError] = useState('');
+  async function openPrepared() {
+    setOpening(true);
+    setError('');
+    try { await onOpen(); }
+    catch (openError) { setError(openError instanceof Error ? openError.message : 'No fue posible abrir el turno.'); }
+    finally { setOpening(false); }
+  }
+  return <main className="shift-waiting-screen">
+    <section className="shift-waiting-content">
+      <img src="/LOGO_TEMO.png" alt="TEMO"/>
+      <p>Bienvenido, {user.fullName}</p>
+      <h1>{preparedShift ? 'Tu turno está listo' : 'Sin turno abierto'}</h1>
+      <span>{preparedShift ? `${preparedShift.sucursal} · ${preparedShift.caja}` : 'El Administrador todavía no ha preparado un turno para tu usuario.'}</span>
+      {error && <p className="login-error" role="alert">{error}</p>}
+      <div className="shift-waiting-actions">
+        {preparedShift && <button type="button" className="primary-button" disabled={opening} onClick={() => void openPrepared()}><LogIn size={18}/>{opening ? 'Abriendo...' : 'Abrir turno'}</button>}
+        <button type="button" className="secondary-button" onClick={onLogout}><LogOut size={18}/>Cerrar sesión</button>
+      </div>
+    </section>
+  </main>;
+}
+
 export function App() {
   const [currentUser, setCurrentUser] = useState<AuthUser | null>(() => readAuthenticatedUser());
+  const [cashierShiftAccess, setCashierShiftAccess] = useState<{ loaded: boolean; active: ShiftDetail | null; prepared: ShiftDetail | null }>({ loaded: false, active: null, prepared: null });
   const [activeScreen, setActiveScreen] = useState<ScreenId>(getScreenFromHash);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
@@ -2993,6 +3022,29 @@ export function App() {
   const [, setCatalogRevision] = useState(0);
   const profileMenuRef = useRef<HTMLDivElement>(null);
   const profilePhotoInputRef = useRef<HTMLInputElement>(null);
+
+  // Bloquea la navegacion del cajero hasta que exista o confirme un turno asignado.
+  useEffect(() => {
+    if (currentUser?.roleCode !== 'CAJERO') {
+      setCashierShiftAccess({ loaded: true, active: null, prepared: null });
+      return;
+    }
+    let active = true;
+    const loadShiftAccess = async () => {
+      try {
+        const [current, shifts] = await Promise.all([
+          apiRequest<ShiftDetail | null>('/shifts/current'),
+          apiRequest<ShiftDetail[]>('/shifts'),
+        ]);
+        if (active) setCashierShiftAccess({ loaded: true, active: current, prepared: shifts.find((shift) => shift.estado === 'PENDIENTE_APERTURA') ?? null });
+      } catch {
+        if (active) setCashierShiftAccess({ loaded: true, active: null, prepared: null });
+      }
+    };
+    void loadShiftAccess();
+    const timer = window.setInterval(() => void loadShiftAccess(), 5000);
+    return () => { active = false; window.clearInterval(timer); };
+  }, [currentUser?.id, currentUser?.roleCode]);
 
   // Cierra el menu de usuario al hacer clic fuera o presionar Escape.
   useEffect(() => {
@@ -3289,6 +3341,22 @@ export function App() {
 
   if (currentUser.mustChangePassword) {
     return <ChangePasswordScreen user={currentUser} onChanged={completeLogin} onCancel={closeSession} />;
+  }
+
+  if (currentUser.roleCode === 'CAJERO' && (!cashierShiftAccess.loaded || !cashierShiftAccess.active)) {
+    return <CashierShiftWaiting
+      user={currentUser}
+      preparedShift={cashierShiftAccess.prepared}
+      onLogout={closeSession}
+      onOpen={async () => {
+        if (!cashierShiftAccess.prepared) return;
+        const opened = await apiRequest<ShiftDetail>(`/shifts/${cashierShiftAccess.prepared.database_id}/open-prepared`, { method: 'POST' });
+        setCashierShiftAccess({ loaded: true, active: opened, prepared: null });
+        announceOperationalDataChange();
+        const target = navItems.find((item) => item.id === getDefaultScreen(currentUser));
+        window.location.hash = target?.route ?? '/transacciones';
+      }}
+    />;
   }
 
   return (
@@ -4569,8 +4637,85 @@ function _LegacyCashDenominationTable({
   );
 }
 
+const emptyPeriodFilter: PeriodFilter = { startDate: '', endDate: '', startTime: '', endTime: '' };
+
+// Evalua fecha y hora local del registro contra los limites seleccionados.
+function matchesPeriodFilter(value: string, period: PeriodFilter, includeDates: boolean) {
+  let date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    const localized = value.match(/^(\d{2})\/(\d{2})\/(\d{4})\s+(\d{2}):(\d{2})/);
+    if (localized) date = new Date(Number(localized[3]), Number(localized[2]) - 1, Number(localized[1]), Number(localized[4]), Number(localized[5]));
+  }
+  if (Number.isNaN(date.getTime())) return true;
+  const localDate = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+  const minuteOfDay = date.getHours() * 60 + date.getMinutes();
+  const toMinutes = (time: string) => {
+    const [hours, minutes] = time.split(':').map(Number);
+    return hours * 60 + minutes;
+  };
+  if (includeDates && period.startDate && localDate < period.startDate) return false;
+  if (includeDates && period.endDate && localDate > period.endDate) return false;
+  if (period.startTime && minuteOfDay < toMinutes(period.startTime)) return false;
+  if (period.endTime && minuteOfDay > toMinutes(period.endTime)) return false;
+  return true;
+}
+
+function AnalogTimePicker({ value, label, onChange, onClose }: { value: string; label: string; onChange: (value: string) => void; onClose: () => void }) {
+  const parsedHour = value ? Number(value.split(':')[0]) : 8;
+  const [hour, setHour] = useState(((parsedHour + 11) % 12) + 1);
+  const [minute, setMinute] = useState(value ? Number(value.split(':')[1]) : 0);
+  const [period, setPeriod] = useState<'AM' | 'PM'>(parsedHour >= 12 ? 'PM' : 'AM');
+  const [phase, setPhase] = useState<'hour' | 'minute'>('hour');
+  const faceRef = useRef<HTMLDivElement>(null);
+
+  // Convierte la posicion de la manecilla en una hora o minuto del reloj.
+  function selectFromPointer(clientX: number, clientY: number) {
+    const bounds = faceRef.current?.getBoundingClientRect();
+    if (!bounds) return;
+    const angle = (Math.atan2(clientY - (bounds.top + bounds.height / 2), clientX - (bounds.left + bounds.width / 2)) * 180 / Math.PI + 450) % 360;
+    if (phase === 'hour') setHour(Math.round(angle / 30) % 12 || 12);
+    else setMinute((Math.round(angle / 6) * 5 / 5) % 60);
+  }
+
+  const handAngle = phase === 'hour' ? (hour % 12) * 30 : minute * 6;
+  function confirm() {
+    const hours24 = period === 'AM' ? hour % 12 : (hour % 12) + 12;
+    onChange(`${String(hours24).padStart(2, '0')}:${String(minute).padStart(2, '0')}`);
+    onClose();
+  }
+
+  return <div className="time-picker-backdrop" role="dialog" aria-modal="true" aria-label={label}>
+    <section className="analog-time-picker">
+      <header><div><Clock3 size={19}/><strong>{label}</strong></div><button type="button" className="icon-button" onClick={onClose}><X size={17}/></button></header>
+      <div className="analog-time-picker__display">
+        <button type="button" className={phase === 'hour' ? 'active' : ''} onClick={() => setPhase('hour')}>{String(hour).padStart(2, '0')}</button>
+        <span>:</span>
+        <button type="button" className={phase === 'minute' ? 'active' : ''} onClick={() => setPhase('minute')}>{String(minute).padStart(2, '0')}</button>
+        <div><button type="button" className={period === 'AM' ? 'active' : ''} onClick={() => setPeriod('AM')}>AM</button><button type="button" className={period === 'PM' ? 'active' : ''} onClick={() => setPeriod('PM')}>PM</button></div>
+      </div>
+      <div ref={faceRef} className="analog-clock-face" onPointerDown={(event) => { event.currentTarget.setPointerCapture(event.pointerId); selectFromPointer(event.clientX, event.clientY); }} onPointerMove={(event) => { if (event.currentTarget.hasPointerCapture(event.pointerId)) selectFromPointer(event.clientX, event.clientY); }}>
+        {(phase === 'hour' ? Array.from({ length: 12 }, (_, index) => index + 1) : Array.from({ length: 12 }, (_, index) => index * 5)).map((number, index) => <span key={number} style={{ transform: `rotate(${index * 30}deg) translateY(-92px) rotate(${-index * 30}deg)` }}>{String(number).padStart(phase === 'minute' ? 2 : 1, '0')}</span>)}
+        <i className="analog-clock-hand" style={{ transform: `translateX(-50%) rotate(${handAngle}deg)` }}/><b/>
+      </div>
+      <footer><button type="button" className="secondary-button" onClick={() => setPhase(phase === 'hour' ? 'minute' : 'hour')}>{phase === 'hour' ? 'Elegir minutos' : 'Elegir hora'}</button><button type="button" className="primary-button" onClick={confirm}>Aceptar</button></footer>
+    </section>
+  </div>;
+}
+
+function PeriodFilterControl({ value, onChange, includeDates }: { value: PeriodFilter; onChange: (value: PeriodFilter) => void; includeDates: boolean }) {
+  const [clockField, setClockField] = useState<'startTime' | 'endTime' | null>(null);
+  const active = Object.values(value).some(Boolean);
+  return <div className="period-filter" aria-label="Filtro por periodo">
+    {includeDates && <><label><span>Desde</span><input type="date" value={value.startDate} onChange={(event) => onChange({ ...value, startDate: event.target.value })}/></label><label><span>Hasta</span><input type="date" value={value.endDate} min={value.startDate} onChange={(event) => onChange({ ...value, endDate: event.target.value })}/></label></>}
+    <button type="button" className="period-filter__time" onClick={() => setClockField('startTime')}><Clock3 size={16}/><span>Hora inicial</span><strong>{value.startTime || '--:--'}</strong></button>
+    <button type="button" className="period-filter__time" onClick={() => setClockField('endTime')}><Clock3 size={16}/><span>Hora final</span><strong>{value.endTime || '--:--'}</strong></button>
+    {active && <button type="button" className="icon-button" title="Limpiar periodo" onClick={() => onChange(emptyPeriodFilter)}><X size={16}/></button>}
+    {clockField && <AnalogTimePicker label={clockField === 'startTime' ? 'Hora inicial' : 'Hora final'} value={value[clockField]} onChange={(time) => onChange({ ...value, [clockField]: time })} onClose={() => setClockField(null)}/>}
+  </div>;
+}
+
 function TransfersScreen({ currentUser }: { currentUser: AuthUser }) {
-  const isBoss = currentUser.roleCode === 'JEFA';
+  const isBoss = ['JEFA', 'TRANSFERISTA'].includes(currentUser.roleCode);
   const [rows, setRows] = useState<TransferApiRow[]>([]);
   const [context, setContext] = useState<TransferContext>({ shifts: [], accounts: [] });
   const [query, setQuery] = useState('');
@@ -4583,6 +4728,7 @@ function TransfersScreen({ currentUser }: { currentUser: AuthUser }) {
   const [selected, setSelected] = useState<string | null>(null);
   const [modal, setModal] = useState<{ mode: ModalMode; row?: TransferApiRow } | null>(null);
   const [error, setError] = useState('');
+  const [periodFilter, setPeriodFilter] = useState<PeriodFilter>(emptyPeriodFilter);
 
   async function reload() {
     const [loadedRows, loadedContext] = await Promise.all([
@@ -4603,7 +4749,7 @@ function TransfersScreen({ currentUser }: { currentUser: AuthUser }) {
       const matchesColumns = Object.entries(filters).every(([key, filter]) =>
         !filter || getTransferColumnValue(row, key).toLowerCase().includes(filter.toLowerCase()),
       );
-      return matchesGeneral && matchesColumns;
+      return matchesGeneral && matchesColumns && matchesPeriodFilter(row.fecha_transferencia, periodFilter, true);
     });
     return [...result].sort((first, second) => {
       const firstValue = sortKey === 'fecha' ? new Date(first.fecha_transferencia).getTime() : sortKey === 'monto' ? Number(first.monto) : getTransferColumnValue(first, sortKey).toLowerCase();
@@ -4611,7 +4757,7 @@ function TransfersScreen({ currentUser }: { currentUser: AuthUser }) {
       const comparison = firstValue < secondValue ? -1 : firstValue > secondValue ? 1 : 0;
       return sortDirection === 'asc' ? comparison : -comparison;
     });
-  }, [filters, query, rows, showInactive, sortDirection, sortKey]);
+  }, [filters, periodFilter, query, rows, showInactive, sortDirection, sortKey]);
   const pages = Math.max(1, Math.ceil(filtered.length / pageSize));
   const pageRows = filtered.slice((page - 1) * pageSize, page * pageSize);
   const transferSummary = useMemo(() => {
@@ -4627,7 +4773,7 @@ function TransfersScreen({ currentUser }: { currentUser: AuthUser }) {
     }
     return summary;
   }, [filtered]);
-  useEffect(() => setPage(1), [filters, query, showInactive, pageSize]);
+  useEffect(() => setPage(1), [filters, periodFilter, query, showInactive, pageSize]);
 
   function toggleSort(key: 'id' | 'fecha' | 'tipo' | 'monto') {
     if (sortKey === key) setSortDirection((current) => current === 'desc' ? 'asc' : 'desc');
@@ -4675,6 +4821,7 @@ function TransfersScreen({ currentUser }: { currentUser: AuthUser }) {
           </section>
         ))}
       </div>
+      <PeriodFilterControl value={periodFilter} onChange={setPeriodFilter} includeDates />
       <div className="table-toolbar"><label className="search-box"><Search size={17}/><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Buscar transferencias"/></label>
         <div className="table-toolbar-controls"><label className="switch-control switch-control--small"><input type="checkbox" checked={showInactive} onChange={(event) => setShowInactive(event.target.checked)}/><span/>Mostrar inactivos</label>
           <label className="page-size-control">Registros<select value={pageSize} onChange={(event) => setPageSize(Number(event.target.value))}>{[10,20,30,50].map((size)=><option key={size}>{size}</option>)}</select></label></div>
@@ -4926,6 +5073,7 @@ function PendingScreen({ currentUser }: { currentUser: AuthUser }) {
   } | null>(null);
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
+  const [periodFilter, setPeriodFilter] = useState<PeriodFilter>(emptyPeriodFilter);
   const isBoss = currentUser.roleCode === 'JEFA';
 
   const columns = useMemo(() => [
@@ -4970,6 +5118,7 @@ function PendingScreen({ currentUser }: { currentUser: AuthUser }) {
       if (!showPaid && ['PAGADO', 'CANCELADO'].includes(row.estado)) {
         return false;
       }
+      if (isBoss && !matchesPeriodFilter(row.fecha_creacion, periodFilter, true)) return false;
       if (normalizedQuery && !Object.values(row).some((value) => normalizeLookupValue(String(value)).includes(normalizedQuery))) {
         return false;
       }
@@ -4990,7 +5139,7 @@ function PendingScreen({ currentUser }: { currentUser: AuthUser }) {
       const comparison = firstValue.localeCompare(secondValue, 'es', { numeric: true });
       return sortDirection === 'asc' ? comparison : -comparison;
     });
-  }, [columns, filters, query, rows, showPaid, sortDirection, sortKey]);
+  }, [columns, filters, isBoss, periodFilter, query, rows, showPaid, sortDirection, sortKey]);
 
   const totalPages = Math.max(1, Math.ceil(processedRows.length / pageSize));
   const pageRows = processedRows.slice((page - 1) * pageSize, page * pageSize);
@@ -5010,7 +5159,7 @@ function PendingScreen({ currentUser }: { currentUser: AuthUser }) {
 
   useEffect(() => {
     setPage(1);
-  }, [filters, pageSize, query, showPaid]);
+  }, [filters, pageSize, periodFilter, query, showPaid]);
 
   useEffect(() => {
     if (page > totalPages) {
@@ -5307,6 +5456,7 @@ function PendingScreen({ currentUser }: { currentUser: AuthUser }) {
           </section>
         </div>
 
+        {isBoss && <PeriodFilterControl value={periodFilter} onChange={setPeriodFilter} includeDates />}
         <div className="table-toolbar">
           <label className="search-box">
             <Search size={17} />
@@ -7336,6 +7486,7 @@ function TransactionTable({ config, currentUser }: { config: CrudConfig; current
   const [showDirectoryLookup, setShowDirectoryLookup] = useState(false);
   const [isSavingTransactions, setIsSavingTransactions] = useState(false);
   const [transactionSaveError, setTransactionSaveError] = useState('');
+  const [periodFilter, setPeriodFilter] = useState<PeriodFilter>(emptyPeriodFilter);
   const isBoss = currentUser.roleCode === 'JEFA';
   const columns = useMemo(
     () => getVisibleColumns(config).filter((column) => isBoss || column.key !== 'operatorBranch'),
@@ -7399,6 +7550,7 @@ function TransactionTable({ config, currentUser }: { config: CrudConfig; current
     const filtered = normalizedRows.filter((row) => {
       const matchesInactive = showInactive || !isInactive(row);
       const matchesCurrency = !currencyFilter || row.currency === currencyFilter;
+      const matchesPeriod = matchesPeriodFilter(row.registeredTimestamp || row.registeredAt, periodFilter, isBoss);
       const matchesQuery =
         !normalizedQuery ||
         Object.values(row).some((value) => String(value).toLowerCase().includes(normalizedQuery));
@@ -7407,7 +7559,7 @@ function TransactionTable({ config, currentUser }: { config: CrudConfig; current
         const cellValue = column ? getCellValue(row, column) : row[key] ?? '';
         return !value || String(cellValue).toLowerCase().includes(value.toLowerCase());
       });
-      return matchesInactive && matchesCurrency && matchesQuery && matchesColumnFilters;
+      return matchesInactive && matchesCurrency && matchesPeriod && matchesQuery && matchesColumnFilters;
     });
 
     if (!sortKey || !sortDirection) {
@@ -7420,7 +7572,7 @@ function TransactionTable({ config, currentUser }: { config: CrudConfig; current
       const second = String(column ? getCellValue(b, column) : b[sortKey] ?? '').toLowerCase();
       return sortDirection === 'asc' ? first.localeCompare(second) : second.localeCompare(first);
     });
-  }, [columns, currencyFilter, filters, normalizedRows, query, showInactive, sortDirection, sortKey]);
+  }, [columns, currencyFilter, filters, isBoss, normalizedRows, periodFilter, query, showInactive, sortDirection, sortKey]);
 
   const totalPages = Math.max(1, Math.ceil(processedRows.length / pageSize));
   const pageRows = processedRows.slice((page - 1) * pageSize, page * pageSize);
@@ -7712,6 +7864,7 @@ function TransactionTable({ config, currentUser }: { config: CrudConfig; current
           </div>
         </div>
 
+        <PeriodFilterControl value={periodFilter} onChange={setPeriodFilter} includeDates={isBoss} />
         <div className="table-toolbar">
           <label className="search-box">
             <Search size={17} />

@@ -459,7 +459,36 @@ export class ShiftsService {
          where sc.estado = 'PENDIENTE'
          order by sc.fecha_solicitud`,
       );
-      return result.rows;
+      const transferNotifications = await this.db.query(
+        `select
+           n.id_notificacion as id,
+           'TRANSFER_RECORDED' as kind,
+           n.id_turno as shift_id,
+           concat('TUR-', upper(substr(replace(t.id_turno::text, '-', ''), 1, 8))) as shift_code,
+           u.nombre_completo as cashier,
+           s.nombre as branch,
+           c.nombre as register,
+           n.fecha_creacion as created_at,
+           n.mensaje as observations,
+           tr.monto as amount,
+           m.codigo as currency,
+           tr.tipo::text as transfer_type,
+           tr.direccion::text as transfer_direction
+         from temo.notificaciones_usuarios n
+         join temo.transferencias tr on tr.id_transferencia = n.id_transferencia
+         join temo.monedas m on m.id_moneda = tr.id_moneda
+         join temo.turnos t on t.id_turno = n.id_turno
+         join temo.usuarios u on u.id_usuario = t.id_cajero
+         join temo.sucursales s on s.id_sucursal = t.id_sucursal
+         join temo.cajas c on c.id_caja = t.id_caja
+         where n.id_usuario_destino = $1
+           and n.tipo = 'TRANSFERENCIA_REGISTRADA'
+           and n.fecha_lectura is null`,
+        [user.id],
+      );
+      return [...result.rows, ...transferNotifications.rows].sort(
+        (first, second) => new Date(String(first.created_at)).getTime() - new Date(String(second.created_at)).getTime(),
+      );
     }
 
     const result = await this.db.query(

@@ -27,16 +27,18 @@ export class TransfersService {
   constructor(private readonly db: DatabaseService) {}
 
   async list(user: AuthenticatedUser) {
+    const canManageAnyShift = this.canManageAnyShift(user);
     const result = await this.db.query(
       `${this.selectTransfer()}
-       where ($1 = 'JEFA' or (t.id_cajero = $2 and t.estado in ('ABIERTO', 'PENDIENTE_APROBACION')))
+       where ($1::boolean or (t.id_cajero = $2 and t.estado in ('ABIERTO', 'PENDIENTE_APROBACION')))
        order by tr.fecha_transferencia desc`,
-      [user.roleCode, user.id],
+      [canManageAnyShift, user.id],
     );
     return result.rows;
   }
 
   async context(user: AuthenticatedUser) {
+    const canManageAnyShift = this.canManageAnyShift(user);
     const shifts = await this.db.query(
       `select t.id_turno as id, t.id_sucursal as branch_id, concat('TUR-', upper(substr(replace(t.id_turno::text, '-', ''), 1, 8))) as code,
               u.nombre_completo as cashier, s.nombre as branch, c.nombre as register
@@ -45,9 +47,9 @@ export class TransfersService {
        join temo.sucursales s on s.id_sucursal = t.id_sucursal
        join temo.cajas c on c.id_caja = t.id_caja
        where t.estado in ('ABIERTO', 'PENDIENTE_APROBACION')
-         and ($1 = 'JEFA' or t.id_cajero = $2)
+         and ($1::boolean or t.id_cajero = $2)
        order by t.fecha_apertura desc`,
-      [user.roleCode, user.id],
+      [canManageAnyShift, user.id],
     );
     const accounts = await this.db.query(
       `select cb.id_cuenta as id, cb.alias, m.codigo as currency, e.nombre_corto as entity, cs.id_sucursal as branch_id
@@ -161,7 +163,7 @@ export class TransfersService {
     const result = await client.query<TransferRow>(`${this.selectTransfer()} where tr.id_transferencia=$1`, [id]);
     const row = result.rows[0];
     if (!row) throw new NotFoundException('La transferencia no existe.');
-    if (user.roleCode !== 'JEFA' && (row.id_cajero !== user.id || !['ABIERTO','PENDIENTE_APROBACION'].includes(row.estado_turno))) {
+    if (!this.canManageAnyShift(user) && (row.id_cajero !== user.id || !['ABIERTO','PENDIENTE_APROBACION'].includes(row.estado_turno))) {
       throw new ForbiddenException('No tiene acceso a esta transferencia.');
     }
     return row;
@@ -176,20 +178,20 @@ export class TransfersService {
     );
     const shift = result.rows[0];
     if (!shift) throw new BadRequestException('No existe un turno disponible para la transferencia.');
-    if (user.roleCode !== 'JEFA' && shift.id_cajero !== user.id) throw new ForbiddenException('El turno no pertenece al cajero autenticado.');
+    if (!this.canManageAnyShift(user) && shift.id_cajero !== user.id) throw new ForbiddenException('El turno no pertenece al cajero autenticado.');
     if (!allowClosed && !['ABIERTO','PENDIENTE_APROBACION'].includes(shift.estado)) throw new BadRequestException('El turno seleccionado no esta abierto.');
     return shift;
   }
 
   private assertWritable(input: TransferInput, shift: Record<string,string>, user: AuthenticatedUser) {
-    if (user.roleCode !== 'JEFA' && (input.type !== 'EFECTIVO' || input.direction !== 'EGRESO')) {
+    if (!this.canManageAnyShift(user) && (input.type !== 'EFECTIVO' || input.direction !== 'EGRESO')) {
       throw new ForbiddenException('El cajero solo puede registrar egresos de efectivo en su turno abierto.');
     }
-    if (user.roleCode !== 'JEFA' && !['ABIERTO','PENDIENTE_APROBACION'].includes(shift.estado)) throw new ForbiddenException('El turno no esta abierto.');
+    if (!this.canManageAnyShift(user) && !['ABIERTO','PENDIENTE_APROBACION'].includes(shift.estado)) throw new ForbiddenException('El turno no esta abierto.');
   }
 
   private assertEditable(row: TransferRow, user: AuthenticatedUser) {
-    if (user.roleCode !== 'JEFA' && (row.tipo !== 'EFECTIVO' || row.direccion !== 'SALE' || row.id_cajero !== user.id || !['ABIERTO','PENDIENTE_APROBACION'].includes(row.estado_turno))) {
+    if (!this.canManageAnyShift(user) && (row.tipo !== 'EFECTIVO' || row.direccion !== 'SALE' || row.id_cajero !== user.id || !['ABIERTO','PENDIENTE_APROBACION'].includes(row.estado_turno))) {
       throw new ForbiddenException('Solo puede modificar egresos de efectivo de su turno abierto.');
     }
   }
@@ -242,7 +244,7 @@ export class TransfersService {
     }
   }
 
-  // Avisa al cajero cuando otro usuario modifica su efectivo o saldo digital mediante una transferencia.
+  // Avisa al cajero afectado y a los Administradores activos sin duplicar al usuario que registra.
   private async notifyAffectedCashier(
     client: PoolClient,
     transferId: string,
@@ -251,23 +253,37 @@ export class TransfersService {
     description: string,
     user: AuthenticatedUser,
   ) {
-    if (shift.id_cajero === user.id) return;
     const medium = transfer.type === 'EFECTIVO' ? 'efectivo' : 'digital';
     const direction = transfer.direction === 'ENTRA' ? 'ingreso' : 'egreso';
     const detail = description.trim() || 'Sin descripcion adicional.';
     await client.query(
       `insert into temo.notificaciones_usuarios (
          id_usuario_destino, tipo, titulo, mensaje, id_transferencia, id_turno, id_usuario_origen
-       ) values ($1, 'TRANSFERENCIA_REGISTRADA', $2, $3, $4, $5, $6)`,
+       )
+       select recipients.id_usuario, 'TRANSFERENCIA_REGISTRADA', $1, $2, $3, $4, $5
+       from (
+         select $6::uuid as id_usuario
+         union
+         select u.id_usuario
+         from temo.usuarios u
+         join temo.roles r on r.id_rol = u.id_rol
+         where r.codigo = 'JEFA' and u.estado = 'ACTIVO'
+       ) recipients
+       where recipients.id_usuario is not null and recipients.id_usuario <> $5`,
       [
-        shift.id_cajero,
-        'Transferencia aplicada a tu turno',
+        'Transferencia aplicada a un turno',
         `Se registro una transferencia de ${medium} de ${direction}. ${detail}`,
         transferId,
         shift.id_turno,
         user.id,
+        shift.id_cajero,
       ],
     );
+  }
+
+  // Administrador y Operador de transferencias trabajan sobre cualquier turno activo.
+  private canManageAnyShift(user: AuthenticatedUser) {
+    return ['JEFA', 'TRANSFERISTA'].includes(user.roleCode);
   }
 
   private async adjustCurrentCash(client: PoolClient, shift: Record<string,string>, currencyId: string, lines: Array<{denomination:number;piles25:number;loose:number}>, sign: number) {
