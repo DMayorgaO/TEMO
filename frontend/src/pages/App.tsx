@@ -330,6 +330,7 @@ type TransferApiRow = {
   database_id: string; id: string; id_turno: string; fecha_transferencia: string;
   tipo: 'EFECTIVO' | 'CUENTA_BANCARIA'; direccion: 'ENTRA' | 'SALE'; moneda: CashCurrency;
   monto: string; descripcion: string; estado: 'ACTIVO' | 'INACTIVO'; id_cuenta: string | null; cuenta: string | null;
+  entidad: string | null;
   cajero: string; sucursal: string; caja: string; cashLines?: TransactionCashCountApiLine[];
 };
 type TransferContext = {
@@ -4587,7 +4588,7 @@ function TransfersScreen({ currentUser }: { currentUser: AuthUser }) {
     const result = rows.filter((row) => {
       if (!showInactive && row.estado !== 'ACTIVO') return false;
       const value = query.trim().toLowerCase();
-      const matchesGeneral = !value || [row.id, row.tipo, row.direccion, row.moneda, row.monto, row.cuenta, row.cajero, row.sucursal].some((item) => String(item ?? '').toLowerCase().includes(value));
+      const matchesGeneral = !value || [row.id, row.tipo, row.direccion, row.moneda, row.monto, row.entidad, row.cuenta, row.cajero, row.sucursal].some((item) => String(item ?? '').toLowerCase().includes(value));
       const matchesColumns = Object.entries(filters).every(([key, filter]) =>
         !filter || getTransferColumnValue(row, key).toLowerCase().includes(filter.toLowerCase()),
       );
@@ -4668,10 +4669,11 @@ function TransfersScreen({ currentUser }: { currentUser: AuthUser }) {
           <label className="page-size-control">Registros<select value={pageSize} onChange={(event) => setPageSize(Number(event.target.value))}>{[10,20,30,50].map((size)=><option key={size}>{size}</option>)}</select></label></div>
       </div>
       {error && <p className="pending-screen-message transfer-error" role="alert">{error}</p>}
-      <div className="table-wrap"><table className="transfer-table"><thead><tr><th className="number-column"><div className="th-stack"><span>N°</span></div></th>{transferHeader('id','ID')}{isBoss && transferHeader('fecha','FECHA')}{transferHeader('tipo','TIPO')}{transferHeader('monto','MONTO')}<th><div className="th-stack"><span>ACCIONES</span></div></th></tr></thead>
+      <div className="table-wrap"><table className="transfer-table"><thead><tr><th className="number-column"><div className="th-stack"><span>N°</span></div></th>{transferHeader('id','ID')}{isBoss && transferHeader('fecha','FECHA')}{transferHeader('tipo','TIPO')}<th><div className="th-stack"><span>BANCO / CUENTA</span></div></th>{transferHeader('monto','MONTO')}<th><div className="th-stack"><span>ACCIONES</span></div></th></tr></thead>
         <tbody>{pageRows.map((row,index)=><tr key={row.database_id} className={`${row.estado !== 'ACTIVO' ? 'inactive-row' : ''} ${selected === row.database_id ? 'selected-row' : ''}`} onClick={()=>setSelected(row.database_id)} onDoubleClick={()=>void openDetail(row,'view')}>
           <td>{filtered.length - ((page-1)*pageSize+index)}</td><td>{row.id}</td>{isBoss && <td className="multi-line-cell">{formatTransferDate(row.fecha_transferencia)}</td>}
           <td><strong>{row.tipo === 'EFECTIVO' ? 'Efectivo' : 'Digital'}</strong><small>{row.direccion === 'ENTRA' ? 'Ingreso' : 'Egreso'}{isBoss ? ` · ${row.cajero} / ${row.sucursal}` : ''}</small></td>
+          <td className="multi-line-cell">{row.tipo === 'CUENTA_BANCARIA' ? <><strong>{row.entidad || 'Sin banco'}</strong><small>{row.cuenta || 'Sin cuenta'}</small></> : <span className="muted-copy">—</span>}</td>
           <td><span className={`transaction-amount transaction-amount--${row.direccion === 'SALE' ? 'out' : 'in'}`}>{row.direccion === 'SALE' ? <ArrowUpRight size={16}/> : <ArrowDownLeft size={16}/>} {formatCashCountMoney(Number(row.monto), row.moneda)}</span></td>
           <td><div className="row-actions"><button className="icon-action" type="button" title="Editar" disabled={!isBoss && !(row.tipo==='EFECTIVO'&&row.direccion==='SALE'&&row.estado==='ACTIVO')} onClick={(event)=>{event.stopPropagation();void openDetail(row,'edit')}}><Edit3 size={16}/></button><button className="icon-action" type="button" title="Anular" disabled={row.estado !== 'ACTIVO'||(!isBoss&&!(row.tipo==='EFECTIVO'&&row.direccion==='SALE'))} onClick={(event)=>{event.stopPropagation();void voidTransfer(row)}}><Ban size={16}/></button></div></td>
         </tr>)}</tbody></table></div>
@@ -4686,7 +4688,7 @@ function getTransferColumnValue(row: TransferApiRow, key: string) {
     const date = new Date(row.fecha_transferencia);
     return Number.isNaN(date.getTime()) ? row.fecha_transferencia : `${date.toLocaleDateString('es-NI')} ${date.toLocaleTimeString('es-NI', { hour: '2-digit', minute: '2-digit', hour12: false })}`;
   }
-  if (key === 'tipo') return `${row.tipo === 'EFECTIVO' ? 'Efectivo' : 'Digital'} ${row.direccion === 'ENTRA' ? 'Ingreso' : 'Egreso'} ${row.cajero} ${row.sucursal}`;
+  if (key === 'tipo') return `${row.tipo === 'EFECTIVO' ? 'Efectivo' : 'Digital'} ${row.direccion === 'ENTRA' ? 'Ingreso' : 'Egreso'} ${row.entidad ?? ''} ${row.cuenta ?? ''} ${row.cajero} ${row.sucursal}`;
   if (key === 'monto') return `${row.moneda} ${row.monto} ${formatCashCountMoney(Number(row.monto), row.moneda)}`;
   return String(row[key as keyof TransferApiRow] ?? '');
 }
@@ -5288,15 +5290,15 @@ function PendingScreen({ currentUser }: { currentUser: AuthUser }) {
             <Search size={17} />
             <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Buscar pendientes" />
           </label>
-          <div className="table-toolbar-controls">
-            <button type="button" className="secondary-button" disabled={!selectedPendingIds.length || Boolean(payingId)} onClick={() => void openBatchCashPayment()}>
-              <Banknote size={17} /> Liquidar en efectivo
+          <div className="table-toolbar-controls pending-settlement-actions">
+            <button type="button" className="secondary-button pending-settlement-button" title="Liquidar en efectivo" disabled={!selectedPendingIds.length || Boolean(payingId)} onClick={() => void openBatchCashPayment()}>
+              <Banknote size={17} /> Efectivo
             </button>
-            <button type="button" className="secondary-button" disabled={!selectedPendingIds.length || Boolean(payingId)} onClick={() => void openBatchDigitalPayment('MIXTO')}>
-              <ArrowRightLeft size={17} /> Liquidar combinado
+            <button type="button" className="secondary-button pending-settlement-button" title="Liquidar con efectivo y movimiento digital" disabled={!selectedPendingIds.length || Boolean(payingId)} onClick={() => void openBatchDigitalPayment('MIXTO')}>
+              <ArrowRightLeft size={17} /> Combinado
             </button>
-            <button type="button" className="primary-button" disabled={!selectedPendingIds.length || Boolean(payingId)} onClick={() => void openBatchDigitalPayment('DIGITAL')}>
-              <Landmark size={17} /> Liquidar digital
+            <button type="button" className="primary-button pending-settlement-button" title="Liquidar digitalmente" disabled={!selectedPendingIds.length || Boolean(payingId)} onClick={() => void openBatchDigitalPayment('DIGITAL')}>
+              <Landmark size={17} /> Digital
             </button>
             <label className="switch-control switch-control--small">
               <input checked={showPaid} type="checkbox" onChange={(event) => setShowPaid(event.target.checked)} />

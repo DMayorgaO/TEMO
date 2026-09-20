@@ -4324,6 +4324,17 @@ tbody tr:hover td {
   vertical-align: middle;
 }
 
+/* Compacta las acciones frecuentes sin sacrificar sus etiquetas ni areas de clic. */
+.pending-settlement-actions {
+  gap: 6px;
+}
+
+.pending-settlement-button {
+  min-height: 34px;
+  padding: 7px 10px;
+  white-space: nowrap;
+}
+
 /* Resume los importes visibles antes de los controles de cada tabla operativa. */
 .table-consolidation {
   display: grid;

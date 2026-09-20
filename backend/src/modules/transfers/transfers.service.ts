@@ -147,11 +147,14 @@ export class TransfersService {
       tr.fecha_transferencia, tr.tipo, tr.direccion, m.codigo as moneda, m.simbolo,
       tr.monto, coalesce(tr.descripcion,'') as descripcion, tr.estado,
       coalesce(tr.motivo_anulacion,'') as motivo_anulacion,
-      cb.alias as cuenta, u.nombre_completo as cajero, s.nombre as sucursal, c.nombre as caja
+      eb.nombre_corto as entidad, cb.alias as cuenta,
+      u.nombre_completo as cajero, s.nombre as sucursal, c.nombre as caja
       from temo.transferencias tr join temo.turnos t on t.id_turno=tr.id_turno
       join temo.monedas m on m.id_moneda=tr.id_moneda
       join temo.usuarios u on u.id_usuario=t.id_cajero join temo.sucursales s on s.id_sucursal=t.id_sucursal
-      join temo.cajas c on c.id_caja=t.id_caja left join temo.cuentas_bancarias cb on cb.id_cuenta=tr.id_cuenta`;
+      join temo.cajas c on c.id_caja=t.id_caja
+      left join temo.cuentas_bancarias cb on cb.id_cuenta=tr.id_cuenta
+      left join temo.entidades_bancarias eb on eb.id_entidad=cb.id_entidad`;
   }
 
   private async findAuthorized(id: string, user: AuthenticatedUser, client: Queryable = this.db) {
