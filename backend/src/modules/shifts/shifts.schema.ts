@@ -35,6 +35,7 @@ export const openShiftSchema = z.object({
   notes: z.string().trim().max(2000).default(''),
   counts: cashCountsSchema,
   balances: z.array(bankBalanceSchema).max(100),
+  prepared: z.boolean().optional().default(false),
 });
 
 export const updateShiftSchema = openShiftSchema;

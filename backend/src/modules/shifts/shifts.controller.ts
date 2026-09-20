@@ -51,6 +51,12 @@ export class ShiftsController {
     return this.shifts.create(this.parse(openShiftSchema, body), request.user);
   }
 
+  // El cajero confirma con un solo paso el turno previamente alistado por la Jefa.
+  @Post(':id/open-prepared')
+  openPrepared(@Param('id') id: string, @Req() request: AuthenticatedRequest) {
+    return this.shifts.openPrepared(id, request.user);
+  }
+
   @Put(':id')
   update(
     @Param('id') id: string,

@@ -57,7 +57,7 @@ export class ShiftsService {
     const result = await this.db.query<ShiftRow>(
       `${this.shiftSelect()}
        where ($1 = 'JEFA' or t.id_cajero = $2)
-       order by t.fecha_apertura desc`,
+       order by t.fecha_apertura desc, t.fecha_creacion desc`,
       [user.roleCode, user.id],
     );
     return result.rows;
@@ -120,7 +120,7 @@ export class ShiftsService {
 
       const existing = await client.query(
         `select 1 from temo.turnos
-         where id_cajero = $1 and estado in ('ABIERTO', 'PENDIENTE_APROBACION')`,
+         where id_cajero = $1 and estado in ('PENDIENTE_APERTURA', 'ABIERTO', 'PENDIENTE_APROBACION')`,
         [cashierId],
       );
       if (existing.rowCount) {
@@ -135,7 +135,7 @@ export class ShiftsService {
            and not exists (
              select 1 from temo.turnos t
              where t.id_caja = c.id_caja
-               and t.estado in ('ABIERTO', 'PENDIENTE_APROBACION')
+               and t.estado in ('PENDIENTE_APERTURA', 'ABIERTO', 'PENDIENTE_APROBACION')
            )
          order by
            case when lower(c.nombre) = lower($2) then 0 else 1 end,
@@ -161,8 +161,8 @@ export class ShiftsService {
       const inserted = await client.query<{ id_turno: string } & QueryResultRow>(
         `insert into temo.turnos (
            id_jornada, id_sucursal, id_caja, id_cajero, id_usuario_apertura,
-           efectivo_inicial_nio, efectivo_inicial_usd, observaciones_apertura
-         ) values ($1, $2, $3, $4, $5, $6, $7, nullif($8, ''))
+           efectivo_inicial_nio, efectivo_inicial_usd, observaciones_apertura, estado
+         ) values ($1, $2, $3, $4, $5, $6, $7, nullif($8, ''), $9::temo.estado_turno)
          returning id_turno`,
         [
           workdayResult.rows[0].id_jornada,
@@ -173,6 +173,7 @@ export class ShiftsService {
           totals.NIO,
           totals.USD,
           input.notes,
+          input.prepared ? 'PENDIENTE_APERTURA' : 'ABIERTO',
         ],
       );
       const id = inserted.rows[0].id_turno;
@@ -184,9 +185,65 @@ export class ShiftsService {
     return this.detail(shiftId, user);
   }
 
+  async openPrepared(shiftId: string, user: AuthenticatedUser) {
+    const openedId = await this.db.transaction(async (client) => {
+      const prepared = await client.query<{
+        id_turno: string;
+        id_sucursal: string;
+        id_cajero: string;
+      } & QueryResultRow>(
+        `select id_turno, id_sucursal, id_cajero
+         from temo.turnos
+         where id_turno = $1 and estado = 'PENDIENTE_APERTURA'
+         for update`,
+        [shiftId],
+      );
+      const shift = prepared.rows[0];
+      if (!shift) throw new ConflictException('El turno ya no esta pendiente de apertura.');
+      if (shift.id_cajero !== user.id) {
+        throw new ForbiddenException('Solo el cajero asignado puede abrir este turno.');
+      }
+      const active = await client.query(
+        `select 1 from temo.turnos
+         where id_cajero = $1 and id_turno <> $2
+           and estado in ('ABIERTO', 'PENDIENTE_APROBACION')`,
+        [user.id, shiftId],
+      );
+      if (active.rowCount) throw new ConflictException('Ya tiene otro turno abierto.');
+      const workday = await client.query<{ id_jornada: string } & QueryResultRow>(
+        `insert into temo.jornadas (fecha, id_sucursal, id_usuario_apertura, estado)
+         values (current_date, $1, $2, 'ABIERTO')
+         on conflict (fecha, id_sucursal) do update
+           set id_usuario_apertura = temo.jornadas.id_usuario_apertura
+         returning id_jornada`,
+        [shift.id_sucursal, user.id],
+      );
+      // La apertura real redefine la fecha para ordenar y auditar el inicio del cajero.
+      await client.query(
+        `update temo.turnos
+         set estado = 'ABIERTO', id_jornada = $2, id_usuario_apertura = $3,
+             fecha_apertura = now(), fecha_modificacion = now()
+         where id_turno = $1`,
+        [shiftId, workday.rows[0].id_jornada, user.id],
+      );
+      await client.query(
+        `insert into temo.bitacora (id_usuario, accion, tabla, id_registro, datos_nuevos)
+         values ($1, 'APROBAR', 'turnos', $2,
+           jsonb_build_object('evento', 'ABRIR_TURNO_PREPARADO'))`,
+        [user.id, shiftId],
+      );
+      return shiftId;
+    });
+    return this.detail(openedId, user);
+  }
+
   async update(shiftId: string, input: UpdateShiftInput, user: AuthenticatedUser) {
     this.requireBoss(user);
-    const currentShift = await this.findAuthorizedShift(shiftId, user, true);
+    const currentShift = await this.findAuthorizedShift(shiftId, user);
+    // La Jefa puede corregir un turno alistado, pero no modificar turnos cerrados o anulados.
+    if (!['PENDIENTE_APERTURA', 'ABIERTO', 'PENDIENTE_APROBACION'].includes(currentShift.estado)) {
+      throw new ConflictException('El turno ya no admite cambios de apertura.');
+    }
     await this.db.transaction(async (client) => {
       const branchId = await this.resolveActiveBranch(client, input.branchId, input.branch);
 
@@ -203,7 +260,7 @@ export class ShiftsService {
       const cashierConflict = await client.query(
         `select 1 from temo.turnos
          where id_cajero = $1 and id_turno <> $2
-           and estado in ('ABIERTO', 'PENDIENTE_APROBACION')`,
+           and estado in ('PENDIENTE_APERTURA', 'ABIERTO', 'PENDIENTE_APROBACION')`,
         [cashierId, shiftId],
       );
       if (cashierConflict.rowCount) {
@@ -216,7 +273,7 @@ export class ShiftsService {
            and not exists (
              select 1 from temo.turnos t
              where t.id_caja = c.id_caja and t.id_turno <> $3
-               and t.estado in ('ABIERTO', 'PENDIENTE_APROBACION')
+               and t.estado in ('PENDIENTE_APERTURA', 'ABIERTO', 'PENDIENTE_APROBACION')
            ) limit 1`,
         [branchId, input.register, shiftId],
       );
@@ -256,7 +313,9 @@ export class ShiftsService {
 
       if (currentShift.id_cajero !== cashierId) {
         await client.query(`delete from temo.solicitudes_cierre_turno where id_turno = $1`, [shiftId]);
-        await client.query(`update temo.turnos set estado = 'ABIERTO' where id_turno = $1`, [shiftId]);
+        if (currentShift.estado !== 'PENDIENTE_APERTURA') {
+          await client.query(`update temo.turnos set estado = 'ABIERTO' where id_turno = $1`, [shiftId]);
+        }
       }
     });
     return this.detail(shiftId, user);

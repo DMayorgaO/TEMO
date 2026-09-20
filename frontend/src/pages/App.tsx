@@ -2517,6 +2517,7 @@ function shiftDetailToCrudRow(shift: ShiftDetail): CrudRow {
     register: shift.caja,
     cashier: shift.cajero,
     openedAt: openedAt ? formatShiftDateTime(new Date(openedAt)) : '',
+    sortTimestamp: openedAt ? String(new Date(openedAt).getTime()) : '0',
     closedAt: closedAt ? formatShiftDateTime(new Date(closedAt)) : '',
     openingNio,
     openingUsd,
@@ -2525,7 +2526,12 @@ function shiftDetailToCrudRow(shift: ShiftDetail): CrudRow {
     changeNio: String(shift.cambio_nio ?? '0'),
     openingCash: formatShiftCash(openingNio, openingUsd),
     closingCash: closingNio || closingUsd ? formatShiftCash(closingNio, closingUsd) : '',
-    status: shift.estado === 'CERRADO' ? 'Cerrado' : 'Abierto',
+    status:
+      shift.estado === 'CERRADO'
+        ? 'Cerrado'
+        : shift.estado === 'PENDIENTE_APERTURA'
+          ? 'Pendiente de abrir'
+          : 'Abierto',
   });
 }
 
@@ -2576,7 +2582,12 @@ function normalizeShiftRow(row: CrudRow): CrudRow {
     closingCash: row.closingCash || (closingNio || closingUsd ? formatShiftCash(closingNio, closingUsd) : ''),
     openingNotes: row.openingNotes || '',
     closingNotes: row.closingNotes || '',
-    status: row.status === 'Cerrado' ? 'Cerrado' : 'Abierto',
+    status:
+      row.status === 'Cerrado'
+        ? 'Cerrado'
+        : row.status === 'Pendiente de abrir'
+          ? 'Pendiente de abrir'
+          : 'Abierto',
   };
 }
 
@@ -2587,7 +2598,7 @@ function getNextShiftRegister(branch: string, shifts: CrudRow[], excludedShiftId
       .filter(
         (shift) =>
           shift.id !== excludedShiftId &&
-          shift.status === 'Abierto' &&
+          shift.status !== 'Cerrado' &&
           normalizeLookupValue(shift.branch) === normalizeLookupValue(branch),
       )
       .map((shift) => Number.parseInt(shift.register.match(/\d+/)?.[0] ?? '', 10))
@@ -6163,11 +6174,13 @@ function ShiftTable({
   const [pageSize, setPageSize] = useState(10);
   const [page, setPage] = useState(1);
   const [filters, setFilters] = useState<Record<string, string>>({});
-  const [sortKey, setSortKey] = useState<string | null>('id');
+  const [sortKey, setSortKey] = useState<string | null>('openedAt');
   const [sortDirection, setSortDirection] = useState<SortDirection>('desc');
   const [selectedRowId, setSelectedRowId] = useState<string | null>(null);
   const [modal, setModal] = useState<{ mode: 'open' | 'edit' | 'close' | 'view'; row: CrudRow } | null>(null);
   const [branchCatalog, setBranchCatalog] = useState<BranchCatalogRow[]>([]);
+  const authenticatedUser = readAuthenticatedUser();
+  const isBoss = authenticatedUser?.roleCode === 'JEFA';
 
   async function reloadShifts() {
     const databaseRows = await apiRequest<ShiftDetail[]>('/shifts');
@@ -6216,7 +6229,7 @@ function ShiftTable({
       const matchesInactive = showInactive || !isInactive(row);
       const matchesStatus =
         statusFilter === 'all' ||
-        (statusFilter === 'open' && row.status === 'Abierto') ||
+        (statusFilter === 'open' && row.status !== 'Cerrado') ||
         (statusFilter === 'closed' && row.status === 'Cerrado');
       const matchesQuery =
         !normalizedQuery ||
@@ -6234,6 +6247,14 @@ function ShiftTable({
     }
 
     return [...filtered].sort((a, b) => {
+      // Se ordena por la fecha real, no por el texto localizado que se muestra en la tabla.
+      if (sortKey === 'openedAt') {
+        const firstTimestamp = Number(a.sortTimestamp || 0);
+        const secondTimestamp = Number(b.sortTimestamp || 0);
+        return sortDirection === 'asc'
+          ? firstTimestamp - secondTimestamp
+          : secondTimestamp - firstTimestamp;
+      }
       const column = columns.find((item) => item.key === sortKey);
       const first = String(column ? getCellValue(a, column) : a[sortKey] ?? '').toLowerCase();
       const second = String(column ? getCellValue(b, column) : b[sortKey] ?? '').toLowerCase();
@@ -6292,7 +6313,7 @@ function ShiftTable({
     }
   }
 
-  async function saveShift(row: CrudRow, mode: 'open' | 'edit' | 'close') {
+  async function saveShift(row: CrudRow, mode: 'open' | 'edit' | 'close', prepared = false) {
     const normalizedRow = normalizeShiftRow(row);
     if (mode === 'open' || mode === 'edit') {
       const openingCounts = {
@@ -6353,6 +6374,7 @@ function ShiftTable({
             USD: cashCountPayload(openingCounts.USD).USD,
           },
           balances: accounts.map((account) => ({ account: account.alias, amount: parseMoneyValue(balanceDraft[account.id]) })),
+          prepared: mode === 'open' ? prepared : undefined,
         }),
       });
       await reloadShifts();
@@ -6361,6 +6383,13 @@ function ShiftTable({
       return;
     }
     throw new Error('El cierre debe realizarse desde el formulario unificado.');
+  }
+
+  async function openPreparedShift(row: CrudRow) {
+    if (!row.databaseId) return;
+    await apiRequest(`/shifts/${row.databaseId}/open-prepared`, { method: 'POST' });
+    await reloadShifts();
+    announceOperationalDataChange();
   }
 
   function cycleShiftStatusFilter() {
@@ -6409,10 +6438,12 @@ function ShiftTable({
               <FileText size={17} />
               PDF
             </button>
-            <button type="button" className="primary-button" onClick={openCreateModal}>
-              <Plus size={17} />
-              Agregar
-            </button>
+            {isBoss && (
+              <button type="button" className="primary-button" onClick={openCreateModal}>
+                <Plus size={17} />
+                Agregar
+              </button>
+            )}
           </div>
         </div>
 
@@ -6500,21 +6531,28 @@ function ShiftTable({
                   ))}
                   <td>
                     <div className="row-actions">
-                      <button type="button" className="icon-action" title="Editar" onClick={(event) => { event.stopPropagation(); void openEditModal(row); }}>
-                        <Edit3 size={16} />
-                      </button>
+                      {row.status === 'Pendiente de abrir' && !isBoss && (
+                        <button type="button" className="icon-action" title="Abrir turno" onClick={(event) => { event.stopPropagation(); void openPreparedShift(row); }}>
+                          <LogIn size={16} />
+                        </button>
+                      )}
+                      {isBoss && (
+                        <button type="button" className="icon-action" title="Editar" onClick={(event) => { event.stopPropagation(); void openEditModal(row); }}>
+                          <Edit3 size={16} />
+                        </button>
+                      )}
                       <button
                         type="button"
-                        className={`icon-action ${row.status === 'Cerrado' ? 'icon-action--inactive' : ''}`}
-                        title={row.status === 'Cerrado' ? 'Turno cerrado' : 'Cerrar turno'}
+                        className={`icon-action ${row.status !== 'Abierto' ? 'icon-action--inactive' : ''}`}
+                        title={row.status === 'Cerrado' ? 'Turno cerrado' : row.status === 'Pendiente de abrir' ? 'Pendiente de abrir' : 'Cerrar turno'}
                         onClick={(event) => {
                           event.stopPropagation();
-                          if (row.status !== 'Cerrado') {
+                          if (row.status === 'Abierto') {
                             openCloseModal(row);
                           }
                         }}
                       >
-                        {row.status === 'Cerrado' ? <CheckCircle2 size={16} /> : <LockKeyhole size={16} />}
+                        {row.status === 'Cerrado' ? <CheckCircle2 size={16} /> : row.status === 'Pendiente de abrir' ? <CalendarDays size={16} /> : <LockKeyhole size={16} />}
                       </button>
                     </div>
                   </td>
@@ -6558,6 +6596,7 @@ function ShiftTable({
           branchOptions={activeBranchNames.length > 0 ? activeBranchNames : getAvailableBranchNames()}
           onCancel={() => setModal(null)}
           onSave={(row) => saveShift(row, modal.mode === 'view' ? 'edit' : modal.mode)}
+          onPrepare={modal.mode === 'open' ? (row) => saveShift(row, 'open', true) : undefined}
           onEdit={modal.mode === 'view' ? () => setModal({ ...modal, mode: 'edit' }) : undefined}
           navigation={modal.mode === 'view' ? {
             currentIndex: normalizedRows.findIndex((shift) => shift.databaseId === modal.row.databaseId),
@@ -6585,6 +6624,7 @@ function ShiftModal({
   branchOptions: availableBranchOptions,
   onCancel,
   onSave,
+  onPrepare,
   onEdit,
   navigation,
 }: {
@@ -6595,6 +6635,7 @@ function ShiftModal({
   branchOptions: string[];
   onCancel: () => void;
   onSave: (row: CrudRow) => Promise<void>;
+  onPrepare?: (row: CrudRow) => Promise<void>;
   onEdit?: () => void;
   navigation?: ModalRecordNavigation;
 }) {
@@ -6754,11 +6795,11 @@ function ShiftModal({
     setClosingBankBalances((current) => ({ ...current, [accountId]: normalizeConsolidationRaw(value) }));
   }
 
-  async function saveDraft() {
+  async function saveDraft(prepared = false) {
     setSaveError('');
     setIsSaving(true);
     try {
-      await onSave({
+      const completedDraft = {
         ...draft,
         openingNio: openingTotals.NIO.toFixed(2),
         openingUsd: openingTotals.USD.toFixed(2),
@@ -6768,7 +6809,12 @@ function ShiftModal({
         closingCashCountUsd: serializeTransactionCashCount(closingCashCounts.USD),
         openingBankBalances: serializeShiftBankBalances(openingBankBalances),
         closingBankBalances: serializeShiftBankBalances(closingBankBalances),
-      });
+      };
+      if (prepared && onPrepare) {
+        await onPrepare(completedDraft);
+      } else {
+        await onSave(completedDraft);
+      }
     } catch (error) {
       setSaveError(error instanceof Error ? error.message : 'No fue posible guardar el turno.');
     } finally {
@@ -7096,10 +7142,18 @@ function ShiftModal({
             </button>
           )}
           {!isReadOnly && (
-            <button type="button" className="primary-button" onClick={() => void saveDraft()} disabled={isSaving}>
-              <Save size={17} />
-              {isSaving ? 'Guardando...' : 'Guardar'}
-            </button>
+            <>
+              {mode === 'open' && onPrepare && (
+                <button type="button" className="secondary-button" onClick={() => void saveDraft(true)} disabled={isSaving}>
+                  <CalendarDays size={17} />
+                  {isSaving ? 'Guardando...' : 'Guardar pendiente'}
+                </button>
+              )}
+              <button type="button" className="primary-button" onClick={() => void saveDraft()} disabled={isSaving}>
+                {mode === 'open' ? <LogIn size={17} /> : <Save size={17} />}
+                {isSaving ? 'Guardando...' : mode === 'open' ? 'Abrir turno' : 'Guardar'}
+              </button>
+            </>
           )}
         </div>
       </section>
