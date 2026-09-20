@@ -5270,7 +5270,7 @@ function PendingScreen({ currentUser }: { currentUser: AuthUser }) {
           </div>
         </div>
 
-        <div className="table-consolidation" aria-label="Consolidado de pendientes">
+        <div className="table-consolidation table-consolidation--pending" aria-label="Consolidado y acciones de pendientes">
           {([
             { key: 'POR_COBRAR' as const, label: 'Por cobrar', icon: ArrowDownLeft },
             { key: 'POR_PAGAR' as const, label: 'Por pagar', icon: ArrowUpRight },
@@ -5283,14 +5283,7 @@ function PendingScreen({ currentUser }: { currentUser: AuthUser }) {
               </div>
             </section>
           ))}
-        </div>
-
-        <div className="table-toolbar">
-          <label className="search-box">
-            <Search size={17} />
-            <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Buscar pendientes" />
-          </label>
-          <div className="table-toolbar-controls pending-settlement-actions">
+          <section className="table-consolidation__actions" aria-label="Acciones de liquidacion">
             <button type="button" className="secondary-button pending-settlement-button" title="Liquidar en efectivo" disabled={!selectedPendingIds.length || Boolean(payingId)} onClick={() => void openBatchCashPayment()}>
               <Banknote size={17} /> Efectivo
             </button>
@@ -5300,16 +5293,19 @@ function PendingScreen({ currentUser }: { currentUser: AuthUser }) {
             <button type="button" className="primary-button pending-settlement-button" title="Liquidar digitalmente" disabled={!selectedPendingIds.length || Boolean(payingId)} onClick={() => void openBatchDigitalPayment('DIGITAL')}>
               <Landmark size={17} /> Digital
             </button>
+          </section>
+        </div>
+
+        <div className="table-toolbar">
+          <label className="search-box">
+            <Search size={17} />
+            <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Buscar pendientes" />
+          </label>
+          <div className="table-toolbar-controls">
             <label className="switch-control switch-control--small">
               <input checked={showPaid} type="checkbox" onChange={(event) => setShowPaid(event.target.checked)} />
               <span />
               Mostrar pagados
-            </label>
-            <label className="page-size-control">
-              Registros
-              <select value={pageSize} onChange={(event) => setPageSize(Number(event.target.value))}>
-                {[10, 20, 30, 50, 100].map((size) => <option key={size} value={size}>{size}</option>)}
-              </select>
             </label>
           </div>
         </div>
@@ -5398,6 +5394,12 @@ function PendingScreen({ currentUser }: { currentUser: AuthUser }) {
         <div className="pagination-bar">
           <span>Mostrando {pageRows.length} de {processedRows.length} registros</span>
           <div className="action-row">
+            <label className="page-size-control page-size-control--pagination">
+              Registros
+              <select value={pageSize} onChange={(event) => setPageSize(Number(event.target.value))}>
+                {[10, 20, 30, 50, 100].map((size) => <option key={size} value={size}>{size}</option>)}
+              </select>
+            </label>
             <button type="button" className="icon-button" onClick={() => setPage(1)} disabled={page === 1}><ChevronsLeft size={17} /></button>
             <button type="button" className="icon-button" onClick={() => setPage((current) => Math.max(1, current - 1))} disabled={page === 1}><ChevronLeft size={17} /></button>
             <span>Pagina {page} de {totalPages}</span>

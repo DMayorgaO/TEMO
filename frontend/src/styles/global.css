@@ -4325,10 +4325,6 @@ tbody tr:hover td {
 }
 
 /* Compacta las acciones frecuentes sin sacrificar sus etiquetas ni areas de clic. */
-.pending-settlement-actions {
-  gap: 6px;
-}
-
 .pending-settlement-button {
   min-height: 34px;
   padding: 7px 10px;
@@ -4353,6 +4349,22 @@ tbody tr:hover td {
   border-radius: 6px;
   background: #fff;
   padding: 12px 14px;
+}
+
+.table-consolidation--pending {
+  grid-template-columns: repeat(2, minmax(220px, 1fr)) auto;
+}
+
+.table-consolidation__actions {
+  display: grid;
+  grid-template-columns: repeat(3, auto);
+  align-content: center;
+  gap: 6px;
+  min-width: 300px;
+}
+
+.page-size-control--pagination {
+  margin-right: 6px;
 }
 
 .table-consolidation__group--income,
@@ -4432,8 +4444,19 @@ tbody tr:hover td {
     padding: 12px;
   }
 
+  .table-consolidation__actions {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    min-width: 0;
+  }
+
   .table-consolidation__metrics {
     grid-template-columns: 1fr 1fr;
+  }
+}
+
+@media (max-width: 520px) {
+  .table-consolidation__actions {
+    grid-template-columns: 1fr;
   }
 }
 
