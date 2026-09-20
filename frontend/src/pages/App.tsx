@@ -4602,6 +4602,19 @@ function TransfersScreen({ currentUser }: { currentUser: AuthUser }) {
   }, [filters, query, rows, showInactive, sortDirection, sortKey]);
   const pages = Math.max(1, Math.ceil(filtered.length / pageSize));
   const pageRows = filtered.slice((page - 1) * pageSize, page * pageSize);
+  const transferSummary = useMemo(() => {
+    const initial = () => ({ NIO: 0, USD: 0 });
+    const summary = {
+      EFECTIVO: { ENTRA: initial(), SALE: initial() },
+      CUENTA_BANCARIA: { ENTRA: initial(), SALE: initial() },
+    };
+    // Los anulados pueden mostrarse en la tabla, pero nunca regresan al consolidado operativo.
+    for (const row of filtered) {
+      if (row.estado !== 'ACTIVO') continue;
+      summary[row.tipo][row.direccion][row.moneda] += Number(row.monto);
+    }
+    return summary;
+  }, [filtered]);
   useEffect(() => setPage(1), [filters, query, showInactive, pageSize]);
 
   function toggleSort(key: 'id' | 'fecha' | 'tipo' | 'monto') {
@@ -4635,6 +4648,20 @@ function TransfersScreen({ currentUser }: { currentUser: AuthUser }) {
     <section className="screen-stack"><article className="panel">
       <div className="panel__header table-panel-header"><div><p>Movimientos de efectivo y saldos bancarios por turno</p><h2>Transferencias registradas</h2></div>
         <div className="action-row"><button type="button" className="primary-button" disabled={!context.shifts.length} onClick={() => setModal({ mode: 'create' })}><Plus size={17}/>Agregar</button></div>
+      </div>
+      <div className="table-consolidation" aria-label="Consolidado de transferencias">
+        {([
+          { key: 'EFECTIVO' as const, label: 'Efectivo', icon: Banknote },
+          { key: 'CUENTA_BANCARIA' as const, label: 'Digital', icon: Landmark },
+        ]).map(({ key, label, icon: SummaryIcon }) => (
+          <section className={`table-consolidation__group table-consolidation__group--${key === 'EFECTIVO' ? 'cash' : 'digital'}`} key={key}>
+            <header><SummaryIcon size={18}/><div><strong>{label}</strong><span>Transferencias activas</span></div></header>
+            <div className="table-consolidation__metrics">
+              <div><span><ArrowDownLeft size={15}/>Ingresos</span><strong>{formatCashCountMoney(transferSummary[key].ENTRA.NIO, 'NIO')}</strong><strong>{formatCashCountMoney(transferSummary[key].ENTRA.USD, 'USD')}</strong></div>
+              <div><span><ArrowUpRight size={15}/>Egresos</span><strong>{formatCashCountMoney(transferSummary[key].SALE.NIO, 'NIO')}</strong><strong>{formatCashCountMoney(transferSummary[key].SALE.USD, 'USD')}</strong></div>
+            </div>
+          </section>
+        ))}
       </div>
       <div className="table-toolbar"><label className="search-box"><Search size={17}/><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Buscar transferencias"/></label>
         <div className="table-toolbar-controls"><label className="switch-control switch-control--small"><input type="checkbox" checked={showInactive} onChange={(event) => setShowInactive(event.target.checked)}/><span/>Mostrar inactivos</label>
@@ -4954,6 +4981,19 @@ function PendingScreen({ currentUser }: { currentUser: AuthUser }) {
 
   const totalPages = Math.max(1, Math.ceil(processedRows.length / pageSize));
   const pageRows = processedRows.slice((page - 1) * pageSize, page * pageSize);
+  const pendingSummary = useMemo(() => {
+    const summary = {
+      POR_COBRAR: { NIO: 0, USD: 0, count: 0 },
+      POR_PAGAR: { NIO: 0, USD: 0, count: 0 },
+    };
+    // Consolida únicamente saldos todavía exigibles dentro de los filtros actuales.
+    for (const row of processedRows) {
+      if (['PAGADO', 'CANCELADO'].includes(row.estado)) continue;
+      summary[row.tipo][row.moneda] += Number(row.saldo_pendiente);
+      summary[row.tipo].count += 1;
+    }
+    return summary;
+  }, [processedRows]);
 
   useEffect(() => {
     setPage(1);
@@ -5226,6 +5266,21 @@ function PendingScreen({ currentUser }: { currentUser: AuthUser }) {
             <p>Cuentas por cobrar y por pagar</p>
             <h2>Pendientes</h2>
           </div>
+        </div>
+
+        <div className="table-consolidation" aria-label="Consolidado de pendientes">
+          {([
+            { key: 'POR_COBRAR' as const, label: 'Por cobrar', icon: ArrowDownLeft },
+            { key: 'POR_PAGAR' as const, label: 'Por pagar', icon: ArrowUpRight },
+          ]).map(({ key, label, icon: SummaryIcon }) => (
+            <section className={`table-consolidation__group table-consolidation__group--${key === 'POR_COBRAR' ? 'income' : 'expense'}`} key={key}>
+              <header><SummaryIcon size={18}/><div><strong>{label}</strong><span>{pendingSummary[key].count} pendientes abiertos</span></div></header>
+              <div className="table-consolidation__totals">
+                <strong>{formatCashCountMoney(pendingSummary[key].NIO, 'NIO')}</strong>
+                <strong>{formatCashCountMoney(pendingSummary[key].USD, 'USD')}</strong>
+              </div>
+            </section>
+          ))}
         </div>
 
         <div className="table-toolbar">
