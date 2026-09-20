@@ -2991,7 +2991,7 @@ function CashierShiftWaiting({ user, preparedShift, onOpen, onLogout }: { user: 
   }
   return <main className="shift-waiting-screen">
     <section className="shift-waiting-content">
-      <img src="/LOGO_TEMO.png" alt="TEMO"/>
+      <img src="/LOGO_TEMO_TRANSPARENT.png" alt="TEMO"/>
       <p>Bienvenido, {user.fullName}</p>
       <h1>{preparedShift ? 'Tu turno está listo' : 'Sin turno abierto'}</h1>
       <span>{preparedShift ? `${preparedShift.sucursal} · ${preparedShift.caja}` : 'El Administrador todavía no ha preparado un turno para tu usuario.'}</span>
@@ -3372,7 +3372,7 @@ export function App() {
       <aside className="sidebar">
         {/* Identidad fija del sistema en el menu lateral. */}
         <button type="button" className="brand" onClick={navigateFromBrand}>
-          <img className="brand__logo" src="/LOGO_TEMO.png" alt="TEMO" />
+          <img className="brand__logo" src="/LOGO_TEMO_TRANSPARENT.png" alt="TEMO" />
           <div>
             <strong>TEMO</strong>
             <span>Transacciones Económicas Miscelánea Olivera</span>
@@ -3779,7 +3779,7 @@ function ChangePasswordScreen({
     <main className="login-page">
       <section className="login-panel" aria-labelledby="change-password-title">
         <div className="login-brand">
-          <img src="/LOGO_TEMO.png" alt="TEMO" />
+          <img src="/LOGO_TEMO_TRANSPARENT.png" alt="TEMO" />
           <span>Transacciones Económicas Miscelánea Olivera</span>
         </div>
         <div className="login-heading">
@@ -3918,7 +3918,7 @@ function LoginScreen({ onLogin }: { onLogin: (response: LoginResponse) => void }
     <main className="login-page">
       <section className="login-panel" aria-labelledby="login-title">
         <div className="login-brand">
-          <img src="/LOGO_TEMO.png" alt="TEMO" />
+          <img src="/LOGO_TEMO_TRANSPARENT.png" alt="TEMO" />
           <span>Transacciones Económicas Miscelánea Olivera</span>
         </div>
 
