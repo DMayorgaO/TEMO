@@ -2627,6 +2627,22 @@ tbody tr:hover td {
   margin-top: 14px;
 }
 
+/* Presenta el diferencial aplicado sin competir con el monto principal de la compra. */
+.dollar-purchase-rate {
+  color: var(--muted);
+  display: block;
+  font-size: 11px;
+  margin-top: 3px;
+}
+
+.dollar-purchase-summary {
+  grid-template-columns: repeat(2, minmax(220px, 1fr));
+}
+
+.dollar-purchase-table {
+  min-width: 920px;
+}
+
 .modal-backdrop {
   /* Capa superpuesta que bloquea la pantalla mientras se edita un registro. */
   align-items: center;

@@ -8,6 +8,7 @@ import { ShiftsModule } from './modules/shifts/shifts.module';
 import { TransactionsModule } from './modules/transactions/transactions.module';
 import { TransfersModule } from './modules/transfers/transfers.module';
 import { DirectoryModule } from './modules/directory/directory.module';
+import { DollarPurchasesModule } from './modules/dollar-purchases/dollar-purchases.module';
 import { AppController } from './app.controller';
 import { validateEnvironment } from './config/environment.validation';
 
@@ -26,6 +27,7 @@ import { validateEnvironment } from './config/environment.validation';
     TransactionsModule,
     TransfersModule,
     DirectoryModule,
+    DollarPurchasesModule,
   ],
   controllers: [AppController],
 })

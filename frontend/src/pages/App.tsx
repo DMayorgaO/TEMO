@@ -58,6 +58,7 @@ type ScreenId =
   | 'shifts'
   | 'transactions'
   | 'transfers'
+  | 'dollar-purchases'
   | 'directory'
   | 'cash-count'
   | 'pending'
@@ -340,6 +341,18 @@ type TransferContext = {
   accounts: Array<{ id: string; alias: string; currency: CashCurrency; entity: string; branch_id: string | null }>;
 };
 
+type DollarPurchaseApiRow = {
+  database_id: string;
+  id: string;
+  fecha_transaccion: string;
+  monto_comprado_usd: string;
+  diferencia_nio: string;
+  tasa_compra_usada: string;
+  tasa_venta_usada: string;
+  cajero: string;
+  sucursal: string;
+};
+
 type DirectoryIdentifier = { institution: string; type: string; number: string; currency: CashCurrency | null };
 type DirectoryIdentity = { number: string; holder: string };
 type DirectoryEntry = {
@@ -460,6 +473,9 @@ const navGroups: NavGroup[] = [
     item: { id: 'transfers', label: 'Transferencias', route: '/transferencias', icon: ArrowRightLeft },
   },
   {
+    item: { id: 'dollar-purchases', label: 'Compra de Dólares', route: '/compra-dolares', icon: Coins },
+  },
+  {
     item: { id: 'directory', label: 'Directorio', route: '/directorio', icon: BookUser },
   },
   {
@@ -497,6 +513,7 @@ const screenHeaders: Record<ScreenId, ScreenHeader> = {
   shifts: { eyebrow: 'Jornadas', title: 'Turnos registrados' },
   transactions: { eyebrow: 'Movimientos', title: 'Transacciones registradas' },
   transfers: { eyebrow: 'Movimientos internos', title: 'Transferencias' },
+  'dollar-purchases': { eyebrow: 'Diferencial cambiario', title: 'Compra de Dólares' },
   directory: { eyebrow: 'Consulta frecuente', title: 'Directorio de destinatarios' },
   'cash-count': { eyebrow: 'Arqueo', title: 'Conteo fisico de caja' },
   banks: { eyebrow: 'Entidades', title: 'Bancos y servicios financieros' },
@@ -733,6 +750,7 @@ const crudConfigs: Record<ScreenId, CrudConfig[]> = {
     },
   ],
   transfers: [],
+  'dollar-purchases': [],
   directory: [],
   'cash-count': [],
   'exchange-rate': [],
@@ -4125,6 +4143,10 @@ function ScreenContent({
     return <TransfersScreen currentUser={currentUser} />;
   }
 
+  if (screen === 'dollar-purchases') {
+    return <DollarPurchasesScreen />;
+  }
+
   if (screen === 'directory') {
     return <DirectoryScreen currentUser={currentUser} />;
   }
@@ -4839,6 +4861,84 @@ function TransfersScreen({ currentUser }: { currentUser: AuthUser }) {
     </article>
     {modal && <TransferModal mode={modal.mode} row={modal.row} context={context} isBoss={isBoss} onClose={()=>setModal(null)} onSaved={async()=>{setModal(null);await reload();announceOperationalDataChange()}} onEdit={modal.mode==='view'?()=>setModal({mode:'edit',row:modal.row}):undefined}/>} </section>
   );
+}
+
+function DollarPurchasesScreen() {
+  const [rows, setRows] = useState<DollarPurchaseApiRow[]>([]);
+  const [query, setQuery] = useState('');
+  const [periodFilter, setPeriodFilter] = useState<PeriodFilter>(emptyPeriodFilter);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
+  const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('desc');
+  const [error, setError] = useState('');
+
+  // Recarga el reporte cuando otra pantalla modifica transacciones o arqueos.
+  async function reload() {
+    setRows(await apiRequest<DollarPurchaseApiRow[]>('/dollar-purchases'));
+  }
+
+  useEffect(() => {
+    void reload().catch((loadError) => setError(loadError instanceof Error ? loadError.message : 'No fue posible cargar las compras de dolares.'));
+  }, []);
+  useOperationalRefresh(reload);
+
+  const filtered = useMemo(() => {
+    const search = normalizeLookupValue(query);
+    return rows
+      .filter((row) => {
+        const matchesSearch = !search || normalizeLookupValue([
+          row.id, row.cajero, row.sucursal, row.monto_comprado_usd, row.diferencia_nio,
+        ].join(' ')).includes(search);
+        return matchesSearch && matchesPeriodFilter(row.fecha_transaccion, periodFilter, true);
+      })
+      .sort((first, second) => {
+        const comparison = new Date(first.fecha_transaccion).getTime() - new Date(second.fecha_transaccion).getTime();
+        return sortDirection === 'asc' ? comparison : -comparison;
+      });
+  }, [periodFilter, query, rows, sortDirection]);
+  const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
+  const pageRows = filtered.slice((page - 1) * pageSize, page * pageSize);
+  const totals = useMemo(() => filtered.reduce((result, row) => ({
+    usd: result.usd + Number(row.monto_comprado_usd),
+    nio: result.nio + Number(row.diferencia_nio),
+  }), { usd: 0, nio: 0 }), [filtered]);
+
+  useEffect(() => setPage(1), [pageSize, periodFilter, query]);
+  useEffect(() => setPage((current) => Math.min(current, totalPages)), [totalPages]);
+
+  return <section className="screen-stack"><article className="panel">
+    <div className="panel__header table-panel-header"><div><p>Dolares financiados con cordobas dentro de transacciones individuales o multiples</p><h2>Compras de dolares registradas</h2></div></div>
+    <div className="table-consolidation dollar-purchase-summary" aria-label="Consolidado de compras de dolares">
+      <section className="table-consolidation__group table-consolidation__group--digital"><header><Coins size={18}/><div><strong>Dolares comprados</strong><span>{filtered.length} transacciones</span></div></header><div className="table-consolidation__totals"><strong>{formatCashCountMoney(totals.usd, 'USD')}</strong></div></section>
+      <section className="table-consolidation__group table-consolidation__group--income"><header><Scale size={18}/><div><strong>Diferencia acumulada</strong><span>Diferencial compra / venta</span></div></header><div className="table-consolidation__totals"><strong>{formatCashCountMoney(totals.nio, 'NIO')}</strong></div></section>
+    </div>
+    <PeriodFilterControl value={periodFilter} onChange={setPeriodFilter} includeDates />
+    <div className="table-toolbar"><label className="search-box"><Search size={17}/><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Buscar por ID, cajero o sucursal"/></label></div>
+    {error && <p className="transaction-save-error" role="alert">{error}</p>}
+    <div className="table-wrap"><table className="dollar-purchase-table"><thead><tr>
+      <th className="number-column"><div className="th-stack"><span>N°</span></div></th>
+      <th><div className="th-stack"><span>ID</span></div></th>
+      <th><div className="th-stack"><button type="button" className="th-sort-button" onClick={() => setSortDirection((current) => current === 'desc' ? 'asc' : 'desc')}>FECHA Y HORA{sortDirection === 'desc' ? <ArrowUpZA size={14}/> : <ArrowDownAZ size={14}/>}</button></div></th>
+      <th><div className="th-stack"><span>MONTO</span></div></th>
+      <th><div className="th-stack"><span>DIFERENCIA</span></div></th>
+      <th><div className="th-stack"><span>CAJERO</span></div></th>
+      <th><div className="th-stack"><span>SUCURSAL</span></div></th>
+    </tr></thead><tbody>
+      {pageRows.map((row, index) => <tr key={row.database_id}>
+        <td className="number-column">{filtered.length - ((page - 1) * pageSize + index)}</td>
+        <td><strong>{row.id}</strong></td>
+        <td className="multi-line-cell">{formatTransferDate(row.fecha_transaccion)}</td>
+        <td><span className="transaction-amount transaction-amount--in">{formatCashCountMoney(Number(row.monto_comprado_usd), 'USD')}</span></td>
+        <td><strong>{formatCashCountMoney(Number(row.diferencia_nio), 'NIO')}</strong><small className="dollar-purchase-rate">C$ {Number(row.tasa_venta_usada).toFixed(2)} - C$ {Number(row.tasa_compra_usada).toFixed(2)}</small></td>
+        <td>{row.cajero}</td><td>{row.sucursal}</td>
+      </tr>)}
+      {!pageRows.length && <tr><td colSpan={7} className="empty-table-cell">No hay compras de dolares para mostrar.</td></tr>}
+    </tbody></table></div>
+    <div className="pagination-bar"><span>Mostrando {pageRows.length} de {filtered.length} registros</span><div className="action-row">
+      <label className="page-size-control page-size-control--pagination">Registros<select value={pageSize} onChange={(event) => setPageSize(Number(event.target.value))}>{[10,20,30,50,100].map((size)=><option key={size} value={size}>{size}</option>)}</select></label>
+      <button type="button" className="icon-button" disabled={page===1} onClick={()=>setPage(1)}><ChevronsLeft size={17}/></button><button type="button" className="icon-button" disabled={page===1} onClick={()=>setPage((current)=>Math.max(1,current-1))}><ChevronLeft size={17}/></button><span>Pagina {page} de {totalPages}</span><button type="button" className="icon-button" disabled={page===totalPages} onClick={()=>setPage((current)=>Math.min(totalPages,current+1))}><ChevronRight size={17}/></button><button type="button" className="icon-button" disabled={page===totalPages} onClick={()=>setPage(totalPages)}><ChevronsRight size={17}/></button>
+    </div></div>
+  </article></section>;
 }
 
 function getTransferColumnValue(row: TransferApiRow, key: string) {
