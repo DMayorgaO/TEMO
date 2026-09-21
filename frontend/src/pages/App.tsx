@@ -7669,6 +7669,13 @@ function TransactionTable({ config, currentUser }: { config: CrudConfig; current
     setCurrentShift(shift);
   }, !modal && !isSavingTransactions);
 
+  // Mantiene las guias de saldo y efectivo al dia sin cerrar el formulario ni
+  // reemplazar los borradores que el cajero esta digitando.
+  useOperationalRefresh(async () => {
+    const shift = await apiRequest<ShiftDetail | null>('/shifts/current');
+    setCurrentShift(shift);
+  }, Boolean(modal) && !isSavingTransactions, 5000);
+
   const processedRows = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase();
     const filtered = normalizedRows.filter((row) => {
@@ -8132,6 +8139,8 @@ function TransactionTable({ config, currentUser }: { config: CrudConfig; current
           row={modal.row}
           availableAccounts={currentShift?.availableAccounts ?? []}
           availableMovements={currentShift?.availableMovements ?? []}
+          accountBalances={currentShift?.balances ?? []}
+          availableCashCounts={currentShift?.cashCounts.ACTUAL}
           isSaving={isSavingTransactions}
           saveError={transactionSaveError}
           onCancel={() => {
@@ -8171,6 +8180,8 @@ function TransactionModal({
   row,
   availableAccounts = [],
   availableMovements = [],
+  accountBalances = [],
+  availableCashCounts,
   isSaving,
   saveError,
   onCancel,
@@ -8183,6 +8194,8 @@ function TransactionModal({
   row: CrudRow;
   availableAccounts?: ShiftDetail['availableAccounts'];
   availableMovements?: ShiftDetail['availableMovements'];
+  accountBalances?: ShiftDetail['balances'];
+  availableCashCounts?: Partial<Record<CashCurrency, ShiftCashCount>>;
   isSaving: boolean;
   saveError: string;
   onCancel: () => void;
@@ -8206,6 +8219,7 @@ function TransactionModal({
     NIO: readTransactionCashCount(draft.cashCountNio),
     USD: readTransactionCashCount(draft.cashCountUsd),
   };
+  const availableCash = cashDraftFromShiftCounts(availableCashCounts);
   const changeCashCounts: Record<CashCurrency, Record<string, CashPileDraft>> = {
     NIO: readTransactionCashCount(draft.changeCashCountNio),
     USD: readTransactionCashCount(draft.changeCashCountUsd),
@@ -8254,6 +8268,21 @@ function TransactionModal({
   const allowedCurrencies = getMovementCurrencies(selectedMovement).filter(
     (currency) => !restrictToShiftAccounts || entityCurrencies.has(currency),
   );
+  const selectedAccount = availableAccounts.find(
+    (account) =>
+      normalizeLookupValue(account.entity) === normalizeLookupValue(draft.entity) &&
+      account.currency === draft.currency,
+  );
+  const selectedAccountBalance = selectedAccount
+    ? accountBalances.find((balance) => balance.account_id === selectedAccount.account_id)
+    : undefined;
+  const selectedAccountFinalBalance = selectedAccountBalance
+    ? parseMoneyValue(
+        selectedAccountBalance.system ??
+        selectedAccountBalance.calculated ??
+        selectedAccountBalance.initial,
+      )
+    : null;
   const hasIncompleteTransactions = drafts.some(
     (transactionDraft) =>
       !transactionDraft.movement ||
@@ -8766,7 +8795,14 @@ function TransactionModal({
             </div>
           </div>
           <label className="form-field transaction-form-amount">
-            Monto
+            <span className="transaction-form-amount__label">
+              <span>Monto</span>
+              {draft.direction === 'Ingreso' && selectedAccountFinalBalance !== null && (
+                <small title={`Saldo digital de ${selectedAccountBalance?.account ?? draft.entity}`}>
+                  Saldo digital: {formatCashCountMoney(selectedAccountFinalBalance, draft.currency === 'USD' ? 'USD' : 'NIO')}
+                </small>
+              )}
+            </span>
             <input
               value={formatAccountingMoneyInput(draft.amountValue)}
               inputMode="decimal"
@@ -8823,6 +8859,7 @@ function TransactionModal({
                   denominations={cashDenominations.NIO}
                   focusScope="received"
                   pileDrafts={cashCounts.NIO}
+                  availablePileDrafts={availableCash}
                   conversionRate={transactionDifference.rateValue}
                   readOnly={isReadOnly}
                   nextFocusSelector={'[data-cash-scope="received"][data-cash-currency="USD"][data-cash-row="0"][data-cash-column="0"]'}
@@ -8834,6 +8871,7 @@ function TransactionModal({
                   denominations={cashDenominations.USD}
                   focusScope="received"
                   pileDrafts={cashCounts.USD}
+                  availablePileDrafts={availableCash}
                   conversionRate={transactionDifference.rateValue}
                   readOnly={isReadOnly}
                   onPileFieldChange={(denominationId, field, value) => updateCashCount('USD', denominationId, field, value)}
@@ -8890,6 +8928,7 @@ function TransactionModal({
                       denominations={cashDenominations.NIO}
                       focusScope="change"
                       pileDrafts={changeCashCounts.NIO}
+                      availablePileDrafts={availableCash}
                       conversionRate={changeRateValue}
                       readOnly={isReadOnly}
                       nextFocusSelector={'[data-cash-scope="change"][data-cash-currency="USD"][data-cash-row="0"][data-cash-column="0"]'}
@@ -8901,6 +8940,7 @@ function TransactionModal({
                         denominations={cashDenominations.USD}
                         focusScope="change"
                         pileDrafts={changeCashCounts.USD}
+                        availablePileDrafts={availableCash}
                         conversionRate={changeRateValue}
                         readOnly={isReadOnly}
                         onPileFieldChange={(denominationId, field, value) => updateChangeCashCount('USD', denominationId, field, value)}
@@ -9020,6 +9060,7 @@ function TransactionCashCountTable({
   denominations,
   focusScope,
   pileDrafts,
+  availablePileDrafts,
   conversionRate,
   readOnly = false,
   showConvertedTotal = true,
@@ -9030,6 +9071,7 @@ function TransactionCashCountTable({
   denominations: CashDenomination[];
   focusScope: string;
   pileDrafts: Record<string, CashPileDraft>;
+  availablePileDrafts?: Record<string, CashPileDraft>;
   conversionRate: number;
   readOnly?: boolean;
   showConvertedTotal?: boolean;
@@ -9163,6 +9205,7 @@ function TransactionCashCountTable({
         <div className="transaction-cash-table__body" role="rowgroup">
           {denominations.map((denomination, rowIndex) => {
             const pile = pileDrafts[denomination.id] ?? {};
+            const availablePile = availablePileDrafts?.[denomination.id] ?? {};
             const quantity = calculatePileQuantity(pile);
             const amount = quantity * denomination.value;
             return (
@@ -9174,38 +9217,44 @@ function TransactionCashCountTable({
                 key={denomination.id}
               >
                 <div role="cell">
-                  <input
-                    aria-label={`Montones de 25 para ${denomination.label}`}
-                    className="transaction-cash-entry"
-                    data-cash-column="0"
-                    data-cash-currency={currency}
-                    data-cash-row={rowIndex}
-                    data-cash-scope={focusScope}
-                    inputMode="numeric"
-                    type="text"
-                    value={pile.groups ?? ''}
-                    readOnly={readOnly}
-                    onKeyDown={(event) => handleCashEntryKeyDown(event, rowIndex, 0)}
-                    onChange={(event) => onPileFieldChange(denomination.id, 'groups', event.target.value)}
-                    placeholder="0"
-                  />
+                  <div className="transaction-cash-entry-wrap">
+                    <input
+                      aria-label={`Montones de 25 para ${denomination.label}`}
+                      className="transaction-cash-entry"
+                      data-cash-column="0"
+                      data-cash-currency={currency}
+                      data-cash-row={rowIndex}
+                      data-cash-scope={focusScope}
+                      inputMode="numeric"
+                      type="text"
+                      value={pile.groups ?? ''}
+                      readOnly={readOnly}
+                      onKeyDown={(event) => handleCashEntryKeyDown(event, rowIndex, 0)}
+                      onChange={(event) => onPileFieldChange(denomination.id, 'groups', event.target.value)}
+                      placeholder="0"
+                    />
+                    {availablePileDrafts && <small title="Montones de 25 disponibles en el arqueo actual">Disp. {availablePile.groups || '0'}</small>}
+                  </div>
                 </div>
                 <div role="cell">
-                  <input
-                    aria-label={`Sueltos para ${denomination.label}`}
-                    className="transaction-cash-entry"
-                    data-cash-column="1"
-                    data-cash-currency={currency}
-                    data-cash-row={rowIndex}
-                    data-cash-scope={focusScope}
-                    inputMode="numeric"
-                    type="text"
-                    value={pile.loose ?? ''}
-                    readOnly={readOnly}
-                    onKeyDown={(event) => handleCashEntryKeyDown(event, rowIndex, 1)}
-                    onChange={(event) => onPileFieldChange(denomination.id, 'loose', event.target.value)}
-                    placeholder="0"
-                  />
+                  <div className="transaction-cash-entry-wrap">
+                    <input
+                      aria-label={`Sueltos para ${denomination.label}`}
+                      className="transaction-cash-entry"
+                      data-cash-column="1"
+                      data-cash-currency={currency}
+                      data-cash-row={rowIndex}
+                      data-cash-scope={focusScope}
+                      inputMode="numeric"
+                      type="text"
+                      value={pile.loose ?? ''}
+                      readOnly={readOnly}
+                      onKeyDown={(event) => handleCashEntryKeyDown(event, rowIndex, 1)}
+                      onChange={(event) => onPileFieldChange(denomination.id, 'loose', event.target.value)}
+                      placeholder="0"
+                    />
+                    {availablePileDrafts && <small title="Unidades sueltas disponibles en el arqueo actual">Disp. {availablePile.loose || '0'}</small>}
+                  </div>
                 </div>
                 <div className="transaction-cash-quantity" role="cell">{quantity}</div>
                 <div className="transaction-cash-denomination" role="cell">{denomination.label}</div>
