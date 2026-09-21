@@ -40,7 +40,7 @@ export class TransfersService {
   async context(user: AuthenticatedUser) {
     const canManageAnyShift = this.canManageAnyShift(user);
     const shifts = await this.db.query(
-      `select t.id_turno as id, t.id_sucursal as branch_id, concat('TUR-', upper(substr(replace(t.id_turno::text, '-', ''), 1, 8))) as code,
+      `select t.id_turno as id, t.id_sucursal as branch_id, concat('TUR-', lpad(t.codigo_turno::text, 6, '0')) as code,
               u.nombre_completo as cashier, s.nombre as branch, c.nombre as register
        from temo.turnos t
        join temo.usuarios u on u.id_usuario = t.id_cajero

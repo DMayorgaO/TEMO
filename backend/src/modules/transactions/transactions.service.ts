@@ -494,10 +494,7 @@ export class TransactionsService {
     const result = await this.db.query(
       `select
          pp.id_pendiente as database_id,
-         concat(
-           'PEN-',
-           upper(substr(replace(pp.id_pendiente::text, '-', ''), 1, 8))
-         ) as id,
+         concat('PEN-', lpad(pp.codigo_pendiente::text, 6, '0')) as id,
          t.id_transaccion as transaction_database_id,
          t.id_turno as shift_database_id,
          concat(
