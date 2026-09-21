@@ -4740,7 +4740,7 @@ function PeriodFilterControl({ value, onChange, includeDates }: { value: PeriodF
   const [clockField, setClockField] = useState<'startTime' | 'endTime' | null>(null);
   const active = Object.values(value).some(Boolean);
   return <div className="period-filter" aria-label="Filtro por periodo">
-    {includeDates && <><label><span>Desde</span><input type="date" value={value.startDate} onChange={(event) => onChange({ ...value, startDate: event.target.value })}/></label><label><span>Hasta</span><input type="date" value={value.endDate} min={value.startDate} onChange={(event) => onChange({ ...value, endDate: event.target.value })}/></label></>}
+    {includeDates && <><label><span>Desde</span><input name="period-start-date" type="date" value={value.startDate} onChange={(event) => onChange({ ...value, startDate: event.target.value })}/></label><label><span>Hasta</span><input name="period-end-date" type="date" value={value.endDate} min={value.startDate} onChange={(event) => onChange({ ...value, endDate: event.target.value })}/></label></>}
     <button type="button" className="period-filter__time" onClick={() => setClockField('startTime')}><Clock3 size={16}/><span>Hora inicial</span><strong>{value.startTime || '--:--'}</strong></button>
     <button type="button" className="period-filter__time" onClick={() => setClockField('endTime')}><Clock3 size={16}/><span>Hora final</span><strong>{value.endTime || '--:--'}</strong></button>
     {active && <button type="button" className="icon-button" title="Limpiar periodo" onClick={() => onChange(emptyPeriodFilter)}><X size={16}/></button>}
@@ -4817,7 +4817,7 @@ function TransfersScreen({ currentUser }: { currentUser: AuthUser }) {
   function transferHeader(key: 'id' | 'fecha' | 'tipo' | 'monto', label: string) {
     return <th className={sortKey === key || filters[key] ? 'table-header--modified' : undefined}><div className="th-stack">
       <button type="button" className="th-sort-button" onClick={() => toggleSort(key)}>{label}{sortKey === key ? (sortDirection === 'desc' ? <ArrowUpZA size={14}/> : <ArrowDownAZ size={14}/>) : <ArrowUpDown size={14}/>}</button>
-      <input value={filters[key] ?? ''} onChange={(event) => setFilters((current) => ({ ...current, [key]: event.target.value }))} placeholder="Filtrar" />
+      <input name={`transfer-filter-${key}`} value={filters[key] ?? ''} onChange={(event) => setFilters((current) => ({ ...current, [key]: event.target.value }))} placeholder="Filtrar" />
     </div></th>;
   }
 
@@ -4856,8 +4856,8 @@ function TransfersScreen({ currentUser }: { currentUser: AuthUser }) {
         ))}
       </div>
       <PeriodFilterControl value={periodFilter} onChange={setPeriodFilter} includeDates />
-      <div className="table-toolbar"><label className="search-box"><Search size={17}/><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Buscar transferencias"/></label>
-        <div className="table-toolbar-controls"><label className="switch-control switch-control--small"><input type="checkbox" checked={showInactive} onChange={(event) => setShowInactive(event.target.checked)}/><span/>Mostrar inactivos</label></div>
+      <div className="table-toolbar"><label className="search-box"><Search size={17}/><input name="transfer-search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Buscar transferencias"/></label>
+        <div className="table-toolbar-controls"><label className="switch-control switch-control--small"><input name="transfer-show-inactive" type="checkbox" checked={showInactive} onChange={(event) => setShowInactive(event.target.checked)}/><span/>Mostrar inactivos</label></div>
       </div>
       {error && <p className="pending-screen-message transfer-error" role="alert">{error}</p>}
       <div className="table-wrap"><table className="transfer-table"><thead><tr><th className="number-column"><div className="th-stack"><span>N°</span></div></th>{transferHeader('id','ID')}{isBoss && transferHeader('fecha','FECHA')}{transferHeader('tipo','TIPO')}<th><div className="th-stack"><span>BANCO / CUENTA</span></div></th>{transferHeader('monto','MONTO')}{isBoss && <th><div className="th-stack"><span>CAJERO / SUCURSAL</span></div></th>}<th><div className="th-stack"><span>ACCIONES</span></div></th></tr></thead>
@@ -4869,7 +4869,7 @@ function TransfersScreen({ currentUser }: { currentUser: AuthUser }) {
           {isBoss && <td className="multi-line-cell transaction-operator-cell"><strong>{row.cajero}</strong><small>{row.sucursal}</small></td>}
           <td><div className="row-actions"><button className="icon-action" type="button" title="Editar" disabled={!isBoss && !(row.tipo==='EFECTIVO'&&row.direccion==='SALE'&&row.estado==='ACTIVO')} onClick={(event)=>{event.stopPropagation();void openDetail(row,'edit')}}><Edit3 size={16}/></button><button className="icon-action" type="button" title="Anular" disabled={row.estado !== 'ACTIVO'||(!isBoss&&!(row.tipo==='EFECTIVO'&&row.direccion==='SALE'))} onClick={(event)=>{event.stopPropagation();void voidTransfer(row)}}><Ban size={16}/></button></div></td>
         </tr>)}</tbody></table></div>
-      <div className="pagination-bar"><span>Mostrando {pageRows.length} de {filtered.length} registros</span><div className="action-row"><label className="page-size-control page-size-control--pagination">Registros<select value={pageSize} onChange={(event) => setPageSize(Number(event.target.value))}>{[10,20,30,50].map((size)=><option key={size}>{size}</option>)}</select></label><button className="icon-button" type="button" disabled={page===1} onClick={()=>setPage(1)}><ChevronsLeft size={17}/></button><button className="icon-button" type="button" disabled={page===1} onClick={()=>setPage((value)=>Math.max(1,value-1))}><ChevronLeft size={17}/></button><span>Pagina {page} de {pages}</span><button className="icon-button" type="button" disabled={page===pages} onClick={()=>setPage((value)=>Math.min(pages,value+1))}><ChevronRight size={17}/></button><button className="icon-button" type="button" disabled={page===pages} onClick={()=>setPage(pages)}><ChevronsRight size={17}/></button></div></div>
+      <div className="pagination-bar"><span>Mostrando {pageRows.length} de {filtered.length} registros</span><div className="action-row"><label className="page-size-control page-size-control--pagination">Registros<select name="transfer-page-size" value={pageSize} onChange={(event) => setPageSize(Number(event.target.value))}>{[10,20,30,50].map((size)=><option key={size}>{size}</option>)}</select></label><button className="icon-button" type="button" disabled={page===1} onClick={()=>setPage(1)}><ChevronsLeft size={17}/></button><button className="icon-button" type="button" disabled={page===1} onClick={()=>setPage((value)=>Math.max(1,value-1))}><ChevronLeft size={17}/></button><span>Pagina {page} de {pages}</span><button className="icon-button" type="button" disabled={page===pages} onClick={()=>setPage((value)=>Math.min(pages,value+1))}><ChevronRight size={17}/></button><button className="icon-button" type="button" disabled={page===pages} onClick={()=>setPage(pages)}><ChevronsRight size={17}/></button></div></div>
     </article>
     {modal && <TransferModal mode={modal.mode} row={modal.row} context={context} isBoss={isBoss} onClose={()=>setModal(null)} onSaved={async()=>{setModal(null);await reload();announceOperationalDataChange()}} onEdit={modal.mode==='view'?()=>setModal({mode:'edit',row:modal.row}):undefined}/>} </section>
   );
@@ -4925,7 +4925,7 @@ function DollarPurchasesScreen() {
       <section className="table-consolidation__group table-consolidation__group--income"><header><Scale size={18}/><div><strong>Diferencia acumulada</strong><span>Diferencial compra / venta</span></div></header><div className="table-consolidation__totals"><strong>{formatCashCountMoney(totals.nio, 'NIO')}</strong></div></section>
     </div>
     <PeriodFilterControl value={periodFilter} onChange={setPeriodFilter} includeDates />
-    <div className="table-toolbar"><label className="search-box"><Search size={17}/><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Buscar por ID, cajero o sucursal"/></label></div>
+    <div className="table-toolbar"><label className="search-box"><Search size={17}/><input name="dollar-purchase-search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Buscar por ID, cajero o sucursal"/></label></div>
     {error && <p className="transaction-save-error" role="alert">{error}</p>}
     <div className="table-wrap"><table className="dollar-purchase-table"><thead><tr>
       <th className="number-column"><div className="th-stack"><span>N°</span></div></th>
@@ -4946,7 +4946,7 @@ function DollarPurchasesScreen() {
       {!pageRows.length && <tr><td colSpan={6} className="empty-table-cell">No hay compras de dolares para mostrar.</td></tr>}
     </tbody></table></div>
     <div className="pagination-bar"><span>Mostrando {pageRows.length} de {filtered.length} registros</span><div className="action-row">
-      <label className="page-size-control page-size-control--pagination">Registros<select value={pageSize} onChange={(event) => setPageSize(Number(event.target.value))}>{[10,20,30,50,100].map((size)=><option key={size} value={size}>{size}</option>)}</select></label>
+      <label className="page-size-control page-size-control--pagination">Registros<select name="dollar-purchase-page-size" value={pageSize} onChange={(event) => setPageSize(Number(event.target.value))}>{[10,20,30,50,100].map((size)=><option key={size} value={size}>{size}</option>)}</select></label>
       <button type="button" className="icon-button" disabled={page===1} onClick={()=>setPage(1)}><ChevronsLeft size={17}/></button><button type="button" className="icon-button" disabled={page===1} onClick={()=>setPage((current)=>Math.max(1,current-1))}><ChevronLeft size={17}/></button><span>Pagina {page} de {totalPages}</span><button type="button" className="icon-button" disabled={page===totalPages} onClick={()=>setPage((current)=>Math.min(totalPages,current+1))}><ChevronRight size={17}/></button><button type="button" className="icon-button" disabled={page===totalPages} onClick={()=>setPage(totalPages)}><ChevronsRight size={17}/></button>
     </div></div>
   </article></section>;
@@ -5083,7 +5083,7 @@ function DirectoryScreen({ currentUser }: { currentUser: AuthUser }) {
   useEffect(() => { if (page > totalPages) setPage(totalPages); }, [page, totalPages]);
 
   function header(key: typeof sortKey, label: string) {
-    return <th className={filters[key] || sortKey === key ? 'table-header--modified' : undefined}><div className="th-stack"><button type="button" className="th-sort-button" onClick={() => { if (sortKey === key) setSortDirection((current) => current === 'desc' ? 'asc' : 'desc'); else { setSortKey(key); setSortDirection('desc'); } }}>{label}{sortKey === key ? (sortDirection === 'desc' ? <ArrowUpZA size={14}/> : <ArrowDownAZ size={14}/>) : <ArrowUpDown size={14}/>}</button><input value={filters[key] ?? ''} onChange={(event) => setFilters((current) => ({ ...current, [key]: event.target.value }))} placeholder="Filtrar" /></div></th>;
+    return <th className={filters[key] || sortKey === key ? 'table-header--modified' : undefined}><div className="th-stack"><button type="button" className="th-sort-button" onClick={() => { if (sortKey === key) setSortDirection((current) => current === 'desc' ? 'asc' : 'desc'); else { setSortKey(key); setSortDirection('desc'); } }}>{label}{sortKey === key ? (sortDirection === 'desc' ? <ArrowUpZA size={14}/> : <ArrowDownAZ size={14}/>) : <ArrowUpDown size={14}/>}</button><input name={`directory-filter-${key}`} value={filters[key] ?? ''} onChange={(event) => setFilters((current) => ({ ...current, [key]: event.target.value }))} placeholder="Filtrar" /></div></th>;
   }
 
   async function annul(row: DirectoryEntry) {
@@ -5105,7 +5105,7 @@ function DirectoryScreen({ currentUser }: { currentUser: AuthUser }) {
 
   return <section className="screen-stack"><article className="panel">
     <div className="panel__header table-panel-header"><div><p>Cuentas, contratos, cedulas y referencias frecuentes</p><h2>Directorio</h2></div>{isBoss && <button type="button" className="primary-button" onClick={() => setModal({ mode: 'create' })}><Plus size={17}/>Agregar</button>}</div>
-    <div className="table-toolbar"><label className="search-box"><Search size={17}/><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Buscar nombre, numero, cedula o referencia"/></label><div className="table-toolbar-controls"><label className="switch-control switch-control--small"><input type="checkbox" checked={showInactive} onChange={(event) => setShowInactive(event.target.checked)}/><span/>Mostrar inactivos</label></div></div>
+    <div className="table-toolbar"><label className="search-box"><Search size={17}/><input name="directory-search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Buscar nombre, numero, cedula o referencia"/></label><div className="table-toolbar-controls"><label className="switch-control switch-control--small"><input name="directory-show-inactive" type="checkbox" checked={showInactive} onChange={(event) => setShowInactive(event.target.checked)}/><span/>Mostrar inactivos</label></div></div>
     {error && <p className="transaction-save-error" role="alert">{error}</p>}
     <div className="table-wrap"><table className="directory-table"><thead><tr><th className="number-column"><div className="th-stack"><span>N°</span></div></th>{header('id','ID')}{header('name','NOMBRE')}{header('type','TIPO')}{header('number','NUMERO')}{header('currency','MONEDA')}{header('identity','CEDULA')}{header('reference','REFERENCIA')}<th><div className="th-stack"><span>ACCIONES</span></div></th></tr></thead><tbody>
       {pageRows.map((row,index)=><tr key={row.database_id} className={`${row.status === 'INACTIVO' ? 'inactive-row' : ''} ${selected === row.database_id ? 'selected-row' : ''}`} onClick={()=>setSelected(row.database_id)} onDoubleClick={()=>void openDetail(row,'view')}>
@@ -5119,7 +5119,7 @@ function DirectoryScreen({ currentUser }: { currentUser: AuthUser }) {
       </tr>)}
       {!pageRows.length && <tr><td colSpan={9} className="empty-table-cell">No hay registros que coincidan con la busqueda.</td></tr>}
     </tbody></table></div>
-    <div className="pagination-bar"><span>Mostrando {pageRows.length} de {processed.length} registros</span><div className="action-row"><label className="page-size-control page-size-control--pagination">Registros<select value={pageSize} onChange={(event) => setPageSize(Number(event.target.value))}>{[10,20,30,50,100].map((size)=><option key={size}>{size}</option>)}</select></label><button type="button" className="icon-button" disabled={page===1} onClick={()=>setPage(1)}><ChevronsLeft size={17}/></button><button type="button" className="icon-button" disabled={page===1} onClick={()=>setPage((value)=>Math.max(1,value-1))}><ChevronLeft size={17}/></button><span>Pagina {page} de {totalPages}</span><button type="button" className="icon-button" disabled={page===totalPages} onClick={()=>setPage((value)=>Math.min(totalPages,value+1))}><ChevronRight size={17}/></button><button type="button" className="icon-button" disabled={page===totalPages} onClick={()=>setPage(totalPages)}><ChevronsRight size={17}/></button></div></div>
+    <div className="pagination-bar"><span>Mostrando {pageRows.length} de {processed.length} registros</span><div className="action-row"><label className="page-size-control page-size-control--pagination">Registros<select name="directory-page-size" value={pageSize} onChange={(event) => setPageSize(Number(event.target.value))}>{[10,20,30,50,100].map((size)=><option key={size}>{size}</option>)}</select></label><button type="button" className="icon-button" disabled={page===1} onClick={()=>setPage(1)}><ChevronsLeft size={17}/></button><button type="button" className="icon-button" disabled={page===1} onClick={()=>setPage((value)=>Math.max(1,value-1))}><ChevronLeft size={17}/></button><span>Pagina {page} de {totalPages}</span><button type="button" className="icon-button" disabled={page===totalPages} onClick={()=>setPage((value)=>Math.min(totalPages,value+1))}><ChevronRight size={17}/></button><button type="button" className="icon-button" disabled={page===totalPages} onClick={()=>setPage(totalPages)}><ChevronsRight size={17}/></button></div></div>
   </article>{modal && <DirectoryModal mode={modal.mode} row={modal.row} onClose={()=>setModal(null)} onEdit={modal.mode==='view'&&isBoss?()=>setModal({...modal,mode:'edit'}):undefined} onSaved={async()=>{setModal(null);await reload();announceOperationalDataChange()}}/>}</section>;
 }
 
@@ -5580,11 +5580,11 @@ function PendingScreen({ currentUser }: { currentUser: AuthUser }) {
         <div className="table-toolbar">
           <label className="search-box">
             <Search size={17} />
-            <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Buscar pendientes" />
+            <input name="pending-search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Buscar pendientes" />
           </label>
           <div className="table-toolbar-controls">
             <label className="switch-control switch-control--small">
-              <input checked={showPaid} type="checkbox" onChange={(event) => setShowPaid(event.target.checked)} />
+              <input name="pending-show-paid" checked={showPaid} type="checkbox" onChange={(event) => setShowPaid(event.target.checked)} />
               <span />
               Mostrar pagados
             </label>
@@ -5600,6 +5600,7 @@ function PendingScreen({ currentUser }: { currentUser: AuthUser }) {
               <tr>
                 <th className="selection-column">
                   <input
+                    name="pending-select-visible"
                     type="checkbox"
                     aria-label="Seleccionar pendientes visibles"
                     checked={pageRows.some((row) => !['PAGADO', 'CANCELADO'].includes(row.estado)) && pageRows.filter((row) => !['PAGADO', 'CANCELADO'].includes(row.estado)).every((row) => selectedPendingIds.includes(row.database_id))}
@@ -5619,7 +5620,7 @@ function PendingScreen({ currentUser }: { currentUser: AuthUser }) {
                           ? sortDirection === 'asc' ? <ArrowDownAZ size={14} /> : <ArrowUpZA size={14} />
                           : <ArrowUpDown size={14} />}
                       </button>
-                      <input value={filters[column.key] ?? ''} onChange={(event) => setFilters((current) => ({ ...current, [column.key]: event.target.value }))} placeholder="Filtrar" />
+                      <input name={`pending-filter-${column.key}`} value={filters[column.key] ?? ''} onChange={(event) => setFilters((current) => ({ ...current, [column.key]: event.target.value }))} placeholder="Filtrar" />
                     </div>
                   </th>
                 ))}
@@ -5636,6 +5637,7 @@ function PendingScreen({ currentUser }: { currentUser: AuthUser }) {
                 >
                   <td className="selection-column" onClick={(event) => event.stopPropagation()}>
                     <input
+                      name={`pending-select-${row.database_id}`}
                       type="checkbox"
                       aria-label={`Seleccionar ${row.id}`}
                       disabled={['PAGADO', 'CANCELADO'].includes(row.estado)}
@@ -5684,7 +5686,7 @@ function PendingScreen({ currentUser }: { currentUser: AuthUser }) {
           <div className="action-row">
             <label className="page-size-control page-size-control--pagination">
               Registros
-              <select value={pageSize} onChange={(event) => setPageSize(Number(event.target.value))}>
+              <select name="pending-page-size" value={pageSize} onChange={(event) => setPageSize(Number(event.target.value))}>
                 {[10, 20, 30, 50, 100].map((size) => <option key={size} value={size}>{size}</option>)}
               </select>
             </label>
@@ -6727,11 +6729,11 @@ function ShiftTable({
         <div className="table-toolbar">
           <label className="search-box">
             <Search size={17} />
-            <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Buscar turnos" />
+            <input name="shift-search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Buscar turnos" />
           </label>
           <div className="table-toolbar-controls">
             <label className="switch-control switch-control--small">
-              <input checked={showInactive} type="checkbox" onChange={(event) => setShowInactive(event.target.checked)} />
+              <input name="shift-show-inactive" checked={showInactive} type="checkbox" onChange={(event) => setShowInactive(event.target.checked)} />
               <span />
               Mostrar inactivos
             </label>
@@ -6759,6 +6761,7 @@ function ShiftTable({
                           {sortKey !== column.key && <ArrowUpDown size={14} />}
                         </button>
                         <input
+                          name={`shift-filter-${column.key}`}
                           value={filters[column.key] ?? ''}
                           onChange={(event) => setFilters((current) => ({ ...current, [column.key]: event.target.value }))}
                           placeholder="Filtrar"
@@ -6836,7 +6839,7 @@ function ShiftTable({
           <div className="action-row">
             <label className="page-size-control page-size-control--pagination">
               Registros
-              <select value={pageSize} onChange={(event) => setPageSize(Number(event.target.value))}>
+              <select name="shift-page-size" value={pageSize} onChange={(event) => setPageSize(Number(event.target.value))}>
                 {[10, 20, 30, 50, 100].map((size) => <option key={size} value={size}>{size}</option>)}
               </select>
             </label>
@@ -7991,11 +7994,11 @@ function TransactionTable({ config, currentUser }: { config: CrudConfig; current
         <div className="table-toolbar">
           <label className="search-box">
             <Search size={17} />
-            <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Buscar transacciones" />
+            <input name="transaction-search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Buscar transacciones" />
           </label>
           <div className="table-toolbar-controls">
             <label className="switch-control switch-control--small">
-              <input checked={showInactive} type="checkbox" onChange={(event) => setShowInactive(event.target.checked)} />
+              <input name="transaction-show-inactive" checked={showInactive} type="checkbox" onChange={(event) => setShowInactive(event.target.checked)} />
               <span />
               Mostrar inactivos
             </label>
@@ -8023,6 +8026,7 @@ function TransactionTable({ config, currentUser }: { config: CrudConfig; current
                           {sortKey !== column.key && <ArrowUpDown size={14} />}
                         </button>
                         <input
+                          name={`transaction-filter-${column.key}`}
                           value={filters[column.key] ?? ''}
                           onChange={(event) => setFilters((current) => ({ ...current, [column.key]: event.target.value }))}
                           placeholder="Filtrar"
@@ -8100,7 +8104,7 @@ function TransactionTable({ config, currentUser }: { config: CrudConfig; current
           <div className="action-row">
             <label className="page-size-control page-size-control--pagination">
               Registros
-              <select value={pageSize} onChange={(event) => setPageSize(Number(event.target.value))}>
+              <select name="transaction-page-size" value={pageSize} onChange={(event) => setPageSize(Number(event.target.value))}>
                 {[10, 20, 30, 50, 100].map((size) => <option key={size} value={size}>{size}</option>)}
               </select>
             </label>
@@ -9595,11 +9599,11 @@ function CrudTable({
       <div className="table-toolbar">
         <label className="search-box">
           <Search size={17} />
-          <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Buscar en toda la tabla" />
+          <input name={`${config.storageKey}-search`} value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Buscar en toda la tabla" />
         </label>
         <div className="table-toolbar-controls">
           <label className="switch-control switch-control--small">
-            <input checked={showInactive} type="checkbox" onChange={(event) => setShowInactive(event.target.checked)} />
+            <input name={`${config.storageKey}-show-inactive`} checked={showInactive} type="checkbox" onChange={(event) => setShowInactive(event.target.checked)} />
             <span />
             Mostrar inactivos
           </label>
@@ -9632,6 +9636,7 @@ function CrudTable({
                       {sortKey !== column.key && <ArrowUpDown size={14} />}
                     </button>
                     <input
+                      name={`${config.storageKey}-filter-${column.key}`}
                       value={filters[column.key] ?? ''}
                       onChange={(event) => setFilters((current) => ({ ...current, [column.key]: event.target.value }))}
                       placeholder="Filtrar"
@@ -9722,7 +9727,7 @@ function CrudTable({
         <div className="action-row">
           <label className="page-size-control page-size-control--pagination">
             Registros
-            <select value={pageSize} onChange={(event) => setPageSize(Number(event.target.value))}>
+            <select name={`${config.storageKey}-page-size`} value={pageSize} onChange={(event) => setPageSize(Number(event.target.value))}>
               {[10, 20, 30, 50, 100].map((size) => <option key={size} value={size}>{size}</option>)}
             </select>
           </label>
