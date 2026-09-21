@@ -3201,6 +3201,37 @@ tbody tr:hover td {
   display: block;
 }
 
+.directory-identifiers-cell {
+  padding-bottom: 0 !important;
+  padding-top: 0 !important;
+  white-space: normal;
+}
+
+.directory-identifier-list {
+  display: grid;
+}
+
+.directory-identifier-row {
+  display: grid;
+  grid-template-columns: minmax(150px, 46fr) minmax(120px, 37fr) minmax(58px, 17fr);
+}
+
+.directory-identifier-row > span {
+  align-items: flex-start;
+  display: flex;
+  line-height: 1.25;
+  min-width: 0;
+  padding: 8px 8px 8px 0;
+}
+
+.directory-identifier-row + .directory-identifier-row > span {
+  border-top: 1px dashed #cbd8d8;
+}
+
+.directory-identifier-row--lookup {
+  grid-template-columns: minmax(145px, 1fr) minmax(180px, 1.15fr);
+}
+
 .directory-number {
   font-variant-numeric: tabular-nums;
   letter-spacing: 0;
