@@ -1,8 +1,8 @@
-# Despliegue de la API TEMO en Render
+# Despliegue de produccion de TEMO en Render
 
 ## Crear el servicio
 
-1. Suba a GitHub los cambios de preparacion para Render.
+1. Integre en `main` solamente cambios verificados desde `develop`.
 2. Ingrese a Render y seleccione **New > Blueprint**.
 3. Conecte el repositorio `DMayorgaO/TEMO`.
 4. Render detectara `render.yaml` y mostrara el servicio `temo-api`.
@@ -48,6 +48,9 @@ debe indicar que tanto la API como la base de datos estan disponibles.
 
 No ejecute las migraciones como parte del arranque. El esquema de Supabase ya
 esta creado y las siguientes migraciones deben aplicarse de forma controlada.
+
+`main` despliega produccion automaticamente. La rama `develop` no debe asociarse
+a estos servicios ni utilizar las credenciales de la base productiva.
 
 ## Desplegar el frontend
 

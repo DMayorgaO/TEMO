@@ -11,7 +11,7 @@ services:
     autoDeploy: true
     envVars:
       - key: APP_ENV
-        value: pilot
+        value: production
       - key: NODE_VERSION
         value: 22.14.0
       - key: DATABASE_URL
@@ -40,7 +40,7 @@ services:
       - key: VITE_API_URL
         value: https://temo-api.onrender.com/api
       - key: VITE_APP_ENV
-        value: pilot
+        value: production
       - key: VITE_SESSION_IDLE_MINUTES
         value: "30"
     headers:
