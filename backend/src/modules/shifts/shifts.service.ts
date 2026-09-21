@@ -127,26 +127,11 @@ export class ShiftsService {
         throw new ConflictException('El cajero ya tiene un turno abierto.');
       }
 
-      const registerResult = await client.query<{ id_caja: string } & QueryResultRow>(
-        `select c.id_caja
-         from temo.cajas c
-         where c.id_sucursal = $1
-           and c.estado = 'ACTIVO'
-           and not exists (
-             select 1 from temo.turnos t
-             where t.id_caja = c.id_caja
-               and t.estado in ('PENDIENTE_APERTURA', 'ABIERTO', 'PENDIENTE_APROBACION')
-           )
-         order by
-           case when lower(c.nombre) = lower($2) then 0 else 1 end,
-           c.nombre
-         limit 1`,
-        [branchId, input.register],
+      const registerId = await this.resolveAvailableRegister(
+        client,
+        branchId,
+        input.register,
       );
-      const registerId = registerResult.rows[0]?.id_caja;
-      if (!registerId) {
-        throw new ConflictException('No hay una caja disponible en la sucursal.');
-      }
 
       const workdayResult = await client.query<{ id_jornada: string } & QueryResultRow>(
         `insert into temo.jornadas (fecha, id_sucursal, id_usuario_apertura, estado)
@@ -267,20 +252,12 @@ export class ShiftsService {
         throw new ConflictException('El cajero seleccionado ya tiene otro turno abierto.');
       }
 
-      const registerResult = await client.query<{ id_caja: string } & QueryResultRow>(
-        `select c.id_caja from temo.cajas c
-         where c.id_sucursal = $1 and lower(c.nombre) = lower($2) and c.estado = 'ACTIVO'
-           and not exists (
-             select 1 from temo.turnos t
-             where t.id_caja = c.id_caja and t.id_turno <> $3
-               and t.estado in ('PENDIENTE_APERTURA', 'ABIERTO', 'PENDIENTE_APROBACION')
-           ) limit 1`,
-        [branchId, input.register, shiftId],
+      const registerId = await this.resolveAvailableRegister(
+        client,
+        branchId,
+        input.register,
+        shiftId,
       );
-      const registerId = registerResult.rows[0]?.id_caja;
-      if (!registerId) {
-        throw new ConflictException('La caja seleccionada no esta disponible en esa sucursal.');
-      }
 
       const workdayResult = await client.query<{ id_jornada: string } & QueryResultRow>(
         `insert into temo.jornadas (fecha, id_sucursal, id_usuario_apertura, estado)
@@ -624,6 +601,68 @@ export class ShiftsService {
       );
     });
     return this.detail(shiftId, user);
+  }
+
+  private async resolveAvailableRegister(
+    client: PoolClient,
+    branchId: string,
+    preferredName: string,
+    excludedShiftId?: string,
+  ) {
+    // Serializa solamente la asignacion de cajas de esta sucursal para evitar
+    // que dos aperturas simultaneas creen o tomen la misma caja.
+    await client.query(
+      `select id_sucursal from temo.sucursales where id_sucursal = $1 for update`,
+      [branchId],
+    );
+
+    const available = await client.query<{ id_caja: string } & QueryResultRow>(
+      `select c.id_caja
+       from temo.cajas c
+       where c.id_sucursal = $1
+         and c.estado = 'ACTIVO'
+         and not exists (
+           select 1
+           from temo.turnos t
+           where t.id_caja = c.id_caja
+             and ($3::uuid is null or t.id_turno <> $3::uuid)
+             and t.estado in ('PENDIENTE_APERTURA', 'ABIERTO', 'PENDIENTE_APROBACION')
+         )
+       order by
+         case when lower(c.nombre) = lower($2) then 0 else 1 end,
+         case
+           when c.nombre ~* '^caja[[:space:]]+[0-9]+$'
+             then substring(c.nombre from '[0-9]+')::integer
+           else 2147483647
+         end,
+         c.nombre
+       limit 1`,
+      [branchId, preferredName, excludedShiftId ?? null],
+    );
+    if (available.rows[0]) {
+      return available.rows[0].id_caja;
+    }
+
+    const next = await client.query<{ number: number } & QueryResultRow>(
+      `select coalesce(max(
+         case
+           when nombre ~* '^caja[[:space:]]+[0-9]+$'
+             then substring(nombre from '[0-9]+')::integer
+           else 0
+         end
+       ), 0) + 1 as number
+       from temo.cajas
+       where id_sucursal = $1`,
+      [branchId],
+    );
+    const registerNumber = Number(next.rows[0]?.number ?? 1);
+    const inserted = await client.query<{ id_caja: string } & QueryResultRow>(
+      `insert into temo.cajas (id_sucursal, codigo, nombre, estado)
+       values ($1, $2, $3, 'ACTIVO')
+       returning id_caja`,
+      [branchId, `CAJA_${registerNumber}`, `Caja ${registerNumber}`],
+    );
+    return inserted.rows[0].id_caja;
   }
 
   private shiftSelect() {
