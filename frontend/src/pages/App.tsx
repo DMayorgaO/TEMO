@@ -2813,6 +2813,17 @@ function getCellValue(row: CrudRow, column: TableColumn) {
 // Define columnas visibles por tabla; Comisiones se compacta sin cambiar formulario ni datos.
 function getVisibleColumns(config: CrudConfig): TableColumn[] {
   const baseColumns = config.columns.filter((column) => !column.hiddenInTable && column.key !== 'status');
+  if (config.storageKey === 'shifts') {
+    const combinedOperator: TableColumn = {
+      key: 'cashierBranch',
+      label: 'CAJERO / SUCURSAL',
+      valueGetter: (row) => `${row.cashier || 'Sin cajero'}\n${row.branch || 'Sin sucursal'}`,
+    };
+    const columnsWithoutOperator = baseColumns.filter((column) => !['cashier', 'branch'].includes(column.key));
+    const registerIndex = columnsWithoutOperator.findIndex((column) => column.key === 'register');
+    columnsWithoutOperator.splice(registerIndex + 1, 0, combinedOperator);
+    return columnsWithoutOperator;
+  }
   if (config.storageKey !== 'commissions') {
     return baseColumns;
   }
@@ -4849,12 +4860,13 @@ function TransfersScreen({ currentUser }: { currentUser: AuthUser }) {
         <div className="table-toolbar-controls"><label className="switch-control switch-control--small"><input type="checkbox" checked={showInactive} onChange={(event) => setShowInactive(event.target.checked)}/><span/>Mostrar inactivos</label></div>
       </div>
       {error && <p className="pending-screen-message transfer-error" role="alert">{error}</p>}
-      <div className="table-wrap"><table className="transfer-table"><thead><tr><th className="number-column"><div className="th-stack"><span>N°</span></div></th>{transferHeader('id','ID')}{isBoss && transferHeader('fecha','FECHA')}{transferHeader('tipo','TIPO')}<th><div className="th-stack"><span>BANCO / CUENTA</span></div></th>{transferHeader('monto','MONTO')}<th><div className="th-stack"><span>ACCIONES</span></div></th></tr></thead>
+      <div className="table-wrap"><table className="transfer-table"><thead><tr><th className="number-column"><div className="th-stack"><span>N°</span></div></th>{transferHeader('id','ID')}{isBoss && transferHeader('fecha','FECHA')}{transferHeader('tipo','TIPO')}<th><div className="th-stack"><span>BANCO / CUENTA</span></div></th>{transferHeader('monto','MONTO')}{isBoss && <th><div className="th-stack"><span>CAJERO / SUCURSAL</span></div></th>}<th><div className="th-stack"><span>ACCIONES</span></div></th></tr></thead>
         <tbody>{pageRows.map((row,index)=><tr key={row.database_id} className={`${row.estado !== 'ACTIVO' ? 'inactive-row' : ''} ${selected === row.database_id ? 'selected-row' : ''}`} onClick={()=>setSelected(row.database_id)} onDoubleClick={()=>void openDetail(row,'view')}>
           <td>{filtered.length - ((page-1)*pageSize+index)}</td><td>{row.id}</td>{isBoss && <td className="multi-line-cell">{formatTransferDate(row.fecha_transferencia)}</td>}
-          <td><strong>{row.tipo === 'EFECTIVO' ? 'Efectivo' : 'Digital'}</strong><small>{row.direccion === 'ENTRA' ? 'Ingreso' : 'Egreso'}{isBoss ? ` · ${row.cajero} / ${row.sucursal}` : ''}</small></td>
+          <td><strong>{row.tipo === 'EFECTIVO' ? 'Efectivo' : 'Digital'}</strong><small>{row.direccion === 'ENTRA' ? 'Ingreso' : 'Egreso'}</small></td>
           <td className="multi-line-cell">{row.tipo === 'CUENTA_BANCARIA' ? <><strong>{row.entidad || 'Sin banco'}</strong><small>{row.cuenta || 'Sin cuenta'}</small></> : <span className="muted-copy">—</span>}</td>
           <td><span className={`transaction-amount transaction-amount--${row.direccion === 'SALE' ? 'out' : 'in'}`}>{row.direccion === 'SALE' ? <ArrowUpRight size={16}/> : <ArrowDownLeft size={16}/>} {formatCashCountMoney(Number(row.monto), row.moneda)}</span></td>
+          {isBoss && <td className="multi-line-cell transaction-operator-cell"><strong>{row.cajero}</strong><small>{row.sucursal}</small></td>}
           <td><div className="row-actions"><button className="icon-action" type="button" title="Editar" disabled={!isBoss && !(row.tipo==='EFECTIVO'&&row.direccion==='SALE'&&row.estado==='ACTIVO')} onClick={(event)=>{event.stopPropagation();void openDetail(row,'edit')}}><Edit3 size={16}/></button><button className="icon-action" type="button" title="Anular" disabled={row.estado !== 'ACTIVO'||(!isBoss&&!(row.tipo==='EFECTIVO'&&row.direccion==='SALE'))} onClick={(event)=>{event.stopPropagation();void voidTransfer(row)}}><Ban size={16}/></button></div></td>
         </tr>)}</tbody></table></div>
       <div className="pagination-bar"><span>Mostrando {pageRows.length} de {filtered.length} registros</span><div className="action-row"><label className="page-size-control page-size-control--pagination">Registros<select value={pageSize} onChange={(event) => setPageSize(Number(event.target.value))}>{[10,20,30,50].map((size)=><option key={size}>{size}</option>)}</select></label><button className="icon-button" type="button" disabled={page===1} onClick={()=>setPage(1)}><ChevronsLeft size={17}/></button><button className="icon-button" type="button" disabled={page===1} onClick={()=>setPage((value)=>Math.max(1,value-1))}><ChevronLeft size={17}/></button><span>Pagina {page} de {pages}</span><button className="icon-button" type="button" disabled={page===pages} onClick={()=>setPage((value)=>Math.min(pages,value+1))}><ChevronRight size={17}/></button><button className="icon-button" type="button" disabled={page===pages} onClick={()=>setPage(pages)}><ChevronsRight size={17}/></button></div></div>
@@ -4921,8 +4933,7 @@ function DollarPurchasesScreen() {
       <th><div className="th-stack"><button type="button" className="th-sort-button" onClick={() => setSortDirection((current) => current === 'desc' ? 'asc' : 'desc')}>FECHA Y HORA{sortDirection === 'desc' ? <ArrowUpZA size={14}/> : <ArrowDownAZ size={14}/>}</button></div></th>
       <th><div className="th-stack"><span>MONTO</span></div></th>
       <th><div className="th-stack"><span>DIFERENCIA</span></div></th>
-      <th><div className="th-stack"><span>CAJERO</span></div></th>
-      <th><div className="th-stack"><span>SUCURSAL</span></div></th>
+      <th><div className="th-stack"><span>CAJERO / SUCURSAL</span></div></th>
     </tr></thead><tbody>
       {pageRows.map((row, index) => <tr key={row.database_id}>
         <td className="number-column">{filtered.length - ((page - 1) * pageSize + index)}</td>
@@ -4930,9 +4941,9 @@ function DollarPurchasesScreen() {
         <td className="multi-line-cell">{formatTransferDate(row.fecha_transaccion)}</td>
         <td><span className="transaction-amount transaction-amount--in">{formatCashCountMoney(Number(row.monto_comprado_usd), 'USD')}</span></td>
         <td><strong>{formatCashCountMoney(Number(row.diferencia_nio), 'NIO')}</strong><small className="dollar-purchase-rate">C$ {Number(row.tasa_venta_usada).toFixed(2)} - C$ {Number(row.tasa_compra_usada).toFixed(2)}</small></td>
-        <td>{row.cajero}</td><td>{row.sucursal}</td>
+        <td className="multi-line-cell transaction-operator-cell"><strong>{row.cajero}</strong><small>{row.sucursal}</small></td>
       </tr>)}
-      {!pageRows.length && <tr><td colSpan={7} className="empty-table-cell">No hay compras de dolares para mostrar.</td></tr>}
+      {!pageRows.length && <tr><td colSpan={6} className="empty-table-cell">No hay compras de dolares para mostrar.</td></tr>}
     </tbody></table></div>
     <div className="pagination-bar"><span>Mostrando {pageRows.length} de {filtered.length} registros</span><div className="action-row">
       <label className="page-size-control page-size-control--pagination">Registros<select value={pageSize} onChange={(event) => setPageSize(Number(event.target.value))}>{[10,20,30,50,100].map((size)=><option key={size} value={size}>{size}</option>)}</select></label>
@@ -4952,9 +4963,20 @@ function getTransferColumnValue(row: TransferApiRow, key: string) {
 }
 
 function formatTransferDate(value: string) {
-  const date = new Date(value);
+  const localizedMatch = value.match(/^(\d{2})\/(\d{2})\/(\d{4})[ T](\d{1,2}):(\d{2})(?:\s*(am|pm))?$/i);
+  const localizedHour = localizedMatch
+    ? localizedMatch[6]
+      ? (Number(localizedMatch[4]) % 12) + (localizedMatch[6].toLowerCase() === 'pm' ? 12 : 0)
+      : Number(localizedMatch[4])
+    : 0;
+  const date = localizedMatch
+    ? new Date(Number(localizedMatch[3]), Number(localizedMatch[2]) - 1, Number(localizedMatch[1]), localizedHour, Number(localizedMatch[5]))
+    : new Date(value);
   if (Number.isNaN(date.getTime())) return value;
-  return <><span>{new Intl.DateTimeFormat('es-NI',{day:'2-digit',month:'2-digit',year:'numeric'}).format(date)}</span><small>{new Intl.DateTimeFormat('es-NI',{hour:'2-digit',minute:'2-digit',hour12:false}).format(date)}</small></>;
+  const hour = date.getHours();
+  const displayHour = hour % 12 || 12;
+  const period = hour < 12 ? 'am' : 'pm';
+  return <><span>{new Intl.DateTimeFormat('es-NI',{day:'2-digit',month:'2-digit',year:'numeric'}).format(date)}</span><small>{String(displayHour).padStart(2, '0')}:{String(date.getMinutes()).padStart(2, '0')} {period}</small></>;
 }
 
 function TransferModal({ mode, row, context, isBoss, onClose, onSaved, onEdit }: { mode: ModalMode; row?: TransferApiRow; context: TransferContext; isBoss:boolean; onClose:()=>void; onSaved:()=>Promise<void>; onEdit?:()=>void }) {
@@ -5179,12 +5201,10 @@ function PendingScreen({ currentUser }: { currentUser: AuthUser }) {
   const columns = useMemo(() => [
     { key: 'id' as const, label: 'ID' },
     { key: 'fecha_creacion' as const, label: 'FECHA' },
-    { key: 'tipo' as const, label: 'TIPO' },
     { key: 'contraparte' as const, label: 'PENDIENTE' },
     { key: 'entidad' as const, label: 'BANCO' },
     { key: 'movimiento' as const, label: 'MOVIMIENTO' },
     { key: 'monto_original' as const, label: 'MONTO' },
-    { key: 'saldo_pendiente' as const, label: 'SALDO' },
     { key: 'estado' as const, label: 'ESTADO' },
     ...(isBoss ? [{ key: 'cajero' as const, label: 'CAJERO / SUCURSAL' }] : []),
   ], [isBoss]);
@@ -5625,13 +5645,20 @@ function PendingScreen({ currentUser }: { currentUser: AuthUser }) {
                   </td>
                   <td className="number-column">{processedRows.length - ((page - 1) * pageSize + index)}</td>
                   <td>{row.id}</td>
-                  <td className="multi-line-cell">{coerceTransactionDateTime(row.fecha_creacion)}</td>
-                  <td>{row.tipo === 'POR_COBRAR' ? 'Por cobrar' : 'Por pagar'}</td>
+                  <td className="multi-line-cell">{formatTransferDate(row.fecha_creacion)}</td>
                   <td>{row.contraparte}</td>
                   <td>{row.entidad}</td>
                   <td><strong>{row.movimiento}</strong><small className="pending-movement-code">{row.codigo_movimiento}</small></td>
-                  <td className="pending-money-cell">{formatCashCountMoney(Number(row.monto_original), row.moneda)}</td>
-                  <td className="pending-money-cell">{formatCashCountMoney(Number(row.saldo_pendiente), row.moneda)}</td>
+                  <td className="pending-money-cell">
+                    <span
+                      className={`transaction-amount transaction-amount--${row.tipo === 'POR_PAGAR' ? 'out' : 'in'}`}
+                      title={row.tipo === 'POR_COBRAR' ? 'Por cobrar' : 'Por pagar'}
+                      aria-label={`${row.tipo === 'POR_COBRAR' ? 'Por cobrar' : 'Por pagar'} ${formatCashCountMoney(Number(row.monto_original), row.moneda)}`}
+                    >
+                      {row.tipo === 'POR_PAGAR' ? <ArrowUpRight size={16}/> : <ArrowDownLeft size={16}/>}
+                      <span>{formatCashCountMoney(Number(row.monto_original), row.moneda)}</span>
+                    </span>
+                  </td>
                   <td><span className={`pending-status pending-status--${row.estado.toLowerCase()}`}>{row.estado}</span></td>
                   {isBoss && <td className="multi-line-cell transaction-operator-cell">{`${row.cajero}\n${row.sucursal}`}</td>}
                   <td>
@@ -8021,7 +8048,7 @@ function TransactionTable({ config, currentUser }: { config: CrudConfig; current
                 >
                   <td className="number-column">{processedRows.length - ((page - 1) * pageSize + index)}</td>
                   <td>{row.id}</td>
-                  <td>{row.registeredAt}</td>
+                  <td className="multi-line-cell">{formatTransferDate(row.registeredAt)}</td>
                   <td>{row.entity}</td>
                   <td className="multi-line-cell transaction-movement-cell">
                     <strong>{row.movement || 'Movimiento no disponible'}</strong>
@@ -9644,9 +9671,11 @@ function CrudTable({
                   onDoubleClick={() => openViewModal(row)}
                 >
                   <td className="number-column">{processedRows.length - ((page - 1) * pageSize + index)}</td>
-                  {visibleColumns.map((column) => (
-                    <td key={column.key}>{getCellValue(row, column)}</td>
-                  ))}
+                  {visibleColumns.map((column) => {
+                    const value = getCellValue(row, column);
+                    const isDateTime = /fecha|date|At$/i.test(column.key) && /\d.*[:T ]/.test(String(value));
+                    return <td key={column.key} className={isDateTime ? 'multi-line-cell' : undefined}>{isDateTime ? formatTransferDate(String(value)) : value}</td>;
+                  })}
                   <td>
                     <div className="row-actions">
                       <button type="button" className="icon-action" title="Editar" onClick={(event) => { event.stopPropagation(); openEditModal(row); }}>
