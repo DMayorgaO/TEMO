@@ -8,8 +8,8 @@ export class DollarPurchasesService {
 
   // Reconstruye compras de dolares desde transacciones y arqueos sin crear saldos paralelos.
   async list(user: AuthenticatedUser) {
-    if (user.roleCode !== 'JEFA') {
-      throw new ForbiddenException('Solo el Administrador puede consultar las compras de dolares.');
+    if (!['JEFA', 'CAJERO'].includes(user.roleCode)) {
+      throw new ForbiddenException('No tiene permiso para consultar las compras de dolares.');
     }
 
     const result = await this.db.query(`
@@ -32,6 +32,19 @@ export class DollarPurchasesService {
         left join temo.pagos_pendientes pp on pp.id_transaccion = t.id_transaccion
         where t.estado <> 'ANULADA'
           and pp.id_pendiente is null
+          and (
+            $1 = 'JEFA'
+            or (
+              t.id_cajero = $2
+              and exists (
+                select 1
+                from temo.turnos active_shift
+                where active_shift.id_turno = t.id_turno
+                  and active_shift.id_cajero = $2
+                  and active_shift.estado in ('ABIERTO', 'PENDIENTE_APROBACION')
+              )
+            )
+          )
       ),
       group_coverage as (
         select
@@ -95,7 +108,7 @@ export class DollarPurchasesService {
       join temo.sucursales s on s.id_sucursal = c.id_sucursal
       where c.purchased_usd > 0
       order by c.fecha_transaccion desc, c.orden_grupo desc
-    `);
+    `, [user.roleCode, user.id]);
     return result.rows;
   }
 }
