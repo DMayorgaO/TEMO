@@ -1977,12 +1977,7 @@ export class TransactionsService {
        )
        update temo.saldos_turno_cuentas stc
        set
-         saldo_final_sistema = case
-           when recalculated.previous_system is null then null
-           else recalculated.previous_system
-             + recalculated.current_calculated
-             - coalesce(recalculated.previous_calculated, recalculated.saldo_inicial)
-         end,
+         saldo_final_sistema = recalculated.current_calculated,
          saldo_final_calculado = recalculated.current_calculated
        from recalculated
        where stc.id_saldo_turno = recalculated.id_saldo_turno`,

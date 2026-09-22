@@ -960,26 +960,16 @@ export class ShiftsService {
          case when eb.codigo = 'TELEDOLAR' then 0 else stc.saldo_inicial end as initial,
          coalesce(movements.income, 0) as income,
          coalesce(movements.expense, 0) as expense,
-         (case when eb.codigo = 'TELEDOLAR' then 0 else stc.saldo_inicial end)
-           + (case when eb.codigo = 'PEX' then -coalesce(movements.income, 0) else coalesce(movements.income, 0) end)
-           + (case when eb.codigo = 'PEX' then coalesce(movements.expense, 0) else -coalesce(movements.expense, 0) end) as calculated,
+         computed.amount as calculated,
          case
-           when stc.saldo_final_sistema is null then
-             (case when eb.codigo = 'TELEDOLAR' then 0 else stc.saldo_inicial end)
-             + (case when eb.codigo = 'PEX' then -coalesce(movements.income, 0) else coalesce(movements.income, 0) end)
-             + (case when eb.codigo = 'PEX' then coalesce(movements.expense, 0) else -coalesce(movements.expense, 0) end)
-           else stc.saldo_final_sistema + (
-             (case when eb.codigo = 'TELEDOLAR' then 0 else stc.saldo_inicial end)
-             + (case when eb.codigo = 'PEX' then -coalesce(movements.income, 0) else coalesce(movements.income, 0) end)
-             + (case when eb.codigo = 'PEX' then coalesce(movements.expense, 0) else -coalesce(movements.expense, 0) end)
-             - coalesce(stc.saldo_final_calculado, stc.saldo_inicial)
-           )
+           when stc.saldo_final_calculado is distinct from computed.amount then computed.amount
+           else coalesce(stc.saldo_final_sistema, computed.amount)
          end as system,
          stc.saldo_ingresos_sistema as system_income,
          stc.saldo_egresos_sistema as system_expense,
          case
-           when stc.saldo_final_sistema is null then 0
-           else stc.saldo_final_sistema - coalesce(stc.saldo_final_calculado, stc.saldo_inicial)
+           when stc.saldo_final_calculado is distinct from computed.amount then 0
+           else coalesce(stc.saldo_final_sistema, computed.amount) - computed.amount
          end as difference
        from temo.saldos_turno_cuentas stc
        join temo.turnos selected_shift on selected_shift.id_turno = stc.id_turno
@@ -1018,6 +1008,12 @@ export class ShiftsService {
              )
          ) mc
        ) movements on true
+       cross join lateral (
+         select
+           (case when eb.codigo = 'TELEDOLAR' then 0 else stc.saldo_inicial end)
+           + (case when eb.codigo = 'PEX' then -coalesce(movements.income, 0) else coalesce(movements.income, 0) end)
+           + (case when eb.codigo = 'PEX' then coalesce(movements.expense, 0) else -coalesce(movements.expense, 0) end) as amount
+       ) computed
        where stc.id_turno = $1
          and (
            cb.estado = 'ACTIVO'
@@ -1260,12 +1256,7 @@ export class ShiftsService {
        )
        update temo.saldos_turno_cuentas stc
        set
-         saldo_final_sistema = case
-           when recalculated.previous_system is null then null
-           else recalculated.previous_system
-             + recalculated.current_calculated
-             - coalesce(recalculated.previous_calculated, recalculated.saldo_inicial)
-         end,
+         saldo_final_sistema = recalculated.current_calculated,
          saldo_final_calculado = recalculated.current_calculated
        from recalculated
        where stc.id_saldo_turno = recalculated.id_saldo_turno`,
