@@ -4010,6 +4010,34 @@ tbody tr:hover td {
   justify-content: center;
 }
 
+.teledolar-opening-summary {
+  display: grid;
+  gap: 5px;
+}
+
+.teledolar-opening-summary span {
+  align-items: center;
+  background: rgb(21 128 61 / .05);
+  border: 1px solid rgb(21 128 61 / .14);
+  border-radius: 4px;
+  color: var(--muted);
+  display: flex;
+  font-size: .65rem;
+  justify-content: space-between;
+  padding: 5px 7px;
+}
+
+.shift-bank-balance-card--nio .teledolar-opening-summary span {
+  background: rgb(15 118 110 / .05);
+  border-color: rgb(15 118 110 / .14);
+}
+
+.teledolar-opening-summary strong {
+  color: var(--ink);
+  font-size: .72rem;
+  font-variant-numeric: tabular-nums;
+}
+
 .shift-form-notes {
   grid-column: 1 / -1;
 }

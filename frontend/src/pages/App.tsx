@@ -184,6 +184,8 @@ type ShiftCashCount = { total: number; lines: ShiftCashLine[] };
 type ShiftDetail = {
   database_id: string;
   id: string;
+  fecha_apertura?: string;
+  fecha_cierre?: string | null;
   id_sucursal: string;
   estado: string;
   sucursal: string;
@@ -2584,6 +2586,7 @@ function shiftDetailToCrudRow(shift: ShiftDetail): CrudRow {
     openedDate: openedAt ? new Date(openedAt).toLocaleDateString('en-CA', { timeZone: 'America/Managua' }) : '',
     sortTimestamp: openedAt ? String(new Date(openedAt).getTime()) : '0',
     closedAt: closedAt ? formatShiftDateTime(new Date(closedAt)) : '',
+    closedDate: closedAt ? new Date(closedAt).toLocaleDateString('en-CA', { timeZone: 'America/Managua' }) : '',
     openingNio,
     openingUsd,
     closingNio,
@@ -6785,7 +6788,12 @@ function ShiftTable({
                 NIO: cashCountPayload(openingCounts.NIO).NIO,
                 USD: cashCountPayload(openingCounts.USD).USD,
               },
-              balances: accounts.map((account) => ({ account: account.alias, amount: parseMoneyValue(balanceDraft[account.id]) })),
+              balances: accounts.map((account) => ({
+                account: account.alias,
+                amount: parseMoneyValue(balanceDraft[account.id]),
+                income: normalizeLookupValue(account.entity) === 'teledolar' ? parseMoneyValue(balanceDraft[`${account.id}:income`]) : undefined,
+                expense: normalizeLookupValue(account.entity) === 'teledolar' ? parseMoneyValue(balanceDraft[`${account.id}:expense`]) : undefined,
+              })),
             },
             closing: {
               notes: normalizedRow.closingNotes || '',
@@ -6825,7 +6833,12 @@ function ShiftTable({
             NIO: cashCountPayload(openingCounts.NIO).NIO,
             USD: cashCountPayload(openingCounts.USD).USD,
           },
-          balances: accounts.map((account) => ({ account: account.alias, amount: parseMoneyValue(balanceDraft[account.id]) })),
+          balances: accounts.map((account) => ({
+            account: account.alias,
+            amount: parseMoneyValue(balanceDraft[account.id]),
+            income: normalizeLookupValue(account.entity) === 'teledolar' ? parseMoneyValue(balanceDraft[`${account.id}:income`]) : undefined,
+            expense: normalizeLookupValue(account.entity) === 'teledolar' ? parseMoneyValue(balanceDraft[`${account.id}:expense`]) : undefined,
+          })),
           prepared: mode === 'open' ? prepared : undefined,
         }),
       });
@@ -7204,6 +7217,11 @@ function ShiftModal({
     setCopyShiftError('');
     try {
       const detail = await apiRequest<ShiftDetail>(`/shifts/${selectedCopyShift.databaseId}`);
+      const closingDate = detail.fecha_cierre
+        ? new Date(detail.fecha_cierre).toLocaleDateString('en-CA', { timeZone: 'America/Managua' })
+        : '';
+      const today = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Managua' });
+      const carriesDailyTeledolar = closingDate === today;
       const closingCounts = detail.cashCounts.CIERRE_CONTADO ?? detail.cashCounts.ACTUAL;
       const closingDraft = cashDraftFromShiftCounts(closingCounts);
       setOpeningCashCounts({ NIO: closingDraft, USD: closingDraft });
@@ -7220,9 +7238,12 @@ function ShiftModal({
         );
         const targetAccount = exactAccount ?? (compatibleAccounts.length === 1 ? compatibleAccounts[0] : undefined);
         if (targetAccount) {
-          copiedBalances[targetAccount.id] = normalizeLookupValue(balance.entity) === 'teledolar'
-            ? '0'
-            : String(balance.system ?? balance.calculated ?? balance.initial ?? '0');
+          const isTeledolar = normalizeLookupValue(balance.entity) === 'teledolar';
+          copiedBalances[targetAccount.id] = isTeledolar ? '0' : String(balance.system ?? balance.calculated ?? balance.initial ?? '0');
+          if (isTeledolar) {
+            copiedBalances[`${targetAccount.id}:income`] = carriesDailyTeledolar ? String(balance.system_income ?? '0') : '0';
+            copiedBalances[`${targetAccount.id}:expense`] = carriesDailyTeledolar ? String(balance.system_expense ?? '0') : '0';
+          }
         }
       }
       setOpeningBankBalances(copiedBalances);
@@ -7726,7 +7747,10 @@ function ShiftBankBalanceTables({
                       </td>
                     )}
                     <td>
-                      {phase === 'closing' && normalizeLookupValue(account.entity) === 'teledolar' ? <div className="teledolar-system-inputs">
+                      {normalizeLookupValue(account.entity) === 'teledolar' && phase === 'opening' ? <div className="teledolar-opening-summary">
+                        <span>Ingresos acumulados<strong>{formatCashCountMoney(parseMoneyValue(balances[`${account.id}:income`]), currency)}</strong></span>
+                        <span>Egresos acumulados<strong>{formatCashCountMoney(parseMoneyValue(balances[`${account.id}:expense`]), currency)}</strong></span>
+                      </div> : phase === 'closing' && normalizeLookupValue(account.entity) === 'teledolar' ? <div className="teledolar-system-inputs">
                         <label>Ingresos<span className="consolidation-input-wrap"><span>{getCurrencySymbol(currency)}</span><input
                           value={formatConsolidationInput(balances[`${account.id}:income`])}
                           readOnly={readOnly} inputMode="decimal"

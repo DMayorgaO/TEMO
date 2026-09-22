@@ -1211,8 +1211,10 @@ export class ShiftsService {
 
     for (const balance of balances) {
       await client.query(
-        `insert into temo.saldos_turno_cuentas (id_turno, id_cuenta, saldo_inicial)
-         select $1, cb.id_cuenta, $3
+        `insert into temo.saldos_turno_cuentas (
+           id_turno, id_cuenta, saldo_inicial, saldo_ingresos_sistema, saldo_egresos_sistema
+         )
+         select $1, cb.id_cuenta, $3, $5, $6
          from temo.cuentas_bancarias cb
          where cb.alias = $2
            and (
@@ -1222,8 +1224,11 @@ export class ShiftsService {
                where cs.id_cuenta = cb.id_cuenta and cs.id_sucursal = $4
              )
            )
-         on conflict (id_turno, id_cuenta) do update set saldo_inicial = excluded.saldo_inicial`,
-        [shiftId, balance.account, balance.amount, branchId],
+         on conflict (id_turno, id_cuenta) do update set
+           saldo_inicial = excluded.saldo_inicial,
+           saldo_ingresos_sistema = excluded.saldo_ingresos_sistema,
+           saldo_egresos_sistema = excluded.saldo_egresos_sistema`,
+        [shiftId, balance.account, balance.amount, branchId, balance.income ?? null, balance.expense ?? null],
       );
     }
 
