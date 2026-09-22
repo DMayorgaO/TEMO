@@ -2281,11 +2281,14 @@ function cashCountPayload(draft: Record<string, CashPileDraft>) {
 }
 
 function formatConsolidationInput(value?: string) {
-  return formatAccountingMoneyInput(value);
+  const numericValue = Number(String(value ?? '').replace(/,/g, ''));
+  return Number.isFinite(numericValue) && String(value ?? '').trim()
+    ? new Intl.NumberFormat('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(numericValue)
+    : '';
 }
 
 function parseConsolidationValue(value?: string) {
-  const rawValue = normalizeConsolidationRaw(value);
+  const rawValue = normalizeSignedAccountingMoneyRaw(value);
   return rawValue ? Number(rawValue) : 0;
 }
 
@@ -2361,6 +2364,19 @@ function getAccountingMoneyKeyValue(event: KeyboardEvent<HTMLInputElement>, curr
   }
 
   return null;
+}
+
+function getSignedAccountingMoneyKeyValue(event: KeyboardEvent<HTMLInputElement>, currentValue?: string) {
+  const source = String(currentValue ?? '');
+  const isNegative = source.trim().startsWith('-');
+  const unsignedValue = source.replace(/-/g, '');
+  if (event.key === '-') {
+    const normalized = normalizeAccountingMoneyRaw(unsignedValue) || '0';
+    return isNegative ? normalized : `-${normalized}`;
+  }
+  const nextValue = getAccountingMoneyKeyValue(event, unsignedValue);
+  if (typeof nextValue !== 'string') return nextValue;
+  return isNegative && nextValue ? `-${nextValue}` : nextValue;
 }
 
 function queueAccountingMoneyCaret(event: KeyboardEvent<HTMLInputElement>, nextValue: string) {
@@ -2551,6 +2567,7 @@ function shiftDetailToCrudRow(shift: ShiftDetail): CrudRow {
     register: shift.caja,
     cashier: shift.cajero,
     openedAt: openedAt ? formatShiftDateTime(new Date(openedAt)) : '',
+    openedDate: openedAt ? new Date(openedAt).toLocaleDateString('en-CA', { timeZone: 'America/Managua' }) : '',
     sortTimestamp: openedAt ? String(new Date(openedAt).getTime()) : '0',
     closedAt: closedAt ? formatShiftDateTime(new Date(closedAt)) : '',
     openingNio,
@@ -3646,7 +3663,7 @@ function ShiftClosureModal({
   }
 
   function handleClosingBalanceKeyDown(event: KeyboardEvent<HTMLInputElement>, account: string, currency: CashCurrency, rowIndex: number, rowCount: number) {
-    const nextValue = getAccountingMoneyKeyValue(event, balances[account]);
+    const nextValue = getSignedAccountingMoneyKeyValue(event, balances[account]);
     if (nextValue !== undefined) {
       event.preventDefault();
       if (nextValue !== null) {
@@ -3756,7 +3773,7 @@ function ShiftClosureModal({
                         return (
                           <tr key={balance.account}>
                             <td><strong>{balance.entity}</strong><small>{balance.account}</small></td>
-                            <td><div className="consolidation-input-wrap"><span>{getCurrencySymbol(currency)}</span><input data-shift-close-balance-currency={currency} data-shift-close-balance-row={rowIndex} value={formatAccountingMoneyInput(balances[balance.account])} inputMode="decimal" onChange={(event) => setBalances((current) => ({ ...current, [balance.account]: normalizeAccountingMoneyRaw(event.target.value) }))} onKeyDown={(event) => handleClosingBalanceKeyDown(event, balance.account, currency, rowIndex, currencyBalances.length)} onFocus={(event) => placeAccountingMoneyCaretBeforeDecimals(event.currentTarget)} onClick={(event) => placeAccountingMoneyCaretBeforeDecimals(event.currentTarget)} /></div></td>
+                            <td><div className="consolidation-input-wrap"><span>{getCurrencySymbol(currency)}</span><input data-shift-close-balance-currency={currency} data-shift-close-balance-row={rowIndex} value={formatConsolidationInput(balances[balance.account])} inputMode="decimal" onChange={(event) => setBalances((current) => ({ ...current, [balance.account]: normalizeSignedAccountingMoneyRaw(event.target.value) }))} onKeyDown={(event) => handleClosingBalanceKeyDown(event, balance.account, currency, rowIndex, currencyBalances.length)} onFocus={(event) => placeAccountingMoneyCaretBeforeDecimals(event.currentTarget)} onClick={(event) => placeAccountingMoneyCaretBeforeDecimals(event.currentTarget)} /></div></td>
                             <td>{renderDifference(systemAmount - calculatedAmount, currency, { positiveLabel: '' })}</td>
                           </tr>
                         );
@@ -5831,16 +5848,28 @@ function GeneralConsolidationScreen() {
   // Esta vista conserva su propia lista para no reemplazar el historial compartido de Turnos.
   const [shiftRows, setShiftRows] = useState<CrudRow[]>([]);
   const normalizedShifts = useMemo(
-    () => shiftRows.map(normalizeShiftRow).filter((shift) => shift.status === 'Abierto'),
+    () => shiftRows.map(normalizeShiftRow),
     [shiftRows],
   );
+  const openShifts = useMemo(() => normalizedShifts.filter((shift) => shift.status === 'Abierto'), [normalizedShifts]);
+  const [historyBranch, setHistoryBranch] = useState('');
+  const [historyCashier, setHistoryCashier] = useState('');
+  const [historyDate, setHistoryDate] = useState('');
+  const historicalMatches = useMemo(
+    () => normalizedShifts.filter((shift) =>
+      shift.status === 'Cerrado' &&
+      (!historyBranch || shift.branch === historyBranch) &&
+      (!historyCashier || shift.cashier === historyCashier) &&
+      (!historyDate || shift.openedDate === historyDate)),
+    [historyBranch, historyCashier, historyDate, normalizedShifts],
+  );
   const [selectedShiftId, setSelectedShiftId] = useState(
-    () => normalizedShifts.find((shift) => shift.status === 'Abierto')?.id || normalizedShifts[0]?.id || '',
+    () => openShifts[0]?.id || '',
   );
   const selectedShift = !currentShiftLoaded
     ? undefined
     : normalizedShifts.find((shift) => shift.id === selectedShiftId) ||
-      normalizedShifts.find((shift) => shift.status === 'Abierto') ||
+      openShifts[0] ||
       normalizedShifts[0];
   const accounts = useMemo(
     () => getShiftAccountsForBranch(selectedShift?.branch || ''),
@@ -5883,11 +5912,10 @@ function GeneralConsolidationScreen() {
     // La Jefa consulta los turnos abiertos de la API y no datos antiguos del navegador.
     void apiRequest<ShiftDetail[]>('/shifts')
       .then((details) => {
-        const openRows = details
-          .filter((detail) => ['ABIERTO', 'PENDIENTE_APROBACION'].includes(detail.estado))
-          .map(shiftDetailToCrudRow);
-        setShiftRows(openRows);
-        setSelectedShiftId((current) => openRows.some((row) => row.id === current) ? current : openRows[0]?.id || '');
+        const rows = details.map(shiftDetailToCrudRow);
+        const firstOpen = rows.find((row) => row.status === 'Abierto');
+        setShiftRows(rows);
+        setSelectedShiftId((current) => rows.some((row) => row.id === current) ? current : firstOpen?.id || '');
       })
       .catch(() => setShiftRows([]))
       .finally(() => setCurrentShiftLoaded(true));
@@ -5987,7 +6015,7 @@ function GeneralConsolidationScreen() {
     if (!selectedShift || selectedShift.status === 'Cerrado' || field === 'initial') {
       return;
     }
-    const cleanValue = normalizeConsolidationRaw(value);
+    const cleanValue = normalizeSignedAccountingMoneyRaw(value);
     const key = getConsolidationKey(currency, entity);
     const account = getShiftBalanceAccount(accounts, currency, entity);
     const accountAlias = apiBalanceAccounts[key] || account?.alias;
@@ -6031,7 +6059,7 @@ function GeneralConsolidationScreen() {
     field: 'initial' | 'system',
     currentValue?: string,
   ) {
-    const nextValue = getAccountingMoneyKeyValue(event, currentValue);
+    const nextValue = getSignedAccountingMoneyKeyValue(event, currentValue);
     if (nextValue === undefined) {
       return;
     }
@@ -6060,16 +6088,35 @@ function GeneralConsolidationScreen() {
             <p>Conciliacion por entidad</p>
             <h2>Consolidado de montos generales</h2>
           </div>
-          {!isCashier && <label className="consolidation-shift-selector">
-            Turno
-            <select value={selectedShift?.id || ''} onChange={(event) => setSelectedShiftId(event.target.value)}>
-              {normalizedShifts.map((shift) => (
+          {!isCashier && <div className="consolidation-shift-groups">
+            <label className="consolidation-shift-selector">
+              Turnos abiertos
+              <select value={openShifts.some((shift) => shift.id === selectedShiftId) ? selectedShiftId : ''} onChange={(event) => setSelectedShiftId(event.target.value)}>
+                <option value="">Seleccionar</option>
+                {openShifts.map((shift) => (
                 <option key={shift.id} value={shift.id}>
                   {shift.id} · {shift.cashier} · {shift.branch} · {shift.status}
                 </option>
-              ))}
-            </select>
-          </label>}
+                ))}
+              </select>
+            </label>
+            <fieldset className="consolidation-history-filters">
+              <legend>Turnos históricos</legend>
+              <select aria-label="Sucursal histórica" value={historyBranch} onChange={(event) => { setHistoryBranch(event.target.value); setSelectedShiftId(''); }}>
+                <option value="">Sucursal</option>
+                {[...new Set(normalizedShifts.map((shift) => shift.branch))].map((branch) => <option key={branch}>{branch}</option>)}
+              </select>
+              <select aria-label="Cajero histórico" value={historyCashier} onChange={(event) => { setHistoryCashier(event.target.value); setSelectedShiftId(''); }}>
+                <option value="">Cajero</option>
+                {[...new Set(normalizedShifts.filter((shift) => !historyBranch || shift.branch === historyBranch).map((shift) => shift.cashier))].map((cashier) => <option key={cashier}>{cashier}</option>)}
+              </select>
+              <input aria-label="Día histórico" type="date" value={historyDate} onChange={(event) => { setHistoryDate(event.target.value); setSelectedShiftId(''); }} />
+              <select aria-label="Turno histórico" value={historicalMatches.some((shift) => shift.id === selectedShiftId) ? selectedShiftId : ''} onChange={(event) => setSelectedShiftId(event.target.value)}>
+                <option value="">{historicalMatches.length ? 'Seleccionar turno' : 'Sin coincidencias'}</option>
+                {historicalMatches.map((shift) => <option key={shift.id} value={shift.id}>{shift.id} · {shift.openedAt}</option>)}
+              </select>
+            </fieldset>
+          </div>}
         </div>
 
         {selectedShift ? (
@@ -7071,7 +7118,7 @@ function ShiftModal({
   }
 
   function updateBankBalance(accountId: string, value: string) {
-    const cleanValue = normalizeConsolidationRaw(value);
+    const cleanValue = normalizeSignedAccountingMoneyRaw(value);
     if (isCloseMode) {
       setClosingBankBalances((current) => ({ ...current, [accountId]: cleanValue }));
       return;
@@ -7080,7 +7127,7 @@ function ShiftModal({
   }
 
   function updateClosingBankBalance(accountId: string, value: string) {
-    setClosingBankBalances((current) => ({ ...current, [accountId]: normalizeConsolidationRaw(value) }));
+    setClosingBankBalances((current) => ({ ...current, [accountId]: normalizeSignedAccountingMoneyRaw(value) }));
   }
 
   async function saveDraft(prepared = false) {
@@ -7488,7 +7535,7 @@ function ShiftBankBalanceTables({
   }
 
   function handleKeyDown(event: KeyboardEvent<HTMLInputElement>, accountId: string, currency: CashCurrency, rowIndex: number, rowCount: number) {
-    const nextValue = getAccountingMoneyKeyValue(event, balances[accountId]);
+    const nextValue = getSignedAccountingMoneyKeyValue(event, balances[accountId]);
     if (nextValue !== undefined) {
       event.preventDefault();
       if (nextValue !== null) {

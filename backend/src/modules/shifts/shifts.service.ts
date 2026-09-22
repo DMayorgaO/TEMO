@@ -939,22 +939,23 @@ export class ShiftsService {
          cb.alias as account,
          eb.codigo as entity,
          m.codigo as currency,
-         stc.saldo_inicial as initial,
+         case when eb.codigo = 'TELEDOLAR' then 0 else stc.saldo_inicial end as initial,
          coalesce(movements.income, 0) as income,
          coalesce(movements.expense, 0) as expense,
-         stc.saldo_inicial
+         (case when eb.codigo = 'TELEDOLAR' then 0 else stc.saldo_inicial end)
            + coalesce(movements.income, 0)
            - coalesce(movements.expense, 0) as calculated,
          stc.saldo_final_sistema as system,
          case
            when stc.saldo_final_sistema is null then null
            else stc.saldo_final_sistema - (
-             stc.saldo_inicial
+             (case when eb.codigo = 'TELEDOLAR' then 0 else stc.saldo_inicial end)
              + coalesce(movements.income, 0)
              - coalesce(movements.expense, 0)
            )
          end as difference
        from temo.saldos_turno_cuentas stc
+       join temo.turnos selected_shift on selected_shift.id_turno = stc.id_turno
        join temo.cuentas_bancarias cb on cb.id_cuenta = stc.id_cuenta
        join temo.entidades_bancarias eb on eb.id_entidad = cb.id_entidad
        join temo.monedas m on m.id_moneda = cb.id_moneda
@@ -966,14 +967,28 @@ export class ShiftsService {
            select mc.direccion, mc.monto
            from temo.movimientos_cuentas mc
            join temo.transacciones tr on tr.id_transaccion = mc.id_transaccion
-           where mc.id_cuenta = stc.id_cuenta and tr.id_turno = stc.id_turno and tr.estado <> 'ANULADA'
+           join temo.turnos movement_shift on movement_shift.id_turno = tr.id_turno
+           where mc.id_cuenta = stc.id_cuenta
+             and tr.estado <> 'ANULADA'
+             and (
+               (eb.codigo = 'TELEDOLAR'
+                 and movement_shift.id_sucursal = selected_shift.id_sucursal
+                 and movement_shift.fecha_apertura::date = selected_shift.fecha_apertura::date)
+               or (eb.codigo <> 'TELEDOLAR' and tr.id_turno = stc.id_turno)
+             )
            union all
            select mc.direccion, mc.monto
            from temo.movimientos_cuentas mc
            join temo.transferencias tf on tf.id_transferencia = mc.id_transferencia
+           join temo.turnos movement_shift on movement_shift.id_turno = tf.id_turno
            where mc.id_cuenta = stc.id_cuenta
-             and tf.id_turno = stc.id_turno
              and tf.estado = 'ACTIVO'
+             and (
+               (eb.codigo = 'TELEDOLAR'
+                 and movement_shift.id_sucursal = selected_shift.id_sucursal
+                 and movement_shift.fecha_apertura::date = selected_shift.fecha_apertura::date)
+               or (eb.codigo <> 'TELEDOLAR' and tf.id_turno = stc.id_turno)
+             )
          ) mc
        ) movements on true
        where stc.id_turno = $1
