@@ -4967,6 +4967,7 @@ function TransfersScreen({ currentUser }: { currentUser: AuthUser }) {
 function DollarPurchasesScreen({ currentUser }: { currentUser: AuthUser }) {
   const [rows, setRows] = useState<DollarPurchaseApiRow[]>([]);
   const [query, setQuery] = useState('');
+  const [filters, setFilters] = useState<Record<string, string>>({});
   const [periodFilter, setPeriodFilter] = useState<PeriodFilter>(emptyPeriodFilter);
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
@@ -4986,18 +4987,28 @@ function DollarPurchasesScreen({ currentUser }: { currentUser: AuthUser }) {
 
   const filtered = useMemo(() => {
     const search = normalizeLookupValue(query);
+    const columnValue = (row: DollarPurchaseApiRow, key: string) => {
+      if (key === 'fecha') return row.fecha_transaccion;
+      if (key === 'monto') return `${row.monto_comprado_usd} ${formatCashCountMoney(Number(row.monto_comprado_usd), 'USD')}`;
+      if (key === 'diferencia') return `${row.diferencia_nio} ${row.tasa_venta_usada} ${row.tasa_compra_usada}`;
+      if (key === 'operador') return `${row.cajero} ${row.sucursal}`;
+      return String(row[key as keyof DollarPurchaseApiRow] ?? '');
+    };
     return rows
       .filter((row) => {
         const matchesSearch = !search || normalizeLookupValue([
           row.id, row.cajero, row.sucursal, row.monto_comprado_usd, row.diferencia_nio,
         ].join(' ')).includes(search);
-        return matchesSearch && (!isBoss || matchesPeriodFilter(row.fecha_transaccion, periodFilter, true));
+        const matchesColumns = Object.entries(filters).every(([key, value]) =>
+          !value || normalizeLookupValue(columnValue(row, key)).includes(normalizeLookupValue(value)),
+        );
+        return matchesSearch && matchesColumns && (!isBoss || matchesPeriodFilter(row.fecha_transaccion, periodFilter, true));
       })
       .sort((first, second) => {
         const comparison = new Date(first.fecha_transaccion).getTime() - new Date(second.fecha_transaccion).getTime();
         return sortDirection === 'asc' ? comparison : -comparison;
       });
-  }, [isBoss, periodFilter, query, rows, sortDirection]);
+  }, [filters, isBoss, periodFilter, query, rows, sortDirection]);
   const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
   const pageRows = filtered.slice((page - 1) * pageSize, page * pageSize);
   const totals = useMemo(() => filtered.reduce((result, row) => ({
@@ -5005,7 +5016,7 @@ function DollarPurchasesScreen({ currentUser }: { currentUser: AuthUser }) {
     nio: result.nio + Number(row.diferencia_nio),
   }), { usd: 0, nio: 0 }), [filtered]);
 
-  useEffect(() => setPage(1), [pageSize, periodFilter, query]);
+  useEffect(() => setPage(1), [filters, pageSize, periodFilter, query]);
   useEffect(() => setPage((current) => Math.min(current, totalPages)), [totalPages]);
 
   return <section className="screen-stack"><article className="panel">
@@ -5019,11 +5030,11 @@ function DollarPurchasesScreen({ currentUser }: { currentUser: AuthUser }) {
     {error && <p className="transaction-save-error" role="alert">{error}</p>}
     <div className="table-wrap"><table className="dollar-purchase-table"><thead><tr>
       <th className="number-column"><div className="th-stack"><span>N°</span></div></th>
-      <th><div className="th-stack"><span>ID</span></div></th>
-      <th><div className="th-stack"><button type="button" className="th-sort-button" onClick={() => setSortDirection((current) => current === 'desc' ? 'asc' : 'desc')}>FECHA Y HORA{sortDirection === 'desc' ? <ArrowUpZA size={14}/> : <ArrowDownAZ size={14}/>}</button></div></th>
-      <th><div className="th-stack"><span>MONTO</span></div></th>
-      <th><div className="th-stack"><span>DIFERENCIA</span></div></th>
-      {isBoss && <th><div className="th-stack"><span>CAJERO / SUCURSAL</span></div></th>}
+      <th><div className="th-stack"><span>ID</span><input name="dollar-purchase-filter-id" value={filters.id ?? ''} onChange={(event)=>setFilters((current)=>({...current,id:event.target.value}))} placeholder="Filtrar"/></div></th>
+      <th><div className="th-stack"><button type="button" className="th-sort-button" onClick={() => setSortDirection((current) => current === 'desc' ? 'asc' : 'desc')}>FECHA Y HORA{sortDirection === 'desc' ? <ArrowUpZA size={14}/> : <ArrowDownAZ size={14}/>}</button><input name="dollar-purchase-filter-fecha" value={filters.fecha ?? ''} onChange={(event)=>setFilters((current)=>({...current,fecha:event.target.value}))} placeholder="Filtrar"/></div></th>
+      <th><div className="th-stack"><span>MONTO</span><input name="dollar-purchase-filter-monto" value={filters.monto ?? ''} onChange={(event)=>setFilters((current)=>({...current,monto:event.target.value}))} placeholder="Filtrar"/></div></th>
+      <th><div className="th-stack"><span>DIFERENCIA</span><input name="dollar-purchase-filter-diferencia" value={filters.diferencia ?? ''} onChange={(event)=>setFilters((current)=>({...current,diferencia:event.target.value}))} placeholder="Filtrar"/></div></th>
+      {isBoss && <th><div className="th-stack"><span>CAJERO / SUCURSAL</span><input name="dollar-purchase-filter-operador" value={filters.operador ?? ''} onChange={(event)=>setFilters((current)=>({...current,operador:event.target.value}))} placeholder="Filtrar"/></div></th>}
     </tr></thead><tbody>
       {pageRows.map((row, index) => <tr key={row.database_id}>
         <td className="number-column">{filtered.length - ((page - 1) * pageSize + index)}</td>
@@ -5124,7 +5135,7 @@ function directorySearchText(row: DirectoryEntry) {
 }
 
 function DirectoryScreen({ currentUser }: { currentUser: AuthUser }) {
-  const isBoss = currentUser.roleCode === 'JEFA';
+  const canManage = ['JEFA', 'CAJERO'].includes(currentUser.roleCode);
   const [rows, setRows] = useState<DirectoryEntry[]>([]);
   const [query, setQuery] = useState('');
   const [filters, setFilters] = useState<Record<string, string>>({});
@@ -5194,7 +5205,7 @@ function DirectoryScreen({ currentUser }: { currentUser: AuthUser }) {
   }
 
   return <section className="screen-stack"><article className="panel">
-    <div className="panel__header table-panel-header"><div><p>Cuentas, contratos, cedulas y referencias frecuentes</p><h2>Directorio</h2></div>{isBoss && <button type="button" className="primary-button" onClick={() => setModal({ mode: 'create' })}><Plus size={17}/>Agregar</button>}</div>
+    <div className="panel__header table-panel-header"><div><p>Cuentas, contratos, cedulas y referencias frecuentes</p><h2>Directorio</h2></div>{canManage && <button type="button" className="primary-button" onClick={() => setModal({ mode: 'create' })}><Plus size={17}/>Agregar</button>}</div>
     <div className="table-toolbar"><label className="search-box"><Search size={17}/><input name="directory-search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Buscar nombre, numero, cedula o referencia"/></label><div className="table-toolbar-controls"><label className="switch-control switch-control--small"><input name="directory-show-inactive" type="checkbox" checked={showInactive} onChange={(event) => setShowInactive(event.target.checked)}/><span/>Mostrar inactivos</label></div></div>
     {error && <p className="transaction-save-error" role="alert">{error}</p>}
     <div className="table-wrap"><table className="directory-table"><thead><tr><th className="number-column"><div className="th-stack"><span>N°</span></div></th>{header('id','ID')}{header('name','NOMBRE')}{header('type','TIPO')}{header('number','NUMERO')}{header('currency','MONEDA')}{header('identity','CEDULA')}{header('reference','REFERENCIA')}<th><div className="th-stack"><span>ACCIONES</span></div></th></tr></thead><tbody>
@@ -5203,12 +5214,12 @@ function DirectoryScreen({ currentUser }: { currentUser: AuthUser }) {
         <td className="directory-identifiers-cell" colSpan={3}><div className="directory-identifier-list">{row.identifiers.length ? row.identifiers.map((item,index)=><div className="directory-identifier-row" key={`${item.type}-${item.number}-${index}`}><span>{item.institution ? `${item.institution} · ` : ''}{item.type}</span><span className="directory-number">{item.number}</span><span>{item.currency ?? '---'}</span></div>) : <span>---</span>}</div></td>
         <td className="directory-lines">{row.identities.length ? row.identities.map((item,index)=><span key={`${item.number}-${index}`}>{item.number}{item.holder ? <small>{item.holder}</small> : null}</span>) : '---'}</td>
         <td className="directory-lines">{row.references.length ? row.references.map((item,index)=><span key={`${item}-${index}`}>{item}</span>) : '---'}</td>
-        <td>{isBoss && <div className="directory-row-actions"><button type="button" className="icon-action" title="Editar" onClick={(event)=>{event.stopPropagation();void openDetail(row,'edit')}}><Edit3 size={16}/></button>{row.status === 'ACTIVO' && <button type="button" className="icon-action icon-action--danger" title="Anular" onClick={(event)=>{event.stopPropagation();void annul(row)}}><Ban size={16}/></button>}</div>}</td>
+        <td>{canManage && <div className="directory-row-actions"><button type="button" className="icon-action" title="Editar" onClick={(event)=>{event.stopPropagation();void openDetail(row,'edit')}}><Edit3 size={16}/></button>{row.status === 'ACTIVO' && <button type="button" className="icon-action icon-action--danger" title="Anular" onClick={(event)=>{event.stopPropagation();void annul(row)}}><Ban size={16}/></button>}</div>}</td>
       </tr>)}
       {!pageRows.length && <tr><td colSpan={9} className="empty-table-cell">No hay registros que coincidan con la busqueda.</td></tr>}
     </tbody></table></div>
     <div className="pagination-bar"><span>Mostrando {pageRows.length} de {processed.length} registros</span><div className="action-row"><label className="page-size-control page-size-control--pagination">Registros<select name="directory-page-size" value={pageSize} onChange={(event) => setPageSize(Number(event.target.value))}>{[10,20,30,50,100].map((size)=><option key={size}>{size}</option>)}</select></label><button type="button" className="icon-button" disabled={page===1} onClick={()=>setPage(1)}><ChevronsLeft size={17}/></button><button type="button" className="icon-button" disabled={page===1} onClick={()=>setPage((value)=>Math.max(1,value-1))}><ChevronLeft size={17}/></button><span>Pagina {page} de {totalPages}</span><button type="button" className="icon-button" disabled={page===totalPages} onClick={()=>setPage((value)=>Math.min(totalPages,value+1))}><ChevronRight size={17}/></button><button type="button" className="icon-button" disabled={page===totalPages} onClick={()=>setPage(totalPages)}><ChevronsRight size={17}/></button></div></div>
-  </article>{modal && <DirectoryModal mode={modal.mode} row={modal.row} onClose={()=>setModal(null)} onEdit={modal.mode==='view'&&isBoss?()=>setModal({...modal,mode:'edit'}):undefined} onSaved={async()=>{setModal(null);await reload();announceOperationalDataChange()}}/>}</section>;
+  </article>{modal && <DirectoryModal mode={modal.mode} row={modal.row} onClose={()=>setModal(null)} onEdit={modal.mode==='view'&&canManage?()=>setModal({...modal,mode:'edit'}):undefined} onSaved={async()=>{setModal(null);await reload();announceOperationalDataChange()}}/>}</section>;
 }
 
 function blankDirectoryIdentifier(): DirectoryIdentifier {
@@ -7817,6 +7828,8 @@ function TransactionTable({ config, currentUser }: { config: CrudConfig; current
   const [sortKey, setSortKey] = useState<string | null>('id');
   const [sortDirection, setSortDirection] = useState<SortDirection>('desc');
   const [selectedRowId, setSelectedRowId] = useState<string | null>(null);
+  const [markerMode, setMarkerMode] = useState(false);
+  const [markedTransactionIds, setMarkedTransactionIds] = useState<Set<string>>(() => new Set());
   const [modal, setModal] = useState<{ mode: ModalMode | 'view' | 'pay'; row: CrudRow } | null>(null);
   const [showExchangeCalculator, setShowExchangeCalculator] = useState(false);
   const [showDirectoryLookup, setShowDirectoryLookup] = useState(false);
@@ -7919,6 +7932,25 @@ function TransactionTable({ config, currentUser }: { config: CrudConfig; current
 
   const totalPages = Math.max(1, Math.ceil(processedRows.length / pageSize));
   const pageRows = processedRows.slice((page - 1) * pageSize, page * pageSize);
+  const visibleMarkedCount = processedRows.filter((row) => markedTransactionIds.has(row.id)).length;
+
+  function toggleMarkedTransaction(id: string) {
+    setMarkedTransactionIds((current) => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  function toggleVisibleTransactions() {
+    setMarkedTransactionIds((current) => {
+      const next = new Set(current);
+      const allMarked = pageRows.length > 0 && pageRows.every((row) => next.has(row.id));
+      pageRows.forEach((row) => allMarked ? next.delete(row.id) : next.add(row.id));
+      return next;
+    });
+  }
 
   useEffect(() => {
     setPage(1);
@@ -8192,6 +8224,15 @@ function TransactionTable({ config, currentUser }: { config: CrudConfig; current
               <BookUser size={17} />
               Directorio
             </button>
+            <button
+              type="button"
+              className={`secondary-button marker-mode-button ${markerMode ? 'marker-mode-button--active' : ''}`}
+              onClick={() => setMarkerMode((current) => !current)}
+              title="Marcar visualmente las transacciones ya corroboradas"
+            >
+              <CheckCircle2 size={17} />
+              Modo marcador{markerMode ? ` (${visibleMarkedCount})` : ''}
+            </button>
             <button type="button" className="secondary-button export-button export-button--excel" onClick={() => exportExcel(config.title, columns, processedRows)}>
               <FileSpreadsheet size={17} />
               Excel
@@ -8226,6 +8267,7 @@ function TransactionTable({ config, currentUser }: { config: CrudConfig; current
           <table>
             <thead>
               <tr>
+                {markerMode && <th className="marker-column"><input aria-label="Marcar transacciones visibles" type="checkbox" checked={pageRows.length > 0 && pageRows.every((row)=>markedTransactionIds.has(row.id))} onChange={toggleVisibleTransactions}/></th>}
                 <th className="number-column">
                   <div className="th-stack">
                     <span>N°</span>
@@ -8263,10 +8305,11 @@ function TransactionTable({ config, currentUser }: { config: CrudConfig; current
               {pageRows.map((row, index) => (
                 <tr
                   key={row.id}
-                  className={`${row.status === 'Anulada' ? 'inactive-row' : ''} ${selectedRowId === row.id ? 'selected-row' : ''}`}
+                  className={`${row.status === 'Anulada' ? 'inactive-row' : ''} ${selectedRowId === row.id ? 'selected-row' : ''} ${markedTransactionIds.has(row.id) ? 'transaction-row--marked' : ''}`}
                   onClick={() => setSelectedRowId(row.id)}
                   onDoubleClick={() => void openTransactionModal(row, 'view')}
                 >
+                  {markerMode && <td className="marker-column"><input aria-label={`Marcar ${row.id} como revisada`} type="checkbox" checked={markedTransactionIds.has(row.id)} onClick={(event)=>event.stopPropagation()} onChange={()=>toggleMarkedTransaction(row.id)}/></td>}
                   <td className="number-column">{processedRows.length - ((page - 1) * pageSize + index)}</td>
                   <td>{row.id}</td>
                   <td className="multi-line-cell">{formatTransferDate(row.registeredAt)}</td>
@@ -9445,7 +9488,7 @@ function TransactionCashCountTable({
                       onChange={(event) => onPileFieldChange(denomination.id, 'groups', event.target.value)}
                       placeholder="0"
                     />
-                    {availablePileDrafts && <small title="Montones de 25 disponibles en el arqueo actual">Disp. {availablePile.groups || '0'}</small>}
+                    {availablePileDrafts && Number(availablePile.groups) > 0 && <small title="Montones de 25 disponibles en el arqueo actual">{availablePile.groups}</small>}
                   </div>
                 </div>
                 <div role="cell">
@@ -9465,7 +9508,7 @@ function TransactionCashCountTable({
                       onChange={(event) => onPileFieldChange(denomination.id, 'loose', event.target.value)}
                       placeholder="0"
                     />
-                    {availablePileDrafts && <small title="Unidades sueltas disponibles en el arqueo actual">Disp. {availablePile.loose || '0'}</small>}
+                    {availablePileDrafts && Number(availablePile.loose) > 0 && <small title="Unidades sueltas disponibles en el arqueo actual">{availablePile.loose}</small>}
                   </div>
                 </div>
                 <div className="transaction-cash-quantity" role="cell">{quantity}</div>

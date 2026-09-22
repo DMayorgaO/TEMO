@@ -20,7 +20,7 @@ export class DirectoryService {
   }
 
   async create(input: DirectoryEntryInput, user: AuthenticatedUser) {
-    this.requireBoss(user);
+    this.requireDirectoryManager(user);
     return this.db.transaction(async (client) => {
       const inserted = await client.query<{ id: string }>(
         `insert into temo.directorio_destinatarios
@@ -37,7 +37,7 @@ export class DirectoryService {
   }
 
   async update(id: string, input: DirectoryEntryInput, user: AuthenticatedUser) {
-    this.requireBoss(user);
+    this.requireDirectoryManager(user);
     return this.db.transaction(async (client) => {
       const updated = await client.query(
         `update temo.directorio_destinatarios
@@ -121,8 +121,10 @@ export class DirectoryService {
     }
   }
 
-  private requireBoss(user: AuthenticatedUser) {
-    if (user.roleCode !== 'JEFA') throw new ForbiddenException('Solo la Jefa puede administrar el directorio.');
+  private requireDirectoryManager(user: AuthenticatedUser) {
+    if (!['JEFA', 'CAJERO'].includes(user.roleCode)) {
+      throw new ForbiddenException('Tu usuario no puede administrar el directorio.');
+    }
   }
 
   private formatNumber(value: string) {

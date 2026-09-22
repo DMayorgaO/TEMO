@@ -3223,19 +3223,53 @@ tbody tr:hover td {
 }
 
 .directory-table {
-  min-width: 1020px;
+  min-width: 1240px;
   table-layout: fixed;
 }
 
 .directory-table th:nth-child(1) { width: 48px; }
-.directory-table th:nth-child(2) { width: 82px; }
-.directory-table th:nth-child(3) { width: 170px; }
-.directory-table th:nth-child(4) { width: 180px; }
-.directory-table th:nth-child(5) { width: 145px; }
-.directory-table th:nth-child(6) { width: 66px; }
-.directory-table th:nth-child(7) { width: 170px; }
-.directory-table th:nth-child(8) { width: 110px; }
-.directory-table th:nth-child(9) { width: 82px; }
+.directory-table th:nth-child(2) { width: 112px; }
+.directory-table th:nth-child(3) { width: 190px; }
+.directory-table th:nth-child(4) { width: 190px; }
+.directory-table th:nth-child(5) { width: 165px; }
+.directory-table th:nth-child(6) { width: 100px; }
+.directory-table th:nth-child(7) { width: 185px; }
+.directory-table th:nth-child(8) { width: 140px; }
+.directory-table th:nth-child(9) { width: 110px; }
+
+.directory-table th,
+.directory-table .th-stack,
+.directory-table .th-sort-button,
+.directory-table .th-stack input {
+  min-width: 0;
+  width: 100%;
+}
+
+.directory-table th {
+  overflow: hidden;
+}
+
+.marker-column {
+  text-align: center;
+  width: 48px;
+}
+
+.marker-column input {
+  accent-color: var(--teal);
+  height: 18px;
+  margin: 0;
+  width: 18px;
+}
+
+.marker-mode-button--active {
+  background: #e3f4ef;
+  border-color: #78bbae;
+  color: #0f6f60;
+}
+
+.transaction-row--marked td {
+  background: #edf8f5;
+}
 
 .directory-row-actions {
   display: flex;
