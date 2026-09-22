@@ -1970,6 +1970,19 @@ function mapApiTransactionRow(row: TransactionApiRow): CrudRow {
   });
 }
 
+async function loadAllTransactions() {
+  const pageSize = 200;
+  const rows: TransactionApiRow[] = [];
+
+  for (let offset = 0; ; offset += pageSize) {
+    const page = await apiRequest<TransactionApiRow[]>(
+      `/transactions?limit=${pageSize}&offset=${offset}`,
+    );
+    rows.push(...page);
+    if (page.length < pageSize) return rows;
+  }
+}
+
 function isPayableTransaction(row: CrudRow) {
   return Boolean(row.pendingDatabaseId) && ['PENDIENTE', 'ABONADO', 'VENCIDO'].includes(row.pendingStatus);
 }
@@ -7633,7 +7646,7 @@ function TransactionTable({ config, currentUser }: { config: CrudConfig; current
   }, [currentShift]);
 
   async function reloadTransactions() {
-    const databaseRows = await apiRequest<TransactionApiRow[]>('/transactions?limit=200');
+    const databaseRows = await loadAllTransactions();
     setRows(databaseRows.map(mapApiTransactionRow));
   }
 
@@ -7641,7 +7654,7 @@ function TransactionTable({ config, currentUser }: { config: CrudConfig; current
     let cancelled = false;
     setRows([]);
     Promise.all([
-      apiRequest<TransactionApiRow[]>('/transactions?limit=200'),
+      loadAllTransactions(),
       apiRequest<ShiftDetail | null>('/shifts/current'),
     ])
       .then(([databaseRows, shift]) => {
@@ -7663,7 +7676,7 @@ function TransactionTable({ config, currentUser }: { config: CrudConfig; current
 
   useOperationalRefresh(async () => {
     const [databaseRows, shift] = await Promise.all([
-      apiRequest<TransactionApiRow[]>('/transactions?limit=200'),
+      loadAllTransactions(),
       apiRequest<ShiftDetail | null>('/shifts/current'),
     ]);
     setRows(databaseRows.map(mapApiTransactionRow));

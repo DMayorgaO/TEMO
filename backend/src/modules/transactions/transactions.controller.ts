@@ -52,9 +52,11 @@ export class TransactionsController {
   @Get()
   async list(
     @Query('limit') limit = '50',
+    @Query('offset') offset = '0',
     @Req() request: { user: AuthenticatedUser },
   ) {
-    const safeLimit = Math.min(Number(limit) || 50, 200);
+    const safeLimit = Math.min(Math.max(Number.parseInt(limit, 10) || 50, 1), 200);
+    const safeOffset = Math.max(Number.parseInt(offset, 10) || 0, 0);
     const result = await this.db.query(
       `select
          t.id_transaccion as database_id,
@@ -125,15 +127,15 @@ export class TransactionsController {
          where v.id_grupo_transacciones = t.id_grupo_transacciones
        ) liq on true
        where (
-         $2 = 'JEFA'
+         $3 = 'JEFA'
          or (
-           t.id_cajero = $3::uuid
+           t.id_cajero = $4::uuid
            and tu.estado in ('ABIERTO', 'PENDIENTE_APROBACION')
          )
        )
-       order by t.fecha_transaccion desc
-       limit $1`,
-      [safeLimit, request.user.roleCode, request.user.id],
+       order by t.fecha_transaccion desc, t.id_transaccion desc
+       limit $1 offset $2`,
+      [safeLimit, safeOffset, request.user.roleCode, request.user.id],
     );
 
     return result.rows;
