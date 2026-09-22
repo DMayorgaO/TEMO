@@ -6247,7 +6247,9 @@ function ConsolidationTable({
       const system = isTeledolar
         ? parseConsolidationValue(rowBalance.systemIncome) - parseConsolidationValue(rowBalance.systemExpense)
         : parseConsolidationValue(rowBalance.system);
-      const finalBalance = initial + movement.income - movement.expense;
+      const finalBalance = normalizeLookupValue(entity) === 'pex'
+        ? initial - movement.income + movement.expense
+        : initial + movement.income - movement.expense;
       acc.initial += initial;
       acc.income += movement.income;
       acc.expense += movement.expense;
@@ -6299,7 +6301,9 @@ function ConsolidationTable({
               const system = isTeledolar
                 ? systemIncome - systemExpense
                 : parseConsolidationValue(rowBalance.system);
-              const finalBalance = initial + movement.income - movement.expense;
+              const finalBalance = normalizeLookupValue(entity) === 'pex'
+                ? initial - movement.income + movement.expense
+                : initial + movement.income - movement.expense;
               const difference = system - finalBalance;
               return (
                 <tr key={key}>

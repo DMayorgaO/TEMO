@@ -368,10 +368,26 @@ export class ShiftsService {
       for (const balance of balances) {
         await client.query(
           `update temo.saldos_turno_cuentas stc
-           set saldo_final_sistema = $3,
+           set saldo_final_calculado = stc.saldo_inicial
+                 + (case when eb.codigo = 'PEX' then -1 else 1 end) * coalesce((
+                   select sum(case movement.direccion when 'ENTRA' then movement.monto else -movement.monto end)
+                   from (
+                     select mc.direccion, mc.monto
+                     from temo.movimientos_cuentas mc
+                     join temo.transacciones tr on tr.id_transaccion = mc.id_transaccion
+                     where mc.id_cuenta = stc.id_cuenta and tr.id_turno = $1 and tr.estado <> 'ANULADA'
+                     union all
+                     select mc.direccion, mc.monto
+                     from temo.movimientos_cuentas mc
+                     join temo.transferencias tf on tf.id_transferencia = mc.id_transferencia
+                     where mc.id_cuenta = stc.id_cuenta and tf.id_turno = $1 and tf.estado = 'ACTIVO'
+                   ) movement
+                 ), 0),
+               saldo_final_sistema = $3,
                saldo_ingresos_sistema = $4,
                saldo_egresos_sistema = $5
            from temo.cuentas_bancarias cb
+           join temo.entidades_bancarias eb on eb.id_entidad = cb.id_entidad
            where stc.id_turno = $1
              and stc.id_cuenta = cb.id_cuenta
              and cb.alias = $2`,
@@ -945,18 +961,25 @@ export class ShiftsService {
          coalesce(movements.income, 0) as income,
          coalesce(movements.expense, 0) as expense,
          (case when eb.codigo = 'TELEDOLAR' then 0 else stc.saldo_inicial end)
-           + coalesce(movements.income, 0)
-           - coalesce(movements.expense, 0) as calculated,
-         stc.saldo_final_sistema as system,
+           + (case when eb.codigo = 'PEX' then -coalesce(movements.income, 0) else coalesce(movements.income, 0) end)
+           + (case when eb.codigo = 'PEX' then coalesce(movements.expense, 0) else -coalesce(movements.expense, 0) end) as calculated,
+         case
+           when stc.saldo_final_sistema is null then
+             (case when eb.codigo = 'TELEDOLAR' then 0 else stc.saldo_inicial end)
+             + (case when eb.codigo = 'PEX' then -coalesce(movements.income, 0) else coalesce(movements.income, 0) end)
+             + (case when eb.codigo = 'PEX' then coalesce(movements.expense, 0) else -coalesce(movements.expense, 0) end)
+           else stc.saldo_final_sistema + (
+             (case when eb.codigo = 'TELEDOLAR' then 0 else stc.saldo_inicial end)
+             + (case when eb.codigo = 'PEX' then -coalesce(movements.income, 0) else coalesce(movements.income, 0) end)
+             + (case when eb.codigo = 'PEX' then coalesce(movements.expense, 0) else -coalesce(movements.expense, 0) end)
+             - coalesce(stc.saldo_final_calculado, stc.saldo_inicial)
+           )
+         end as system,
          stc.saldo_ingresos_sistema as system_income,
          stc.saldo_egresos_sistema as system_expense,
          case
-           when stc.saldo_final_sistema is null then null
-           else stc.saldo_final_sistema - (
-             (case when eb.codigo = 'TELEDOLAR' then 0 else stc.saldo_inicial end)
-             + coalesce(movements.income, 0)
-             - coalesce(movements.expense, 0)
-           )
+           when stc.saldo_final_sistema is null then 0
+           else stc.saldo_final_sistema - coalesce(stc.saldo_final_calculado, stc.saldo_inicial)
          end as difference
        from temo.saldos_turno_cuentas stc
        join temo.turnos selected_shift on selected_shift.id_turno = stc.id_turno
@@ -1210,22 +1233,42 @@ export class ShiftsService {
 
     // Si se corrige una apertura con movimientos existentes, alinea también el saldo calculado.
     await client.query(
-      `update temo.saldos_turno_cuentas stc
-       set saldo_final_calculado = stc.saldo_inicial + coalesce((
-         select sum(case movement.direccion when 'ENTRA' then movement.monto else -movement.monto end)
-         from (
-           select mc.direccion, mc.monto
-           from temo.movimientos_cuentas mc
-           join temo.transacciones tr on tr.id_transaccion = mc.id_transaccion
-           where mc.id_cuenta = stc.id_cuenta and tr.id_turno = $1 and tr.estado <> 'ANULADA'
-           union all
-           select mc.direccion, mc.monto
-           from temo.movimientos_cuentas mc
-           join temo.transferencias tf on tf.id_transferencia = mc.id_transferencia
-           where mc.id_cuenta = stc.id_cuenta and tf.id_turno = $1 and tf.estado = 'ACTIVO'
-         ) movement
-       ), 0)
-       where stc.id_turno = $1`,
+      `with recalculated as (
+         select
+           stc.id_saldo_turno,
+           stc.saldo_inicial,
+           stc.saldo_final_calculado as previous_calculated,
+           stc.saldo_final_sistema as previous_system,
+           stc.saldo_inicial + (case when eb.codigo = 'PEX' then -1 else 1 end) * coalesce((
+             select sum(case movement.direccion when 'ENTRA' then movement.monto else -movement.monto end)
+             from (
+               select mc.direccion, mc.monto
+               from temo.movimientos_cuentas mc
+               join temo.transacciones tr on tr.id_transaccion = mc.id_transaccion
+               where mc.id_cuenta = stc.id_cuenta and tr.id_turno = $1 and tr.estado <> 'ANULADA'
+               union all
+               select mc.direccion, mc.monto
+               from temo.movimientos_cuentas mc
+               join temo.transferencias tf on tf.id_transferencia = mc.id_transferencia
+               where mc.id_cuenta = stc.id_cuenta and tf.id_turno = $1 and tf.estado = 'ACTIVO'
+             ) movement
+           ), 0) as current_calculated
+         from temo.saldos_turno_cuentas stc
+         join temo.cuentas_bancarias cb on cb.id_cuenta = stc.id_cuenta
+         join temo.entidades_bancarias eb on eb.id_entidad = cb.id_entidad
+         where stc.id_turno = $1
+       )
+       update temo.saldos_turno_cuentas stc
+       set
+         saldo_final_sistema = case
+           when recalculated.previous_system is null then null
+           else recalculated.previous_system
+             + recalculated.current_calculated
+             - coalesce(recalculated.previous_calculated, recalculated.saldo_inicial)
+         end,
+         saldo_final_calculado = recalculated.current_calculated
+       from recalculated
+       where stc.id_saldo_turno = recalculated.id_saldo_turno`,
       [shiftId],
     );
   }
@@ -1239,7 +1282,8 @@ export class ShiftsService {
       await client.query(
         `update temo.saldos_turno_cuentas stc
          set
-           saldo_final_calculado = stc.saldo_inicial + coalesce((
+           saldo_final_calculado = stc.saldo_inicial +
+             (case when eb.codigo = 'PEX' then -1 else 1 end) * coalesce((
              select sum(case mc.direccion when 'ENTRA' then mc.monto else -mc.monto end)
              from (
                select mc.direccion, mc.monto
@@ -1260,6 +1304,7 @@ export class ShiftsService {
            saldo_egresos_sistema = $5,
            fecha_registro_cierre = now()
          from temo.cuentas_bancarias cb
+         join temo.entidades_bancarias eb on eb.id_entidad = cb.id_entidad
          where stc.id_turno = $1
            and stc.id_cuenta = cb.id_cuenta
            and cb.alias = $2`,

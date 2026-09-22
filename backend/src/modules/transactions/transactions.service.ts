@@ -1944,28 +1944,48 @@ export class TransactionsService {
     );
 
     await client.query(
-      `update temo.saldos_turno_cuentas stc
-       set saldo_final_calculado = stc.saldo_inicial + coalesce((
-         select sum(case movements.direccion when 'ENTRA' then movements.monto else -movements.monto end)
-         from (
-           /* Suma transacciones vigentes y omite cualquier operacion anulada. */
-           select mc.direccion, mc.monto
-           from temo.movimientos_cuentas mc
-           join temo.transacciones tr on tr.id_transaccion = mc.id_transaccion
-           where mc.id_cuenta = stc.id_cuenta
-             and tr.id_turno = stc.id_turno
-             and tr.estado <> 'ANULADA'
-           union all
-           /* Incluye transferencias digitales activas sin reintroducir sus reversos. */
-           select mc.direccion, mc.monto
-           from temo.movimientos_cuentas mc
-           join temo.transferencias tf on tf.id_transferencia = mc.id_transferencia
-           where mc.id_cuenta = stc.id_cuenta
-             and tf.id_turno = stc.id_turno
-             and tf.estado = 'ACTIVO'
-         ) movements
-       ), 0)
-       where stc.id_turno = $1`,
+      `with recalculated as (
+         select
+           stc.id_saldo_turno,
+           stc.saldo_inicial,
+           stc.saldo_final_calculado as previous_calculated,
+           stc.saldo_final_sistema as previous_system,
+           stc.saldo_inicial + (case when eb.codigo = 'PEX' then -1 else 1 end) * coalesce((
+             select sum(case movements.direccion when 'ENTRA' then movements.monto else -movements.monto end)
+             from (
+               /* Suma transacciones vigentes y omite cualquier operacion anulada. */
+               select mc.direccion, mc.monto
+               from temo.movimientos_cuentas mc
+               join temo.transacciones tr on tr.id_transaccion = mc.id_transaccion
+               where mc.id_cuenta = stc.id_cuenta
+                 and tr.id_turno = stc.id_turno
+                 and tr.estado <> 'ANULADA'
+               union all
+               /* Incluye transferencias digitales activas sin reintroducir sus reversos. */
+               select mc.direccion, mc.monto
+               from temo.movimientos_cuentas mc
+               join temo.transferencias tf on tf.id_transferencia = mc.id_transferencia
+               where mc.id_cuenta = stc.id_cuenta
+                 and tf.id_turno = stc.id_turno
+                 and tf.estado = 'ACTIVO'
+             ) movements
+           ), 0) as current_calculated
+         from temo.saldos_turno_cuentas stc
+         join temo.cuentas_bancarias cb on cb.id_cuenta = stc.id_cuenta
+         join temo.entidades_bancarias eb on eb.id_entidad = cb.id_entidad
+         where stc.id_turno = $1
+       )
+       update temo.saldos_turno_cuentas stc
+       set
+         saldo_final_sistema = case
+           when recalculated.previous_system is null then null
+           else recalculated.previous_system
+             + recalculated.current_calculated
+             - coalesce(recalculated.previous_calculated, recalculated.saldo_inicial)
+         end,
+         saldo_final_calculado = recalculated.current_calculated
+       from recalculated
+       where stc.id_saldo_turno = recalculated.id_saldo_turno`,
       [shiftId],
     );
   }
