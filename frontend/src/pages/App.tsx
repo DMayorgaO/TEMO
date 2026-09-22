@@ -3087,6 +3087,8 @@ function CashierShiftWaiting({ user, preparedShift, onOpen, onLogout }: { user: 
 export function App() {
   const [currentUser, setCurrentUser] = useState<AuthUser | null>(() => readAuthenticatedUser());
   const [cashierShiftAccess, setCashierShiftAccess] = useState<{ loaded: boolean; active: ShiftDetail | null; prepared: ShiftDetail | null }>({ loaded: false, active: null, prepared: null });
+  const cashierShiftAccessRef = useRef(cashierShiftAccess);
+  const cashierShiftMissingChecksRef = useRef(0);
   const [activeScreen, setActiveScreen] = useState<ScreenId>(getScreenFromHash);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
@@ -3106,20 +3108,44 @@ export function App() {
   // Bloquea la navegacion del cajero hasta que exista o confirme un turno asignado.
   useEffect(() => {
     if (currentUser?.roleCode !== 'CAJERO') {
-      setCashierShiftAccess({ loaded: true, active: null, prepared: null });
+      cashierShiftMissingChecksRef.current = 0;
+      const nextAccess = { loaded: true, active: null, prepared: null };
+      cashierShiftAccessRef.current = nextAccess;
+      setCashierShiftAccess(nextAccess);
       return;
     }
     let active = true;
     const loadShiftAccess = async () => {
-      try {
-        const [current, shifts] = await Promise.all([
-          apiRequest<ShiftDetail | null>('/shifts/current'),
-          apiRequest<ShiftDetail[]>('/shifts'),
-        ]);
-        if (active) setCashierShiftAccess({ loaded: true, active: current, prepared: shifts.find((shift) => shift.estado === 'PENDIENTE_APERTURA') ?? null });
-      } catch {
-        if (active) setCashierShiftAccess({ loaded: true, active: null, prepared: null });
+      const [currentResult, shiftsResult] = await Promise.allSettled([
+        apiRequest<ShiftDetail | null>('/shifts/current'),
+        apiRequest<ShiftDetail[]>('/shifts'),
+      ]);
+      if (!active) return;
+
+      const previous = cashierShiftAccessRef.current;
+      const prepared = shiftsResult.status === 'fulfilled'
+        ? shiftsResult.value.find((shift) => shift.estado === 'PENDIENTE_APERTURA') ?? null
+        : previous.prepared;
+      let nextAccess = { ...previous, loaded: true, prepared };
+
+      // Un error de red o de una consulta auxiliar nunca invalida un turno ya confirmado.
+      if (currentResult.status === 'fulfilled') {
+        if (currentResult.value) {
+          cashierShiftMissingChecksRef.current = 0;
+          nextAccess = { loaded: true, active: currentResult.value, prepared };
+        } else if (previous.active) {
+          cashierShiftMissingChecksRef.current += 1;
+          if (cashierShiftMissingChecksRef.current >= 3) {
+            cashierShiftMissingChecksRef.current = 0;
+            nextAccess = { loaded: true, active: null, prepared };
+          }
+        } else {
+          cashierShiftMissingChecksRef.current = 0;
+          nextAccess = { loaded: true, active: null, prepared };
+        }
       }
+      cashierShiftAccessRef.current = nextAccess;
+      setCashierShiftAccess(nextAccess);
     };
     void loadShiftAccess();
     const timer = window.setInterval(() => void loadShiftAccess(), 5000);
@@ -3431,7 +3457,10 @@ export function App() {
       onOpen={async () => {
         if (!cashierShiftAccess.prepared) return;
         const opened = await apiRequest<ShiftDetail>(`/shifts/${cashierShiftAccess.prepared.database_id}/open-prepared`, { method: 'POST' });
-        setCashierShiftAccess({ loaded: true, active: opened, prepared: null });
+        const nextAccess = { loaded: true, active: opened, prepared: null };
+        cashierShiftAccessRef.current = nextAccess;
+        cashierShiftMissingChecksRef.current = 0;
+        setCashierShiftAccess(nextAccess);
         announceOperationalDataChange();
         const target = navItems.find((item) => item.id === getDefaultScreen(currentUser));
         window.location.hash = target?.route ?? '/transacciones';
