@@ -3963,6 +3963,28 @@ tbody tr:hover td {
   min-width: 0;
 }
 
+.teledolar-system-inputs,
+.teledolar-differences {
+  display: grid;
+  gap: 6px;
+  min-width: 190px;
+}
+
+.teledolar-system-inputs label,
+.teledolar-differences > span {
+  align-items: center;
+  color: var(--muted);
+  display: grid;
+  font-size: 0.68rem;
+  font-weight: 750;
+  gap: 3px;
+  grid-template-columns: 52px minmax(110px, 1fr);
+}
+
+.teledolar-differences .difference-badge {
+  justify-content: center;
+}
+
 .shift-form-notes {
   grid-column: 1 / -1;
 }

@@ -16,6 +16,8 @@ const bankBalanceSchema = z.object({
   account: z.string().trim().min(1).max(80),
   // Los saldos operativos pueden quedar negativos cuando los egresos superan el saldo inicial.
   amount: z.number().min(-9999999999.9999).max(9999999999.9999),
+  income: z.number().min(0).max(9999999999.9999).optional(),
+  expense: z.number().min(0).max(9999999999.9999).optional(),
 });
 
 export const saveBalancesSchema = z.object({

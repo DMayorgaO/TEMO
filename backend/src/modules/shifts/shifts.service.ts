@@ -360,7 +360,7 @@ export class ShiftsService {
 
   async saveBalances(
     shiftId: string,
-    balances: Array<{ account: string; amount: number }>,
+    balances: Array<{ account: string; amount: number; income?: number; expense?: number }>,
     user: AuthenticatedUser,
   ) {
     await this.findAuthorizedShift(shiftId, user, true);
@@ -368,12 +368,14 @@ export class ShiftsService {
       for (const balance of balances) {
         await client.query(
           `update temo.saldos_turno_cuentas stc
-           set saldo_final_sistema = $3
+           set saldo_final_sistema = $3,
+               saldo_ingresos_sistema = $4,
+               saldo_egresos_sistema = $5
            from temo.cuentas_bancarias cb
            where stc.id_turno = $1
              and stc.id_cuenta = cb.id_cuenta
              and cb.alias = $2`,
-          [shiftId, balance.account, balance.amount],
+          [shiftId, balance.account, balance.amount, balance.income ?? null, balance.expense ?? null],
         );
       }
     });
@@ -946,6 +948,8 @@ export class ShiftsService {
            + coalesce(movements.income, 0)
            - coalesce(movements.expense, 0) as calculated,
          stc.saldo_final_sistema as system,
+         stc.saldo_ingresos_sistema as system_income,
+         stc.saldo_egresos_sistema as system_expense,
          case
            when stc.saldo_final_sistema is null then null
            else stc.saldo_final_sistema - (
@@ -1231,12 +1235,14 @@ export class ShiftsService {
              ) mc
            ), 0),
            saldo_final_sistema = $3,
+           saldo_ingresos_sistema = $4,
+           saldo_egresos_sistema = $5,
            fecha_registro_cierre = now()
          from temo.cuentas_bancarias cb
          where stc.id_turno = $1
            and stc.id_cuenta = cb.id_cuenta
            and cb.alias = $2`,
-        [shiftId, balance.account, balance.amount],
+        [shiftId, balance.account, balance.amount, balance.income ?? null, balance.expense ?? null],
       );
     }
   }

@@ -165,6 +165,12 @@ type CashPileDraft = {
 };
 
 type ShiftBankBalanceDraft = Record<string, string>;
+type ConsolidationBalance = {
+  initial?: string;
+  system?: string;
+  systemIncome?: string;
+  systemExpense?: string;
+};
 
 type ExchangeRate = {
   buy: string;
@@ -206,6 +212,8 @@ type ShiftDetail = {
     expense: string;
     calculated: string;
     system: string | null;
+    system_income: string | null;
+    system_expense: string | null;
     difference: string | null;
   }>;
   availableAccounts: Array<{
@@ -2489,7 +2497,7 @@ function mapShiftBalancesToConsolidation(
   openingBalances: ShiftBankBalanceDraft,
   closingBalances: ShiftBankBalanceDraft,
 ) {
-  return accounts.reduce<Record<string, { initial?: string; system?: string }>>((balances, account) => {
+  return accounts.reduce<Record<string, ConsolidationBalance>>((balances, account) => {
     const currency: CashCurrency = account.currency === 'USD' ? 'USD' : 'NIO';
     const key = getConsolidationKey(currency, account.entity);
     balances[key] = {
@@ -2501,7 +2509,7 @@ function mapShiftBalancesToConsolidation(
 }
 
 function mapApiShiftBalancesToConsolidation(balances: ShiftDetail['balances']) {
-  return balances.reduce<Record<string, { initial?: string; system?: string }>>((result, balance) => {
+  return balances.reduce<Record<string, ConsolidationBalance>>((result, balance) => {
     const key = getConsolidationKey(balance.currency, balance.entity);
     const current = result[key] ?? {};
     result[key] = {
@@ -2510,6 +2518,12 @@ function mapApiShiftBalancesToConsolidation(balances: ShiftDetail['balances']) {
         parseMoneyValue(current.system) +
         Number(balance.system ?? balance.calculated ?? balance.initial ?? 0),
       ),
+      systemIncome: balance.system_income == null
+        ? current.systemIncome
+        : String(parseMoneyValue(current.systemIncome) + Number(balance.system_income)),
+      systemExpense: balance.system_expense == null
+        ? current.systemExpense
+        : String(parseMoneyValue(current.systemExpense) + Number(balance.system_expense)),
     };
     return result;
   }, {});
@@ -2598,6 +2612,10 @@ function shiftDetailToEditableRow(shift: ShiftDetail): CrudRow {
     if (account) {
       openingBalances[account.id] = String(balance.initial ?? '0');
       closingBalances[account.id] = String(balance.system ?? balance.calculated ?? balance.initial ?? '0');
+      if (normalizeLookupValue(balance.entity) === 'teledolar') {
+        closingBalances[`${account.id}:income`] = String(balance.system_income ?? '');
+        closingBalances[`${account.id}:expense`] = String(balance.system_expense ?? '');
+      }
     }
   }
   return {
@@ -3640,6 +3658,14 @@ function ShiftClosureModal({
   const [balances, setBalances] = useState<Record<string, string>>(() => Object.fromEntries(
     shift.balances.map((balance) => [balance.account, formatAccountingMoneyRaw(balance.system || balance.calculated || balance.initial)]),
   ));
+  const [teledolarBalances, setTeledolarBalances] = useState<Record<string, { income: string; expense: string }>>(() => Object.fromEntries(
+    shift.balances
+      .filter((balance) => normalizeLookupValue(balance.entity) === 'teledolar')
+      .map((balance) => [balance.account, {
+        income: balance.system_income == null ? '' : formatAccountingMoneyRaw(balance.system_income),
+        expense: balance.system_expense == null ? '' : formatAccountingMoneyRaw(balance.system_expense),
+      }]),
+  ));
   const [observations, setObservations] = useState('');
   const [changeNio, setChangeNio] = useState(() => formatAccountingMoneyRaw(shift.cambio_nio));
   const [error, setError] = useState('');
@@ -3718,7 +3744,17 @@ function ShiftClosureModal({
         method: 'POST',
         body: JSON.stringify({
           counts: cashCountPayload(cashDraft),
-          balances: shift.balances.map((balance) => ({ account: balance.account, amount: parseMoneyValue(balances[balance.account]) })),
+          balances: shift.balances.map((balance) => {
+            const daily = teledolarBalances[balance.account];
+            return {
+              account: balance.account,
+              amount: daily
+                ? parseMoneyValue(daily.income) - parseMoneyValue(daily.expense)
+                : parseMoneyValue(balances[balance.account]),
+              income: daily ? parseMoneyValue(daily.income) : undefined,
+              expense: daily ? parseMoneyValue(daily.expense) : undefined,
+            };
+          }),
           changeNio: parseMoneyValue(changeNio),
           observations,
         }),
@@ -3770,11 +3806,16 @@ function ShiftClosureModal({
                       {shift.balances.filter((balance) => balance.currency === currency).map((balance, rowIndex, currencyBalances) => {
                         const systemAmount = parseMoneyValue(balances[balance.account]);
                         const calculatedAmount = parseMoneyValue(balance.calculated);
+                        const isTeledolar = normalizeLookupValue(balance.entity) === 'teledolar';
+                        const daily = teledolarBalances[balance.account] ?? { income: '', expense: '' };
                         return (
                           <tr key={balance.account}>
                             <td><strong>{balance.entity}</strong><small>{balance.account}</small></td>
-                            <td><div className="consolidation-input-wrap"><span>{getCurrencySymbol(currency)}</span><input data-shift-close-balance-currency={currency} data-shift-close-balance-row={rowIndex} value={formatConsolidationInput(balances[balance.account])} inputMode="decimal" onChange={(event) => setBalances((current) => ({ ...current, [balance.account]: normalizeSignedAccountingMoneyRaw(event.target.value) }))} onKeyDown={(event) => handleClosingBalanceKeyDown(event, balance.account, currency, rowIndex, currencyBalances.length)} onFocus={(event) => placeAccountingMoneyCaretBeforeDecimals(event.currentTarget)} onClick={(event) => placeAccountingMoneyCaretBeforeDecimals(event.currentTarget)} /></div></td>
-                            <td>{renderDifference(systemAmount - calculatedAmount, currency, { positiveLabel: '' })}</td>
+                            <td>{isTeledolar ? <div className="teledolar-system-inputs">
+                              <label>Ingresos<span className="consolidation-input-wrap"><span>{getCurrencySymbol(currency)}</span><input value={formatConsolidationInput(daily.income)} inputMode="decimal" onChange={(event) => setTeledolarBalances((current) => ({ ...current, [balance.account]: { ...daily, income: normalizeAccountingMoneyRaw(event.target.value) } }))} /></span></label>
+                              <label>Egresos<span className="consolidation-input-wrap"><span>{getCurrencySymbol(currency)}</span><input value={formatConsolidationInput(daily.expense)} inputMode="decimal" onChange={(event) => setTeledolarBalances((current) => ({ ...current, [balance.account]: { ...daily, expense: normalizeAccountingMoneyRaw(event.target.value) } }))} /></span></label>
+                            </div> : <div className="consolidation-input-wrap"><span>{getCurrencySymbol(currency)}</span><input data-shift-close-balance-currency={currency} data-shift-close-balance-row={rowIndex} value={formatConsolidationInput(balances[balance.account])} inputMode="decimal" onChange={(event) => setBalances((current) => ({ ...current, [balance.account]: normalizeSignedAccountingMoneyRaw(event.target.value) }))} onKeyDown={(event) => handleClosingBalanceKeyDown(event, balance.account, currency, rowIndex, currencyBalances.length)} onFocus={(event) => placeAccountingMoneyCaretBeforeDecimals(event.currentTarget)} onClick={(event) => placeAccountingMoneyCaretBeforeDecimals(event.currentTarget)} /></div>}</td>
+                            <td>{isTeledolar ? <div className="teledolar-differences"><span>Ingresos {renderDifference(parseMoneyValue(daily.income) - parseMoneyValue(balance.income), currency, { positiveLabel: '' })}</span><span>Egresos {renderDifference(parseMoneyValue(daily.expense) - parseMoneyValue(balance.expense), currency, { positiveLabel: '' })}</span></div> : renderDifference(systemAmount - calculatedAmount, currency, { positiveLabel: '' })}</td>
                           </tr>
                         );
                       })}
@@ -5843,7 +5884,7 @@ function GeneralConsolidationScreen() {
     NIO: {},
     USD: {},
   }));
-  const [apiBalances, setApiBalances] = useState<Record<string, { initial?: string; system?: string }>>({});
+  const [apiBalances, setApiBalances] = useState<Record<string, ConsolidationBalance>>({});
   const [apiBalanceAccounts, setApiBalanceAccounts] = useState<Record<string, string>>({});
   // Esta vista conserva su propia lista para no reemplazar el historial compartido de Turnos.
   const [shiftRows, setShiftRows] = useState<CrudRow[]>([]);
@@ -6011,22 +6052,27 @@ function GeneralConsolidationScreen() {
     setApiBalanceAccounts(mapApiShiftBalanceAccounts(detail.balances));
   }, Boolean(isCashier || selectedShift?.databaseId));
 
-  function updateBalance(currency: CashCurrency, entity: string, field: 'initial' | 'system', value: string) {
+  function updateBalance(currency: CashCurrency, entity: string, field: 'initial' | 'system' | 'systemIncome' | 'systemExpense', value: string) {
     if (!selectedShift || selectedShift.status === 'Cerrado' || field === 'initial') {
       return;
     }
-    const cleanValue = normalizeSignedAccountingMoneyRaw(value);
+    const cleanValue = field === 'system' ? normalizeSignedAccountingMoneyRaw(value) : normalizeAccountingMoneyRaw(value);
     const key = getConsolidationKey(currency, entity);
     const account = getShiftBalanceAccount(accounts, currency, entity);
     const accountAlias = apiBalanceAccounts[key] || account?.alias;
     if (!accountAlias) {
       return;
     }
+    const nextBalance = { ...apiBalances[key], [field]: cleanValue };
+    const isTeledolar = normalizeLookupValue(entity) === 'teledolar';
+    const nextSystemAmount = isTeledolar
+      ? parseMoneyValue(nextBalance.systemIncome) - parseMoneyValue(nextBalance.systemExpense)
+      : parseMoneyValue(nextBalance.system);
     setApiBalances((current) => ({
       ...current,
       [key]: {
         ...current[key],
-        system: cleanValue,
+        [field]: cleanValue,
       },
     }));
     setShiftRows((currentRows) =>
@@ -6047,7 +6093,12 @@ function GeneralConsolidationScreen() {
     if (selectedShift.databaseId) {
       void apiRequest(`/shifts/${selectedShift.databaseId}/account-balances`, {
         method: 'PUT',
-        body: JSON.stringify({ balances: [{ account: accountAlias, amount: parseMoneyValue(cleanValue) }] }),
+        body: JSON.stringify({ balances: [{
+          account: accountAlias,
+          amount: nextSystemAmount,
+          income: isTeledolar ? parseMoneyValue(nextBalance.systemIncome) : undefined,
+          expense: isTeledolar ? parseMoneyValue(nextBalance.systemExpense) : undefined,
+        }] }),
       }).catch(() => undefined);
     }
   }
@@ -6056,10 +6107,12 @@ function GeneralConsolidationScreen() {
     event: KeyboardEvent<HTMLInputElement>,
     currency: CashCurrency,
     entity: string,
-    field: 'initial' | 'system',
+    field: 'initial' | 'system' | 'systemIncome' | 'systemExpense',
     currentValue?: string,
   ) {
-    const nextValue = getSignedAccountingMoneyKeyValue(event, currentValue);
+    const nextValue = field === 'system'
+      ? getSignedAccountingMoneyKeyValue(event, currentValue)
+      : getAccountingMoneyKeyValue(event, currentValue);
     if (nextValue === undefined) {
       return;
     }
@@ -6074,7 +6127,7 @@ function GeneralConsolidationScreen() {
     event: ClipboardEvent<HTMLInputElement>,
     currency: CashCurrency,
     entity: string,
-    field: 'initial' | 'system',
+    field: 'initial' | 'system' | 'systemIncome' | 'systemExpense',
   ) {
     event.preventDefault();
     updateBalance(currency, entity, field, event.clipboardData.getData('text'));
@@ -6163,25 +6216,25 @@ function ConsolidationTable({
   onMoneyInputKeyDown,
   onMoneyInputPaste,
 }: {
-  balances: Record<string, { initial?: string; system?: string }>;
+  balances: Record<string, ConsolidationBalance>;
   currency: CashCurrency;
   entities: string[];
   summary: Record<string, { income: number; expense: number }>;
   title: string;
   readOnly?: boolean;
-  onBalanceChange: (currency: CashCurrency, entity: string, field: 'initial' | 'system', value: string) => void;
+  onBalanceChange: (currency: CashCurrency, entity: string, field: 'initial' | 'system' | 'systemIncome' | 'systemExpense', value: string) => void;
   onMoneyInputKeyDown: (
     event: KeyboardEvent<HTMLInputElement>,
     currency: CashCurrency,
     entity: string,
-    field: 'initial' | 'system',
+    field: 'initial' | 'system' | 'systemIncome' | 'systemExpense',
     currentValue?: string,
   ) => void;
   onMoneyInputPaste: (
     event: ClipboardEvent<HTMLInputElement>,
     currency: CashCurrency,
     entity: string,
-    field: 'initial' | 'system',
+    field: 'initial' | 'system' | 'systemIncome' | 'systemExpense',
   ) => void;
 }) {
   const totals = entities.reduce(
@@ -6190,7 +6243,10 @@ function ConsolidationTable({
       const rowBalance = balances[key] ?? {};
       const movement = summary[entity] ?? { income: 0, expense: 0 };
       const initial = parseConsolidationValue(rowBalance.initial);
-      const system = parseConsolidationValue(rowBalance.system);
+      const isTeledolar = normalizeLookupValue(entity) === 'teledolar';
+      const system = isTeledolar
+        ? parseConsolidationValue(rowBalance.systemIncome) - parseConsolidationValue(rowBalance.systemExpense)
+        : parseConsolidationValue(rowBalance.system);
       const finalBalance = initial + movement.income - movement.expense;
       acc.initial += initial;
       acc.income += movement.income;
@@ -6237,7 +6293,12 @@ function ConsolidationTable({
               const rowBalance = balances[key] ?? {};
               const movement = summary[entity] ?? { income: 0, expense: 0 };
               const initial = parseConsolidationValue(rowBalance.initial);
-              const system = parseConsolidationValue(rowBalance.system);
+              const isTeledolar = normalizeLookupValue(entity) === 'teledolar';
+              const systemIncome = parseConsolidationValue(rowBalance.systemIncome);
+              const systemExpense = parseConsolidationValue(rowBalance.systemExpense);
+              const system = isTeledolar
+                ? systemIncome - systemExpense
+                : parseConsolidationValue(rowBalance.system);
               const finalBalance = initial + movement.income - movement.expense;
               const difference = system - finalBalance;
               return (
@@ -6256,7 +6317,28 @@ function ConsolidationTable({
                     <MoneyAmount currency={currency} value={finalBalance} />
                   </td>
                   <td>
-                    <div className="consolidation-input-wrap">
+                    {isTeledolar ? <div className="teledolar-system-inputs">
+                      <label>Ingresos
+                        <span className="consolidation-input-wrap"><span>{getCurrencySymbol(currency)}</span><input
+                          className="consolidation-input" inputMode="decimal"
+                          value={formatConsolidationInput(rowBalance.systemIncome)} readOnly={readOnly}
+                          onChange={(event) => onBalanceChange(currency, entity, 'systemIncome', event.target.value)}
+                          onKeyDown={(event) => onMoneyInputKeyDown(event, currency, entity, 'systemIncome', rowBalance.systemIncome)}
+                          onPaste={(event) => onMoneyInputPaste(event, currency, entity, 'systemIncome')}
+                          placeholder="0.00"
+                        /></span>
+                      </label>
+                      <label>Egresos
+                        <span className="consolidation-input-wrap"><span>{getCurrencySymbol(currency)}</span><input
+                          className="consolidation-input" inputMode="decimal"
+                          value={formatConsolidationInput(rowBalance.systemExpense)} readOnly={readOnly}
+                          onChange={(event) => onBalanceChange(currency, entity, 'systemExpense', event.target.value)}
+                          onKeyDown={(event) => onMoneyInputKeyDown(event, currency, entity, 'systemExpense', rowBalance.systemExpense)}
+                          onPaste={(event) => onMoneyInputPaste(event, currency, entity, 'systemExpense')}
+                          placeholder="0.00"
+                        /></span>
+                      </label>
+                    </div> : <div className="consolidation-input-wrap">
                       <span>{getCurrencySymbol(currency)}</span>
                       <input
                         className="consolidation-input"
@@ -6270,9 +6352,12 @@ function ConsolidationTable({
                         onClick={(event) => placeAccountingMoneyCaretBeforeDecimals(event.currentTarget)}
                         placeholder="0.00"
                       />
-                    </div>
+                    </div>}
                   </td>
-                  <td>{renderDifference(difference, currency)}</td>
+                  <td>{isTeledolar ? <div className="teledolar-differences">
+                    <span>Ingresos {renderDifference(systemIncome - movement.income, currency)}</span>
+                    <span>Egresos {renderDifference(systemExpense - movement.expense, currency)}</span>
+                  </div> : renderDifference(difference, currency)}</td>
                 </tr>
               );
             })}
@@ -6690,7 +6775,17 @@ function ShiftTable({
                 NIO: cashCountPayload(closingCounts.NIO).NIO,
                 USD: cashCountPayload(closingCounts.USD).USD,
               },
-              balances: accounts.map((account) => ({ account: account.alias, amount: parseMoneyValue(closingBalanceDraft[account.id]) })),
+              balances: accounts.map((account) => {
+                const isTeledolar = normalizeLookupValue(account.entity) === 'teledolar';
+                const income = parseMoneyValue(closingBalanceDraft[`${account.id}:income`]);
+                const expense = parseMoneyValue(closingBalanceDraft[`${account.id}:expense`]);
+                return {
+                  account: account.alias,
+                  amount: isTeledolar ? income - expense : parseMoneyValue(closingBalanceDraft[account.id]),
+                  income: isTeledolar ? income : undefined,
+                  expense: isTeledolar ? expense : undefined,
+                };
+              }),
             },
           }),
         });
@@ -7106,7 +7201,9 @@ function ShiftModal({
         );
         const targetAccount = exactAccount ?? (compatibleAccounts.length === 1 ? compatibleAccounts[0] : undefined);
         if (targetAccount) {
-          copiedBalances[targetAccount.id] = String(balance.system ?? balance.calculated ?? balance.initial ?? '0');
+          copiedBalances[targetAccount.id] = normalizeLookupValue(balance.entity) === 'teledolar'
+            ? '0'
+            : String(balance.system ?? balance.calculated ?? balance.initial ?? '0');
         }
       }
       setOpeningBankBalances(copiedBalances);
@@ -7610,7 +7707,18 @@ function ShiftBankBalanceTables({
                       </td>
                     )}
                     <td>
-                      <div className="consolidation-input-wrap">
+                      {phase === 'closing' && normalizeLookupValue(account.entity) === 'teledolar' ? <div className="teledolar-system-inputs">
+                        <label>Ingresos<span className="consolidation-input-wrap"><span>{getCurrencySymbol(currency)}</span><input
+                          value={formatConsolidationInput(balances[`${account.id}:income`])}
+                          readOnly={readOnly} inputMode="decimal"
+                          onChange={(event) => onBalanceChange(`${account.id}:income`, event.target.value)}
+                        /></span></label>
+                        <label>Egresos<span className="consolidation-input-wrap"><span>{getCurrencySymbol(currency)}</span><input
+                          value={formatConsolidationInput(balances[`${account.id}:expense`])}
+                          readOnly={readOnly} inputMode="decimal"
+                          onChange={(event) => onBalanceChange(`${account.id}:expense`, event.target.value)}
+                        /></span></label>
+                      </div> : <div className="consolidation-input-wrap">
                         <span>{getCurrencySymbol(currency)}</span>
                         <input
                           aria-label={`${phase === 'opening' ? 'Saldo inicial' : 'Saldo cierre'} ${account.alias}`}
@@ -7628,7 +7736,7 @@ function ShiftBankBalanceTables({
                           onClick={(event) => placeAccountingMoneyCaretBeforeDecimals(event.currentTarget)}
                           placeholder="0.00"
                         />
-                      </div>
+                      </div>}
                     </td>
                   </tr>
                 ))}
