@@ -1207,6 +1207,27 @@ export class ShiftsService {
         [shiftId, balance.account, balance.amount, branchId],
       );
     }
+
+    // Si se corrige una apertura con movimientos existentes, alinea también el saldo calculado.
+    await client.query(
+      `update temo.saldos_turno_cuentas stc
+       set saldo_final_calculado = stc.saldo_inicial + coalesce((
+         select sum(case movement.direccion when 'ENTRA' then movement.monto else -movement.monto end)
+         from (
+           select mc.direccion, mc.monto
+           from temo.movimientos_cuentas mc
+           join temo.transacciones tr on tr.id_transaccion = mc.id_transaccion
+           where mc.id_cuenta = stc.id_cuenta and tr.id_turno = $1 and tr.estado <> 'ANULADA'
+           union all
+           select mc.direccion, mc.monto
+           from temo.movimientos_cuentas mc
+           join temo.transferencias tf on tf.id_transferencia = mc.id_transferencia
+           where mc.id_cuenta = stc.id_cuenta and tf.id_turno = $1 and tf.estado = 'ACTIVO'
+         ) movement
+       ), 0)
+       where stc.id_turno = $1`,
+      [shiftId],
+    );
   }
 
   private async persistClosingBalances(

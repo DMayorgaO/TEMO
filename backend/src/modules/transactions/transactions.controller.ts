@@ -72,7 +72,7 @@ export class TransactionsController {
          t.fecha_transaccion,
          coalesce(tm.monto, t.monto_original) as monto,
          coalesce(mm.codigo, m.codigo) as moneda,
-         coalesce(tm.direccion, 'ENTRA') as direccion,
+         coalesce(tm.direccion, ef.direccion_efectivo, 'ENTRA') as direccion,
          t.estado,
          e.codigo as entidad,
          cm.codigo_operativo as codigo_movimiento,
@@ -91,6 +91,7 @@ export class TransactionsController {
          on g.id_grupo_transacciones = t.id_grupo_transacciones
        join temo.monedas m on m.id_moneda = t.id_moneda_original
        join temo.cuentas_movimientos cm on cm.id_cuenta_movimiento = t.id_cuenta_movimiento
+       join temo.efectos_movimientos ef on ef.id_cuenta_movimiento = cm.id_cuenta_movimiento
        join temo.cuentas_bancarias cb on cb.id_cuenta = cm.id_cuenta
        join temo.entidades_bancarias e on e.id_entidad = cb.id_entidad
        join temo.usuarios u on u.id_usuario = t.id_cajero
