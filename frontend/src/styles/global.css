@@ -2893,13 +2893,37 @@ tbody tr:hover td {
 .shift-close-balance-card table { min-width: 0; table-layout: fixed; width: 100%; }
 .shift-close-balance-card th { font-size: .66rem; padding: 6px; }
 .shift-close-balance-card td { font-size: .72rem; padding: 4px 6px; }
-.shift-close-balance-card th:first-child { width: 38%; }
-.shift-close-balance-card th:nth-child(2) { width: 34%; }
+.shift-close-balance-card th:first-child { width: 32%; }
+.shift-close-balance-card th:nth-child(2) { width: 40%; }
 .shift-close-balance-card th:last-child { width: 28%; }
 .shift-close-balance-card td small { color: var(--muted); display: block; }
 .shift-close-balance-card .consolidation-input-wrap { grid-template-columns: auto minmax(0, 1fr); }
 .shift-close-balance-card input { min-width: 0; width: 100%; }
 .shift-close-balance-card .difference-badge { max-width: 100%; min-width: 0; padding-inline: 5px; white-space: nowrap; }
+.shift-close-balance-card tbody tr:nth-child(even) { background: rgb(15 118 110 / .025); }
+.shift-close-balance-card--usd tbody tr:nth-child(even) { background: rgb(21 128 61 / .025); }
+.shift-close-teledolar-row > td { padding-block: 8px; vertical-align: top; }
+.shift-close-teledolar-row > td:first-child { background: rgb(15 118 110 / .035); }
+.shift-close-balance-card--usd .shift-close-teledolar-row > td:first-child { background: rgb(21 128 61 / .035); }
+.shift-close-teledolar-grid {
+  align-items: center;
+  display: grid;
+  gap: 6px 8px;
+  grid-template-columns: 58px minmax(112px, 1fr) minmax(92px, auto);
+  min-width: 0;
+}
+.shift-close-teledolar-grid > strong {
+  color: var(--muted);
+  font-size: .58rem;
+  text-transform: uppercase;
+}
+.shift-close-teledolar-grid > span:not(.consolidation-input-wrap):not(.difference-badge) {
+  color: var(--ink);
+  font-size: .68rem;
+  font-weight: 850;
+}
+.shift-close-teledolar-grid .consolidation-input-wrap { min-width: 0; width: 100%; }
+.shift-close-teledolar-grid .difference-badge { justify-content: center; width: 100%; }
 .form-submit-error { color: #b42318; font-size: .82rem; font-weight: 700; margin: 0 auto 0 0; }
 
 @media (max-width: 760px) {
@@ -2930,6 +2954,7 @@ tbody tr:hover td {
 
   .cash-count-adjustments > label { grid-template-columns: 1fr; }
   .cash-count-live-grid, .shift-close-cash-grid, .shift-close-balance-tables, .shift-close-summary, .shift-close-summary--identity { grid-template-columns: 1fr; }
+  .shift-close-teledolar-grid { grid-template-columns: 54px minmax(110px, 1fr) minmax(90px, auto); }
 }
 
 .modal-panel {

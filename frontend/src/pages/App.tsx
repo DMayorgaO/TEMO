@@ -3808,14 +3808,29 @@ function ShiftClosureModal({
                         const calculatedAmount = parseMoneyValue(balance.calculated);
                         const isTeledolar = normalizeLookupValue(balance.entity) === 'teledolar';
                         const daily = teledolarBalances[balance.account] ?? { income: '', expense: '' };
+                        if (isTeledolar) {
+                          return (
+                            <tr className="shift-close-teledolar-row" key={balance.account}>
+                              <td><strong>{balance.entity}</strong><small>{balance.account}</small></td>
+                              <td colSpan={2}>
+                                <div className="shift-close-teledolar-grid">
+                                  <strong>Movimiento</strong><strong>Saldo del sistema</strong><strong>Diferencia</strong>
+                                  <span>Ingresos</span>
+                                  <span className="consolidation-input-wrap"><span>{getCurrencySymbol(currency)}</span><input value={formatConsolidationInput(daily.income)} inputMode="decimal" onChange={(event) => setTeledolarBalances((current) => ({ ...current, [balance.account]: { ...daily, income: normalizeAccountingMoneyRaw(event.target.value) } }))} onFocus={(event) => event.currentTarget.select()} onClick={(event) => event.currentTarget.select()} /></span>
+                                  {renderDifference(parseMoneyValue(daily.income) - parseMoneyValue(balance.income), currency, { positiveLabel: '' })}
+                                  <span>Egresos</span>
+                                  <span className="consolidation-input-wrap"><span>{getCurrencySymbol(currency)}</span><input value={formatConsolidationInput(daily.expense)} inputMode="decimal" onChange={(event) => setTeledolarBalances((current) => ({ ...current, [balance.account]: { ...daily, expense: normalizeAccountingMoneyRaw(event.target.value) } }))} onFocus={(event) => event.currentTarget.select()} onClick={(event) => event.currentTarget.select()} /></span>
+                                  {renderDifference(parseMoneyValue(daily.expense) - parseMoneyValue(balance.expense), currency, { positiveLabel: '' })}
+                                </div>
+                              </td>
+                            </tr>
+                          );
+                        }
                         return (
                           <tr key={balance.account}>
                             <td><strong>{balance.entity}</strong><small>{balance.account}</small></td>
-                            <td>{isTeledolar ? <div className="teledolar-system-inputs">
-                              <label>Ingresos<span className="consolidation-input-wrap"><span>{getCurrencySymbol(currency)}</span><input value={formatConsolidationInput(daily.income)} inputMode="decimal" onChange={(event) => setTeledolarBalances((current) => ({ ...current, [balance.account]: { ...daily, income: normalizeAccountingMoneyRaw(event.target.value) } }))} /></span></label>
-                              <label>Egresos<span className="consolidation-input-wrap"><span>{getCurrencySymbol(currency)}</span><input value={formatConsolidationInput(daily.expense)} inputMode="decimal" onChange={(event) => setTeledolarBalances((current) => ({ ...current, [balance.account]: { ...daily, expense: normalizeAccountingMoneyRaw(event.target.value) } }))} /></span></label>
-                            </div> : <div className="consolidation-input-wrap"><span>{getCurrencySymbol(currency)}</span><input data-shift-close-balance-currency={currency} data-shift-close-balance-row={rowIndex} value={formatConsolidationInput(balances[balance.account])} inputMode="decimal" onChange={(event) => setBalances((current) => ({ ...current, [balance.account]: normalizeSignedAccountingMoneyRaw(event.target.value) }))} onKeyDown={(event) => handleClosingBalanceKeyDown(event, balance.account, currency, rowIndex, currencyBalances.length)} onFocus={(event) => event.currentTarget.select()} onClick={(event) => event.currentTarget.select()} /></div>}</td>
-                            <td>{isTeledolar ? <div className="teledolar-differences"><span>Ingresos {renderDifference(parseMoneyValue(daily.income) - parseMoneyValue(balance.income), currency, { positiveLabel: '' })}</span><span>Egresos {renderDifference(parseMoneyValue(daily.expense) - parseMoneyValue(balance.expense), currency, { positiveLabel: '' })}</span></div> : renderDifference(systemAmount - calculatedAmount, currency, { positiveLabel: '' })}</td>
+                            <td><div className="consolidation-input-wrap"><span>{getCurrencySymbol(currency)}</span><input data-shift-close-balance-currency={currency} data-shift-close-balance-row={rowIndex} value={formatConsolidationInput(balances[balance.account])} inputMode="decimal" onChange={(event) => setBalances((current) => ({ ...current, [balance.account]: normalizeSignedAccountingMoneyRaw(event.target.value) }))} onKeyDown={(event) => handleClosingBalanceKeyDown(event, balance.account, currency, rowIndex, currencyBalances.length)} onFocus={(event) => event.currentTarget.select()} onClick={(event) => event.currentTarget.select()} /></div></td>
+                            <td>{renderDifference(systemAmount - calculatedAmount, currency, { positiveLabel: '' })}</td>
                           </tr>
                         );
                       })}
