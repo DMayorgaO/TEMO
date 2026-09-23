@@ -5,6 +5,7 @@ import { json, urlencoded } from 'express';
 import { rateLimit } from 'express-rate-limit';
 import helmet from 'helmet';
 import { AppModule } from './app.module';
+import { AppExceptionFilter } from './common/errors/app-exception.filter';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule, { bodyParser: false });
@@ -49,6 +50,7 @@ async function bootstrap() {
   app.setGlobalPrefix('api', {
     exclude: [{ path: '', method: RequestMethod.GET }],
   });
+  app.useGlobalFilters(new AppExceptionFilter());
 
   await app.listen(port, '0.0.0.0');
 }

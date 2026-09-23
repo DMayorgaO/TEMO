@@ -270,7 +270,7 @@ export class TransfersService {
        where recipients.id_usuario is not null and recipients.id_usuario <> $5`,
       [
         'Transferencia aplicada a un turno',
-        detail || null,
+        detail,
         transferId,
         shift.id_turno,
         user.id,

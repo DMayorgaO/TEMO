@@ -403,7 +403,7 @@ async function apiRequest<T>(path: string, init?: RequestInit): Promise<T> {
     },
   });
   const payload = (await response.json().catch(() => null)) as
-    | { message?: string | string[] }
+    | { code?: string; message?: string | string[]; requestId?: string }
     | T
     | null;
   if (!response.ok) {
@@ -414,11 +414,13 @@ async function apiRequest<T>(path: string, init?: RequestInit): Promise<T> {
     if (response.status === 401 && path !== '/auth/login') {
       window.dispatchEvent(new Event('temo:session-expired'));
     }
-    throw new Error(
-      Array.isArray(message)
-        ? message.join(' ')
-        : message || 'No fue posible completar la operacion.',
-    );
+    const readableMessage = Array.isArray(message)
+      ? message.join(' ')
+      : message || 'No fue posible completar la operación.';
+    const reference = payload && typeof payload === 'object' && 'code' in payload && payload.code
+      ? ` Código: ${payload.code}${payload.requestId ? ` · Ref: ${payload.requestId}` : ''}`
+      : '';
+    throw new Error(`${readableMessage}${reference}`);
   }
   return payload as T;
 }
