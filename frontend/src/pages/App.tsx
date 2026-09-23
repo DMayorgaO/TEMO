@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { ChangeEvent, ClipboardEvent, FormEvent, KeyboardEvent, PointerEvent as ReactPointerEvent } from 'react';
+import type { ChangeEvent, ClipboardEvent, FormEvent, InputHTMLAttributes, KeyboardEvent, PointerEvent as ReactPointerEvent } from 'react';
 import type { LucideIcon } from 'lucide-react';
 import {
   ArrowDownAZ,
@@ -26,6 +26,8 @@ import {
   Coins,
   Copy,
   Edit3,
+  Eye,
+  EyeOff,
   FileDown,
   FileSpreadsheet,
   FileText,
@@ -3897,6 +3899,25 @@ function ShiftClosureModal({
   );
 }
 
+function PasswordInput(props: Omit<InputHTMLAttributes<HTMLInputElement>, 'type'>) {
+  const [visible, setVisible] = useState(false);
+
+  return (
+    <div className="password-input-wrap">
+      <input {...props} type={visible ? 'text' : 'password'} />
+      <button
+        type="button"
+        className="password-visibility-button"
+        aria-label={visible ? 'Ocultar contraseña' : 'Mostrar contraseña'}
+        title={visible ? 'Ocultar contraseña' : 'Mostrar contraseña'}
+        onClick={() => setVisible((current) => !current)}
+      >
+        {visible ? <EyeOff size={17} /> : <Eye size={17} />}
+      </button>
+    </div>
+  );
+}
+
 function ChangePasswordScreen({
   user,
   onChanged,
@@ -3948,9 +3969,9 @@ function ChangePasswordScreen({
           <p>Utilice al menos 10 caracteres, una mayúscula, una minúscula y un número.</p>
         </div>
         <form className="login-form" onSubmit={submit} ref={formRef}>
-          <label className="form-field">Contraseña actual<input autoComplete="current-password" type="password" value={currentPassword} onChange={(event) => setCurrentPassword(event.target.value)} required /></label>
-          <label className="form-field">Nueva contraseña<input autoComplete="new-password" type="password" value={newPassword} onChange={(event) => setNewPassword(event.target.value)} minLength={10} required /></label>
-          <label className="form-field">Confirmar contraseña<input autoComplete="new-password" type="password" value={confirmation} onChange={(event) => setConfirmation(event.target.value)} minLength={10} required /></label>
+          <label className="form-field">Contraseña actual<PasswordInput autoComplete="current-password" value={currentPassword} onChange={(event) => setCurrentPassword(event.target.value)} required /></label>
+          <label className="form-field">Nueva contraseña<PasswordInput autoComplete="new-password" value={newPassword} onChange={(event) => setNewPassword(event.target.value)} minLength={10} required /></label>
+          <label className="form-field">Confirmar contraseña<PasswordInput autoComplete="new-password" value={confirmation} onChange={(event) => setConfirmation(event.target.value)} minLength={10} required /></label>
           {error && <p className="login-error" role="alert">{error}</p>}
           <button type="submit" className="primary-button login-submit" disabled={saving}><ShieldCheck size={19} />{saving ? 'Actualizando...' : 'Cambiar contraseña'}</button>
           <button type="button" className="secondary-button danger-button login-submit" onClick={onCancel}><X size={18} />Cancelar</button>
@@ -4010,9 +4031,9 @@ function ChangePasswordDialog({
         {/* Campos requeridos para verificar la identidad y definir la nueva clave. */}
         <form className="profile-password-form" onSubmit={submit} ref={formRef}>
           <p className="muted-copy">Utilice al menos 10 caracteres, una mayúscula, una minúscula y un número.</p>
-          <label className="form-field">Contraseña actual<input autoComplete="current-password" type="password" value={currentPassword} onChange={(event) => setCurrentPassword(event.target.value)} required /></label>
-          <label className="form-field">Nueva contraseña<input autoComplete="new-password" type="password" value={newPassword} onChange={(event) => setNewPassword(event.target.value)} minLength={10} required /></label>
-          <label className="form-field">Confirmar contraseña<input autoComplete="new-password" type="password" value={confirmation} onChange={(event) => setConfirmation(event.target.value)} minLength={10} required /></label>
+          <label className="form-field">Contraseña actual<PasswordInput autoComplete="current-password" value={currentPassword} onChange={(event) => setCurrentPassword(event.target.value)} required /></label>
+          <label className="form-field">Nueva contraseña<PasswordInput autoComplete="new-password" value={newPassword} onChange={(event) => setNewPassword(event.target.value)} minLength={10} required /></label>
+          <label className="form-field">Confirmar contraseña<PasswordInput autoComplete="new-password" value={confirmation} onChange={(event) => setConfirmation(event.target.value)} minLength={10} required /></label>
           {error && <p className="login-error" role="alert">{error}</p>}
           <footer className="modal-actions">
             <button type="button" className="secondary-button danger-button" onClick={onCancel}><X size={17} />Cancelar</button>
@@ -4100,10 +4121,9 @@ function LoginScreen({ onLogin }: { onLogin: (response: LoginResponse) => void }
           </label>
           <label className="form-field">
             Contraseña
-            <input
+            <PasswordInput
               autoComplete="current-password"
               name="password"
-              type="password"
               value={password}
               onChange={(event) => setPassword(event.target.value)}
               required
@@ -4234,8 +4254,8 @@ function PasswordRecoveryDialog({
             {/* El código tiene seis dígitos, vence en diez minutos y sólo admite cinco intentos. */}
             <p className="login-success" role="status">{message}</p>
             <label className="form-field">Código de seis dígitos<input inputMode="numeric" autoComplete="one-time-code" value={code} onChange={(event) => setCode(event.target.value.replace(/\D/g, '').slice(0, 6))} minLength={6} maxLength={6} required /></label>
-            <label className="form-field">Nueva contraseña<input type="password" autoComplete="new-password" value={newPassword} onChange={(event) => setNewPassword(event.target.value)} minLength={10} required /></label>
-            <label className="form-field">Confirmar contraseña<input type="password" autoComplete="new-password" value={confirmation} onChange={(event) => setConfirmation(event.target.value)} minLength={10} required /></label>
+            <label className="form-field">Nueva contraseña<PasswordInput autoComplete="new-password" value={newPassword} onChange={(event) => setNewPassword(event.target.value)} minLength={10} required /></label>
+            <label className="form-field">Confirmar contraseña<PasswordInput autoComplete="new-password" value={confirmation} onChange={(event) => setConfirmation(event.target.value)} minLength={10} required /></label>
             {error && <p className="login-error" role="alert">{error}</p>}
             <button type="button" className="login-recovery-link" onClick={() => { setStep('request'); setCode(''); setError(''); }}>Solicitar otro código</button>
             <footer className="modal-actions">
@@ -6430,8 +6450,8 @@ function ConsolidationTable({
                     </div>}
                   </td>
                   <td>{isTeledolar ? <div className="teledolar-differences">
-                    <span>Pagos {renderDifference(systemIncome - movement.income, currency)}</span>
-                    <span>Envíos {renderDifference(systemExpense - movement.expense, currency)}</span>
+                    <span>{renderDifference(systemIncome - movement.income, currency)}</span>
+                    <span>{renderDifference(systemExpense - movement.expense, currency)}</span>
                   </div> : renderDifference(difference, currency)}</td>
                 </tr>
               );
@@ -6678,6 +6698,7 @@ function DigitalCalculator({ onClose }: { onClose: () => void }) {
   const [showHistory, setShowHistory] = useState(false);
   const [error, setError] = useState('');
   const panelRef = useRef<HTMLElement>(null);
+  const displayRef = useRef<HTMLInputElement>(null);
   const dragOffsetRef = useRef<{ x:number; y:number; pointerId:number } | null>(null);
   const [position, setPosition] = useState({ x:16, y:92 });
 
@@ -6727,9 +6748,9 @@ function DigitalCalculator({ onClose }: { onClose: () => void }) {
       <div className="digital-calculator__header-actions"><button type="button" className={`icon-button ${showHistory ? 'icon-button--active':''}`} title="Llamar historial" onClick={()=>setShowHistory((current)=>!current)}><RotateCcw size={15}/></button><button type="button" className="icon-button close-button" aria-label="Cerrar calculadora" onClick={onClose}><X size={16}/></button></div>
     </div>
     <div className="digital-calculator__body">
-      <label className="digital-calculator__display">Operación<input autoFocus value={expression} onChange={(event)=>setExpression(event.target.value.replace(/[^0-9+\-*/().,\s]/g,''))} onKeyDown={(event)=>{if(event.key==='Enter'){event.preventDefault();calculate();}}} placeholder="0"/></label>
+      <label className="digital-calculator__display">Operación<input ref={displayRef} autoFocus value={expression} onChange={(event)=>setExpression(event.target.value.replace(/[^0-9+\-*/().,\s]/g,''))} onKeyDown={(event)=>{if(event.key==='Enter'){event.preventDefault();calculate();}}} placeholder="0"/></label>
       {error && <span className="digital-calculator__error">{error}</span>}
-      <div className="digital-calculator__keys">
+      <div className="digital-calculator__keys" onMouseDown={(event)=>event.preventDefault()} onClickCapture={()=>displayRef.current?.focus()}>
         <button type="button" className="digital-calculator__clear" onClick={()=>{setExpression('');setError('')}}>C</button><button type="button" onClick={()=>setExpression((current)=>current.slice(0,-1))}>⌫</button><button type="button" className="digital-calculator__operator" onClick={()=>append('/')}>÷</button><button type="button" className="digital-calculator__operator" onClick={()=>append('*')}>×</button>
         {['7','8','9','-','4','5','6','+','1','2','3','.'].map((key)=><button type="button" key={key} className={['-','+'].includes(key)?'digital-calculator__operator':''} onClick={()=>append(key)}>{key}</button>)}
         <button type="button" className="digital-calculator__zero" onClick={()=>append('0')}>0</button><button type="button" onClick={()=>append('00')}>00</button><button type="button" className="digital-calculator__equals" onClick={()=>calculate()}>=</button>
@@ -10522,10 +10543,16 @@ function CrudModal({
                     />
                     <span>%</span>
                   </div>
+                ) : column.inputKind === 'password' ? (
+                  <PasswordInput
+                    value={draft[column.key] ?? ''}
+                    onChange={(event) => updateField(column.key, event.target.value)}
+                    disabled={fieldDisabled}
+                  />
                 ) : (
                   <input
                     value={draft[column.key] ?? ''}
-                    type={column.inputKind === 'password' ? 'password' : 'text'}
+                    type="text"
                     onChange={(event) => updateField(column.key, event.target.value)}
                     disabled={fieldDisabled}
                   />

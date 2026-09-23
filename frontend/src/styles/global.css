@@ -542,6 +542,37 @@ textarea {
     background 0.18s ease;
 }
 
+.password-input-wrap {
+  display: grid;
+  position: relative;
+  width: 100%;
+}
+
+.password-input-wrap input {
+  padding-right: 44px;
+}
+
+.password-visibility-button {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  color: var(--muted);
+  display: inline-flex;
+  height: 34px;
+  justify-content: center;
+  padding: 0;
+  position: absolute;
+  right: 5px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 34px;
+}
+
+.password-visibility-button:hover,
+.password-visibility-button:focus-visible {
+  color: var(--teal-700);
+}
+
 textarea {
   /* Textarea con altura flexible para descripciones largas. */
   line-height: 1.45;
@@ -1013,7 +1044,7 @@ textarea:disabled {
 }
 
 .consolidation-col-bank {
-  width: 12%;
+  width: 16%;
 }
 
 .consolidation-col-money {
@@ -1021,7 +1052,7 @@ textarea:disabled {
 }
 
 .consolidation-col-difference {
-  width: 18%;
+  width: 14%;
 }
 
 .consolidation-table th {
@@ -4068,22 +4099,29 @@ tbody tr:hover td {
 .teledolar-differences {
   display: grid;
   gap: 6px;
-  min-width: 190px;
+  min-width: 0;
 }
 
-.teledolar-system-inputs label,
-.teledolar-differences > span {
+.teledolar-system-inputs label {
   align-items: center;
   color: var(--muted);
   display: grid;
   font-size: 0.68rem;
   font-weight: 750;
   gap: 3px;
-  grid-template-columns: 52px minmax(110px, 1fr);
+  grid-template-columns: 52px minmax(0, 1fr);
+}
+
+.teledolar-differences > span {
+  display: flex;
+  justify-content: center;
+  min-width: 0;
 }
 
 .teledolar-differences .difference-badge {
   justify-content: center;
+  min-width: 0;
+  width: 100%;
 }
 
 .teledolar-opening-summary {

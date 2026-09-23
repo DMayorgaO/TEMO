@@ -539,7 +539,7 @@ export class TransactionsService {
              where active_shift.id_cajero = $2::uuid
                and active_shift.estado in ('ABIERTO', 'PENDIENTE_APROBACION')
                and active_shift.id_sucursal = t.id_sucursal
-               and active_shift.fecha_apertura::date = t.fecha_apertura::date
+               and active_shift.fecha_apertura::date = tu.fecha_apertura::date
            )
          )
        order by
