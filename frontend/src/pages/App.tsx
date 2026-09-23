@@ -255,6 +255,8 @@ type ShiftNotification = {
   currency: CashCurrency | null;
   transfer_type: 'EFECTIVO' | 'CUENTA_BANCARIA' | null;
   transfer_direction: 'ENTRA' | 'SALE' | null;
+  transfer_entity: string | null;
+  transfer_account: string | null;
 };
 
 type TransactionApiRow = {
@@ -3084,11 +3086,17 @@ function CashierShiftWaiting({ user, preparedShift, onOpen, onLogout }: { user: 
   </main>;
 }
 
+function cleanNotificationObservation(value: string | null | undefined) {
+  const detail = String(value ?? '')
+    .replace(/^Se registr[oó] una transferencia de .*?\.\s*/i, '')
+    .trim();
+  return /^Sin descripci[oó]n adicional\.?$/i.test(detail) ? '' : detail;
+}
+
 export function App() {
   const [currentUser, setCurrentUser] = useState<AuthUser | null>(() => readAuthenticatedUser());
   const [cashierShiftAccess, setCashierShiftAccess] = useState<{ loaded: boolean; active: ShiftDetail | null; prepared: ShiftDetail | null }>({ loaded: false, active: null, prepared: null });
   const cashierShiftAccessRef = useRef(cashierShiftAccess);
-  const cashierShiftMissingChecksRef = useRef(0);
   const [activeScreen, setActiveScreen] = useState<ScreenId>(getScreenFromHash);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
@@ -3108,21 +3116,27 @@ export function App() {
   // Bloquea la navegacion del cajero hasta que exista o confirme un turno asignado.
   useEffect(() => {
     if (currentUser?.roleCode !== 'CAJERO') {
-      cashierShiftMissingChecksRef.current = 0;
       const nextAccess = { loaded: true, active: null, prepared: null };
       cashierShiftAccessRef.current = nextAccess;
       setCashierShiftAccess(nextAccess);
       return;
     }
     let active = true;
+    let running = false;
     const loadShiftAccess = async () => {
+      if (running) return;
+      running = true;
       const [currentResult, shiftsResult] = await Promise.allSettled([
         apiRequest<ShiftDetail | null>('/shifts/current'),
         apiRequest<ShiftDetail[]>('/shifts'),
       ]);
-      if (!active) return;
+      if (!active) { running = false; return; }
 
       const previous = cashierShiftAccessRef.current;
+      const knownShiftResult = currentResult.status === 'fulfilled' && !currentResult.value && previous.active
+        ? await apiRequest<ShiftDetail>(`/shifts/${previous.active.database_id}`).then((shift) => shift).catch(() => undefined)
+        : undefined;
+      if (!active) { running = false; return; }
       const prepared = shiftsResult.status === 'fulfilled'
         ? shiftsResult.value.find((shift) => shift.estado === 'PENDIENTE_APERTURA') ?? null
         : previous.prepared;
@@ -3131,21 +3145,20 @@ export function App() {
       // Un error de red o de una consulta auxiliar nunca invalida un turno ya confirmado.
       if (currentResult.status === 'fulfilled') {
         if (currentResult.value) {
-          cashierShiftMissingChecksRef.current = 0;
           nextAccess = { loaded: true, active: currentResult.value, prepared };
+        } else if (previous.active && knownShiftResult && ['ABIERTO', 'PENDIENTE_APROBACION'].includes(knownShiftResult.estado)) {
+          nextAccess = { loaded: true, active: knownShiftResult, prepared };
+        } else if (previous.active && knownShiftResult) {
+          nextAccess = { loaded: true, active: null, prepared };
         } else if (previous.active) {
-          cashierShiftMissingChecksRef.current += 1;
-          if (cashierShiftMissingChecksRef.current >= 3) {
-            cashierShiftMissingChecksRef.current = 0;
-            nextAccess = { loaded: true, active: null, prepared };
-          }
+          // Si tampoco fue posible verificar el turno conocido, se conserva la ultima certeza.
         } else {
-          cashierShiftMissingChecksRef.current = 0;
           nextAccess = { loaded: true, active: null, prepared };
         }
       }
       cashierShiftAccessRef.current = nextAccess;
       setCashierShiftAccess(nextAccess);
+      running = false;
     };
     void loadShiftAccess();
     const timer = window.setInterval(() => void loadShiftAccess(), 5000);
@@ -3421,6 +3434,7 @@ export function App() {
   }
 
   const visibleNotification = notifications.find((item) => !dismissedNotifications.includes(item.id));
+  const visibleNotificationObservation = cleanNotificationObservation(visibleNotification?.observations);
 
   async function openShiftClosure(shiftId: string) {
     const detail = await apiRequest<ShiftDetail>(`/shifts/${shiftId}`);
@@ -3459,7 +3473,6 @@ export function App() {
         const opened = await apiRequest<ShiftDetail>(`/shifts/${cashierShiftAccess.prepared.database_id}/open-prepared`, { method: 'POST' });
         const nextAccess = { loaded: true, active: opened, prepared: null };
         cashierShiftAccessRef.current = nextAccess;
-        cashierShiftMissingChecksRef.current = 0;
         setCashierShiftAccess(nextAccess);
         announceOperationalDataChange();
         const target = navItems.find((item) => item.id === getDefaultScreen(currentUser));
@@ -3611,27 +3624,27 @@ export function App() {
     </main>
     {visibleNotification && (
       <div className="modal-backdrop shift-notification-backdrop" role="dialog" aria-modal="true">
-        <section className="shift-notification-modal">
+        <section className={`shift-notification-modal ${visibleNotification.kind === 'TRANSFER_RECORDED' ? `shift-notification-modal--${visibleNotification.transfer_direction === 'SALE' ? 'out' : 'in'}` : ''}`}>
           <div className="shift-notification-icon">
-            {visibleNotification.kind === 'TRANSFER_RECORDED' ? <ArrowRightLeft size={24} /> : <Banknote size={24} />}
+            {visibleNotification.kind === 'TRANSFER_RECORDED' ? (visibleNotification.transfer_direction === 'SALE' ? <ArrowUpRight size={24}/> : <ArrowDownLeft size={24}/>) : <Banknote size={24} />}
           </div>
-          <div>
-            <p>{
-              visibleNotification.kind === 'CLOSE_REQUEST'
-                ? 'Solicitud de cierre de caja'
-                : visibleNotification.kind === 'PENDING_PAID'
-                  ? 'Pendiente marcado como pagado'
-                  : visibleNotification.kind === 'TRANSFER_RECORDED'
-                    ? `Transferencia ${visibleNotification.transfer_type === 'EFECTIVO' ? 'en efectivo' : 'digital'} de ${visibleNotification.transfer_direction === 'ENTRA' ? 'ingreso' : 'egreso'}`
-                    : 'Caja cerrada exitosamente'
-            }</p>
-            <h2>{visibleNotification.cashier}</h2>
-            <span>
-              {['PENDING_PAID', 'TRANSFER_RECORDED'].includes(visibleNotification.kind) && visibleNotification.currency
-                ? formatCashCountMoney(Number(visibleNotification.amount || 0), visibleNotification.currency)
-                : `${visibleNotification.branch} · ${visibleNotification.register}`}
-            </span>
-            {visibleNotification.observations && <blockquote>{visibleNotification.observations}</blockquote>}
+          <div className="shift-notification-content">
+            <p>{visibleNotification.kind === 'CLOSE_REQUEST' ? 'Solicitud de cierre de caja' : visibleNotification.kind === 'PENDING_PAID' ? 'Pendiente pagado' : visibleNotification.kind === 'TRANSFER_RECORDED' ? 'Transferencia registrada' : 'Caja cerrada exitosamente'}</p>
+            {visibleNotification.kind === 'TRANSFER_RECORDED' ? <>
+              <h2 className={`shift-notification-amount shift-notification-amount--${visibleNotification.transfer_direction === 'SALE' ? 'out' : 'in'}`}>
+                {visibleNotification.transfer_direction === 'SALE' ? <ArrowUpRight size={21}/> : <ArrowDownLeft size={21}/>}
+                {visibleNotification.currency ? formatCashCountMoney(Number(visibleNotification.amount || 0), visibleNotification.currency) : 'Monto no disponible'}
+              </h2>
+              <div className="shift-notification-meta">
+                <strong>{visibleNotification.transfer_type === 'EFECTIVO' ? 'Efectivo' : 'Digital'}</strong>
+                {visibleNotification.transfer_entity && <span>{visibleNotification.transfer_entity}{visibleNotification.transfer_account ? ` · ${visibleNotification.transfer_account}` : ''}</span>}
+              </div>
+              {currentUser.roleCode === 'JEFA' && <span className="shift-notification-operator">{visibleNotification.cashier} · {visibleNotification.branch}</span>}
+            </> : <>
+              <h2>{visibleNotification.cashier}</h2>
+              <span>{visibleNotification.kind === 'PENDING_PAID' && visibleNotification.currency ? formatCashCountMoney(Number(visibleNotification.amount || 0), visibleNotification.currency) : `${visibleNotification.branch} · ${visibleNotification.register}`}</span>
+            </>}
+            {visibleNotificationObservation && <blockquote>{visibleNotificationObservation}</blockquote>}
           </div>
           <div className="modal-footer">
             {visibleNotification.kind === 'CLOSE_REQUEST' ? (
@@ -4611,8 +4624,8 @@ function CashCountScreen({ currentUser }: { currentUser: AuthUser }) {
               <strong>{formatCashCountMoney(shift?.pendingCash?.NIO ?? 0, 'NIO')}</strong>
               <strong>{formatCashCountMoney(shift?.pendingCash?.USD ?? 0, 'USD')}</strong>
             </div>
-            <div className="cash-opening-chip cash-summary-chip cash-summary-chip--expected" aria-label="Monto esperado general del turno">
-              <div><span>Monto esperado general</span><small>Fondo consolidado</small></div>
+            <div className="cash-opening-chip cash-summary-chip cash-summary-chip--expected" aria-label="Monto esperado del turno">
+              <div><span>Monto esperado</span><small>Fondo consolidado</small></div>
               <strong>{formatCashCountMoney(expectedGeneral.NIO, 'NIO')}</strong>
               <strong>{formatCashCountMoney(expectedGeneral.USD, 'USD')}</strong>
             </div>
@@ -4858,7 +4871,7 @@ function PeriodFilterControl({ value, onChange, includeDates }: { value: PeriodF
   const [clockField, setClockField] = useState<'startTime' | 'endTime' | null>(null);
   const active = Object.values(value).some(Boolean);
   return <div className="period-filter" aria-label="Filtro por periodo">
-    {includeDates && <><label><span>Desde</span><input name="period-start-date" type="date" value={value.startDate} onChange={(event) => onChange({ ...value, startDate: event.target.value })}/></label><label><span>Hasta</span><input name="period-end-date" type="date" value={value.endDate} min={value.startDate} onChange={(event) => onChange({ ...value, endDate: event.target.value })}/></label></>}
+    {includeDates && <><label><span>Desde</span><input name="period-start-date" type="date" value={value.startDate} onChange={(event) => onChange({ ...value, startDate: event.target.value })}/></label><label><span>Hasta</span><input name="period-end-date" type="date" value={value.endDate} min={value.startDate} onChange={(event) => onChange({ ...value, endDate: event.target.value })}/></label><button type="button" className="secondary-button period-filter__today" onClick={() => { const today = new Date().toLocaleDateString('en-CA', { timeZone:'America/Managua' }); onChange({ ...value, startDate:today, endDate:today }); }}><CalendarDays size={16}/>Hoy</button></>}
     <button type="button" className="period-filter__time" onClick={() => setClockField('startTime')}><Clock3 size={16}/><span>Hora inicial</span><strong>{value.startTime || '--:--'}</strong></button>
     <button type="button" className="period-filter__time" onClick={() => setClockField('endTime')}><Clock3 size={16}/><span>Hora final</span><strong>{value.endTime || '--:--'}</strong></button>
     {active && <button type="button" className="icon-button" title="Limpiar periodo" onClick={() => onChange(emptyPeriodFilter)}><X size={16}/></button>}
@@ -4872,7 +4885,7 @@ function TransfersScreen({ currentUser }: { currentUser: AuthUser }) {
   const [context, setContext] = useState<TransferContext>({ shifts: [], accounts: [] });
   const [query, setQuery] = useState('');
   const [filters, setFilters] = useState<Record<string, string>>({});
-  const [sortKey, setSortKey] = useState<'id' | 'fecha' | 'tipo' | 'monto'>('fecha');
+  const [sortKey, setSortKey] = useState<'id' | 'fecha' | 'tipo' | 'banco' | 'monto' | 'operador'>('fecha');
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('desc');
   const [showInactive, setShowInactive] = useState(false);
   const [page, setPage] = useState(1);
@@ -4927,12 +4940,12 @@ function TransfersScreen({ currentUser }: { currentUser: AuthUser }) {
   }, [filtered]);
   useEffect(() => setPage(1), [filters, periodFilter, query, showInactive, pageSize]);
 
-  function toggleSort(key: 'id' | 'fecha' | 'tipo' | 'monto') {
+  function toggleSort(key: 'id' | 'fecha' | 'tipo' | 'banco' | 'monto' | 'operador') {
     if (sortKey === key) setSortDirection((current) => current === 'desc' ? 'asc' : 'desc');
     else { setSortKey(key); setSortDirection('desc'); }
   }
 
-  function transferHeader(key: 'id' | 'fecha' | 'tipo' | 'monto', label: string) {
+  function transferHeader(key: 'id' | 'fecha' | 'tipo' | 'banco' | 'monto' | 'operador', label: string) {
     return <th className={sortKey === key || filters[key] ? 'table-header--modified' : undefined}><div className="th-stack">
       <button type="button" className="th-sort-button" onClick={() => toggleSort(key)}>{label}{sortKey === key ? (sortDirection === 'desc' ? <ArrowUpZA size={14}/> : <ArrowDownAZ size={14}/>) : <ArrowUpDown size={14}/>}</button>
       <input name={`transfer-filter-${key}`} value={filters[key] ?? ''} onChange={(event) => setFilters((current) => ({ ...current, [key]: event.target.value }))} placeholder="Filtrar" />
@@ -4978,7 +4991,7 @@ function TransfersScreen({ currentUser }: { currentUser: AuthUser }) {
         <div className="table-toolbar-controls"><label className="switch-control switch-control--small"><input name="transfer-show-inactive" type="checkbox" checked={showInactive} onChange={(event) => setShowInactive(event.target.checked)}/><span/>Mostrar inactivos</label></div>
       </div>
       {error && <p className="pending-screen-message transfer-error" role="alert">{error}</p>}
-      <div className="table-wrap"><table className="transfer-table"><thead><tr><th className="number-column"><div className="th-stack"><span>N°</span></div></th>{transferHeader('id','ID')}{isBoss && transferHeader('fecha','FECHA')}{transferHeader('tipo','TIPO')}<th><div className="th-stack"><span>BANCO / CUENTA</span></div></th>{transferHeader('monto','MONTO')}{isBoss && <th><div className="th-stack"><span>CAJERO / SUCURSAL</span></div></th>}<th><div className="th-stack"><span>ACCIONES</span></div></th></tr></thead>
+      <div className="table-wrap"><table className="transfer-table"><thead><tr><th className="number-column"><div className="th-stack"><span>N°</span></div></th>{transferHeader('id','ID')}{isBoss && transferHeader('fecha','FECHA')}{transferHeader('tipo','TIPO')}{transferHeader('banco','BANCO / CUENTA')}{transferHeader('monto','MONTO')}{isBoss && transferHeader('operador','CAJERO / SUCURSAL')}<th><div className="th-stack"><span>ACCIONES</span></div></th></tr></thead>
         <tbody>{pageRows.map((row,index)=><tr key={row.database_id} className={`${row.estado !== 'ACTIVO' ? 'inactive-row' : ''} ${selected === row.database_id ? 'selected-row' : ''}`} onClick={()=>setSelected(row.database_id)} onDoubleClick={()=>void openDetail(row,'view')}>
           <td>{filtered.length - ((page-1)*pageSize+index)}</td><td>{row.id}</td>{isBoss && <td className="multi-line-cell">{formatTransferDate(row.fecha_transferencia)}</td>}
           <td><strong>{row.tipo === 'EFECTIVO' ? 'Efectivo' : 'Digital'}</strong><small>{row.direccion === 'ENTRA' ? 'Ingreso' : 'Egreso'}</small></td>
@@ -5052,7 +5065,7 @@ function DollarPurchasesScreen({ currentUser }: { currentUser: AuthUser }) {
     <div className="panel__header table-panel-header"><div><p>{isBoss ? 'Dolares financiados con cordobas dentro de transacciones individuales o multiples' : 'Dolares comprados durante tu turno activo'}</p><h2>Compras de dolares registradas</h2></div></div>
     <div className="table-consolidation dollar-purchase-summary" aria-label="Consolidado de compras de dolares">
       <section className="table-consolidation__group table-consolidation__group--digital"><header><Coins size={18}/><div><strong>Dolares comprados</strong><span>{filtered.length} transacciones</span></div></header><div className="table-consolidation__totals"><strong>{formatCashCountMoney(totals.usd, 'USD')}</strong></div></section>
-      <section className="table-consolidation__group table-consolidation__group--income"><header><Scale size={18}/><div><strong>Diferencia acumulada</strong><span>Diferencial compra / venta</span></div></header><div className="table-consolidation__totals"><strong>{formatCashCountMoney(totals.nio, 'NIO')}</strong></div></section>
+      <section className="table-consolidation__group table-consolidation__group--income"><header><Scale size={18}/><div><strong>Diferencia acumulada</strong><span>Diferencial compra / venta</span></div></header><div className="table-consolidation__totals"><strong>{formatCashCountMoney(totals.nio, 'NIO')}</strong><strong>{formatCashCountMoney(totals.nio / 36.4, 'USD')}</strong></div></section>
     </div>
     {isBoss && <PeriodFilterControl value={periodFilter} onChange={setPeriodFilter} includeDates />}
     <div className="table-toolbar"><label className="search-box"><Search size={17}/><input name="dollar-purchase-search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder={isBoss ? 'Buscar por ID, cajero o sucursal' : 'Buscar por ID o monto'}/></label></div>
@@ -5070,7 +5083,7 @@ function DollarPurchasesScreen({ currentUser }: { currentUser: AuthUser }) {
         <td><strong>{row.id}</strong></td>
         <td className="multi-line-cell">{formatTransferDate(row.fecha_transaccion)}</td>
         <td><span className="transaction-amount transaction-amount--in">{formatCashCountMoney(Number(row.monto_comprado_usd), 'USD')}</span></td>
-        <td><strong>{formatCashCountMoney(Number(row.diferencia_nio), 'NIO')}</strong><small className="dollar-purchase-rate">C$ {Number(row.tasa_venta_usada).toFixed(2)} - C$ {Number(row.tasa_compra_usada).toFixed(2)}</small></td>
+        <td><strong>{formatCashCountMoney(Number(row.diferencia_nio), 'NIO')}</strong></td>
         {isBoss && <td className="multi-line-cell transaction-operator-cell"><strong>{row.cajero}</strong><small>{row.sucursal}</small></td>}
       </tr>)}
       {!pageRows.length && <tr><td colSpan={isBoss ? 6 : 5} className="empty-table-cell">No hay compras de dolares para mostrar.</td></tr>}
@@ -5088,6 +5101,8 @@ function getTransferColumnValue(row: TransferApiRow, key: string) {
     return Number.isNaN(date.getTime()) ? row.fecha_transferencia : `${date.toLocaleDateString('es-NI')} ${date.toLocaleTimeString('es-NI', { hour: '2-digit', minute: '2-digit', hour12: false })}`;
   }
   if (key === 'tipo') return `${row.tipo === 'EFECTIVO' ? 'Efectivo' : 'Digital'} ${row.direccion === 'ENTRA' ? 'Ingreso' : 'Egreso'} ${row.entidad ?? ''} ${row.cuenta ?? ''} ${row.cajero} ${row.sucursal}`;
+  if (key === 'banco') return `${row.entidad ?? ''} ${row.cuenta ?? ''}`;
+  if (key === 'operador') return `${row.cajero} ${row.sucursal}`;
   if (key === 'monto') return `${row.moneda} ${row.monto} ${formatCashCountMoney(Number(row.monto), row.moneda)}`;
   return String(row[key as keyof TransferApiRow] ?? '');
 }
@@ -5509,7 +5524,7 @@ function PendingScreen({ currentUser }: { currentUser: AuthUser }) {
     return rows.filter((row) => selectedPendingIds.includes(row.database_id) && !['PAGADO', 'CANCELADO'].includes(row.estado));
   }
 
-  // Comprueba que un lote pueda liquidarse con una sola moneda, direccion y turno.
+  // Un lote puede reunir turnos del mismo dia siempre que comparta sucursal, moneda y direccion.
   async function validateBatchSelection() {
     const selected = selectedPayablePendings();
     if (!selected.length) {
@@ -5517,8 +5532,9 @@ function PendingScreen({ currentUser }: { currentUser: AuthUser }) {
       return null;
     }
     const reference = selected[0];
-    if (selected.some((row) => row.tipo !== reference.tipo || row.moneda !== reference.moneda || row.shift_database_id !== reference.shift_database_id)) {
-      await requestSystemAlert('Los pendientes deben pertenecer al mismo turno y tener el mismo tipo y moneda.', 'Seleccion incompatible');
+    const referenceDate = new Date(reference.fecha_creacion).toLocaleDateString('en-CA', { timeZone:'America/Managua' });
+    if (selected.some((row) => row.tipo !== reference.tipo || row.moneda !== reference.moneda || row.sucursal !== reference.sucursal || new Date(row.fecha_creacion).toLocaleDateString('en-CA', { timeZone:'America/Managua' }) !== referenceDate)) {
+      await requestSystemAlert('Los pendientes deben tener el mismo tipo, moneda, sucursal y fecha.', 'Seleccion incompatible');
       return null;
     }
     return selected;
@@ -5552,7 +5568,10 @@ function PendingScreen({ currentUser }: { currentUser: AuthUser }) {
     if (!selected) return;
     setPayingId('batch');
     try {
-      const shift = await apiRequest<ShiftDetail>(`/shifts/${selected[0].shift_database_id}`);
+      const shift = isBoss
+        ? await apiRequest<ShiftDetail>(`/shifts/${selected[0].shift_database_id}`)
+        : await apiRequest<ShiftDetail | null>('/shifts/current');
+      if (!shift) throw new Error('No existe un turno abierto para liquidar los pendientes.');
       const expectedDirection = selected[0].tipo === 'POR_COBRAR' ? 'Ingreso' : 'Salida';
       const movements = shift.availableMovements.filter((movement) => movement.affectsAccount && movement.accountDirection === expectedDirection && movement.currencies.includes(selected[0].moneda));
       const first = movements[0];
@@ -6380,23 +6399,17 @@ function ConsolidationTable({
                   </td>
                   <td>
                     {isTeledolar ? <div className="teledolar-system-inputs">
-                      <label>Ingresos
+                      <label>Pagos
                         <span className="consolidation-input-wrap"><span>{getCurrencySymbol(currency)}</span><input
                           className="consolidation-input" inputMode="decimal"
-                          value={formatConsolidationInput(rowBalance.systemIncome)} readOnly={readOnly}
-                          onChange={(event) => onBalanceChange(currency, entity, 'systemIncome', event.target.value)}
-                          onKeyDown={(event) => onMoneyInputKeyDown(event, currency, entity, 'systemIncome', rowBalance.systemIncome)}
-                          onPaste={(event) => onMoneyInputPaste(event, currency, entity, 'systemIncome')}
+                          value={formatConsolidationInput(rowBalance.systemIncome)} readOnly
                           placeholder="0.00"
                         /></span>
                       </label>
-                      <label>Egresos
+                      <label>Envíos
                         <span className="consolidation-input-wrap"><span>{getCurrencySymbol(currency)}</span><input
                           className="consolidation-input" inputMode="decimal"
-                          value={formatConsolidationInput(rowBalance.systemExpense)} readOnly={readOnly}
-                          onChange={(event) => onBalanceChange(currency, entity, 'systemExpense', event.target.value)}
-                          onKeyDown={(event) => onMoneyInputKeyDown(event, currency, entity, 'systemExpense', rowBalance.systemExpense)}
-                          onPaste={(event) => onMoneyInputPaste(event, currency, entity, 'systemExpense')}
+                          value={formatConsolidationInput(rowBalance.systemExpense)} readOnly
                           placeholder="0.00"
                         /></span>
                       </label>
@@ -6417,8 +6430,8 @@ function ConsolidationTable({
                     </div>}
                   </td>
                   <td>{isTeledolar ? <div className="teledolar-differences">
-                    <span>Ingresos {renderDifference(systemIncome - movement.income, currency)}</span>
-                    <span>Egresos {renderDifference(systemExpense - movement.expense, currency)}</span>
+                    <span>Pagos {renderDifference(systemIncome - movement.income, currency)}</span>
+                    <span>Envíos {renderDifference(systemExpense - movement.expense, currency)}</span>
                   </div> : renderDifference(difference, currency)}</td>
                 </tr>
               );
@@ -6612,6 +6625,118 @@ function ExchangeCalculator({ onClose }: { onClose: () => void }) {
       </div>
     </section>
   );
+}
+
+function evaluateBasicExpression(source: string) {
+  const normalizedSource = source.replace(/\s/g, '').replace(/,/g, '.');
+  const tokens = normalizedSource.match(/\d+(?:\.\d+)?|[()+\-*/]/g) ?? [];
+  if (!tokens.length || tokens.join('') !== normalizedSource) return null;
+  let index = 0;
+  const parseFactor = (): number | null => {
+    const token = tokens[index++];
+    if (token === '-') {
+      const value = parseFactor();
+      return value === null ? null : -value;
+    }
+    if (token === '(') {
+      const value = parseExpression();
+      if (tokens[index++] !== ')') return null;
+      return value;
+    }
+    const value = Number(token);
+    return Number.isFinite(value) ? value : null;
+  };
+  const parseTerm = (): number | null => {
+    let value = parseFactor();
+    while (value !== null && ['*', '/'].includes(tokens[index])) {
+      const operator = tokens[index++];
+      const right = parseFactor();
+      if (right === null || (operator === '/' && right === 0)) return null;
+      value = operator === '*' ? value * right : value / right;
+    }
+    return value;
+  };
+  const parseExpression = (): number | null => {
+    let value = parseTerm();
+    while (value !== null && ['+', '-'].includes(tokens[index])) {
+      const operator = tokens[index++];
+      const right = parseTerm();
+      if (right === null) return null;
+      value = operator === '+' ? value + right : value - right;
+    }
+    return value;
+  };
+  const result = parseExpression();
+  return index === tokens.length && result !== null && Number.isFinite(result) ? result : null;
+}
+
+type CalculatorHistoryItem = { id: number; expression: string; result: number };
+
+function DigitalCalculator({ onClose }: { onClose: () => void }) {
+  const [expression, setExpression] = useState('');
+  const [history, setHistory] = useState<CalculatorHistoryItem[]>([]);
+  const [showHistory, setShowHistory] = useState(false);
+  const [error, setError] = useState('');
+  const panelRef = useRef<HTMLElement>(null);
+  const dragOffsetRef = useRef<{ x:number; y:number; pointerId:number } | null>(null);
+  const [position, setPosition] = useState({ x:16, y:92 });
+
+  function calculate(value = expression, historyId?: number) {
+    const result = evaluateBasicExpression(value);
+    if (result === null) { setError('Revise la operación.'); return; }
+    setError('');
+    setExpression(String(Number(result.toFixed(8))));
+    setHistory((current) => historyId
+      ? current.map((item) => item.id === historyId ? { ...item, expression:value, result } : item)
+      : [{ id:Date.now(), expression:value, result }, ...current].slice(0, 12));
+  }
+
+  function append(value: string) {
+    setError('');
+    setExpression((current) => `${current}${value}`);
+  }
+
+  function handleDragStart(event: ReactPointerEvent<HTMLDivElement>) {
+    if ((event.target as HTMLElement).closest('button')) return;
+    const rect = panelRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    dragOffsetRef.current = { x:event.clientX-rect.left, y:event.clientY-rect.top, pointerId:event.pointerId };
+    event.currentTarget.setPointerCapture(event.pointerId);
+  }
+
+  function handleDragMove(event: ReactPointerEvent<HTMLDivElement>) {
+    const drag = dragOffsetRef.current;
+    const panel = panelRef.current;
+    if (!drag || drag.pointerId !== event.pointerId || !panel) return;
+    const rect = panel.getBoundingClientRect();
+    setPosition({
+      x:Math.max(8, Math.min(window.innerWidth-rect.width-8, event.clientX-drag.x)),
+      y:Math.max(8, Math.min(window.innerHeight-rect.height-8, event.clientY-drag.y)),
+    });
+  }
+
+  function handleDragEnd(event: ReactPointerEvent<HTMLDivElement>) {
+    if (dragOffsetRef.current?.pointerId !== event.pointerId) return;
+    dragOffsetRef.current = null;
+    event.currentTarget.releasePointerCapture(event.pointerId);
+  }
+
+  return <section className="digital-calculator" ref={panelRef} role="dialog" aria-label="Calculadora digital" style={{left:position.x,top:position.y}}>
+    <div className="exchange-calculator__header" onPointerDown={handleDragStart} onPointerMove={handleDragMove} onPointerUp={handleDragEnd} onPointerCancel={handleDragEnd}>
+      <div><GripHorizontal size={16}/><strong>Calculadora</strong></div>
+      <div className="digital-calculator__header-actions"><button type="button" className={`icon-button ${showHistory ? 'icon-button--active':''}`} title="Llamar historial" onClick={()=>setShowHistory((current)=>!current)}><RotateCcw size={15}/></button><button type="button" className="icon-button close-button" aria-label="Cerrar calculadora" onClick={onClose}><X size={16}/></button></div>
+    </div>
+    <div className="digital-calculator__body">
+      <label className="digital-calculator__display">Operación<input autoFocus value={expression} onChange={(event)=>setExpression(event.target.value.replace(/[^0-9+\-*/().,\s]/g,''))} onKeyDown={(event)=>{if(event.key==='Enter'){event.preventDefault();calculate();}}} placeholder="0"/></label>
+      {error && <span className="digital-calculator__error">{error}</span>}
+      <div className="digital-calculator__keys">
+        <button type="button" className="digital-calculator__clear" onClick={()=>{setExpression('');setError('')}}>C</button><button type="button" onClick={()=>setExpression((current)=>current.slice(0,-1))}>⌫</button><button type="button" className="digital-calculator__operator" onClick={()=>append('/')}>÷</button><button type="button" className="digital-calculator__operator" onClick={()=>append('*')}>×</button>
+        {['7','8','9','-','4','5','6','+','1','2','3','.'].map((key)=><button type="button" key={key} className={['-','+'].includes(key)?'digital-calculator__operator':''} onClick={()=>append(key)}>{key}</button>)}
+        <button type="button" className="digital-calculator__zero" onClick={()=>append('0')}>0</button><button type="button" onClick={()=>append('00')}>00</button><button type="button" className="digital-calculator__equals" onClick={()=>calculate()}>=</button>
+      </div>
+      {showHistory && <section className="digital-calculator__history"><header><strong>Historial</strong>{history.length>0&&<button type="button" className="icon-button" title="Limpiar historial" onClick={()=>setHistory([])}><Trash2 size={14}/></button>}</header>{history.length ? history.map((item)=><div key={item.id}><input value={item.expression} onChange={(event)=>setHistory((current)=>current.map((entry)=>entry.id===item.id?{...entry,expression:event.target.value}:entry))}/><button type="button" onClick={()=>calculate(item.expression,item.id)}>= {formatMoneyNumber(item.result)}</button><button type="button" className="icon-button" title="Usar resultado" onClick={()=>setExpression(String(item.result))}><ChevronLeft size={14}/></button></div>) : <span>Sin cálculos todavía.</span>}</section>}
+    </div>
+  </section>;
 }
 
 function renderDifference(
@@ -7861,6 +7986,7 @@ function TransactionTable({ config, currentUser }: { config: CrudConfig; current
   const [markedTransactionIds, setMarkedTransactionIds] = useState<Set<string>>(() => new Set());
   const [modal, setModal] = useState<{ mode: ModalMode | 'view' | 'pay'; row: CrudRow } | null>(null);
   const [showExchangeCalculator, setShowExchangeCalculator] = useState(false);
+  const [showDigitalCalculator, setShowDigitalCalculator] = useState(false);
   const [showDirectoryLookup, setShowDirectoryLookup] = useState(false);
   const [isSavingTransactions, setIsSavingTransactions] = useState(false);
   const [transactionSaveError, setTransactionSaveError] = useState('');
@@ -8219,6 +8345,10 @@ function TransactionTable({ config, currentUser }: { config: CrudConfig; current
             </div>
           )}
           <div className="action-row">
+            <button type="button" className="secondary-button" onClick={() => setShowDigitalCalculator((current) => !current)}>
+              <Calculator size={17} />
+              Calculadora
+            </button>
             <div className="currency-filter currency-filter--header" aria-label="Filtrar por moneda">
               <button
                 type="button"
@@ -8453,6 +8583,7 @@ function TransactionTable({ config, currentUser }: { config: CrudConfig; current
       )}
 
       {showExchangeCalculator && <ExchangeCalculator onClose={() => setShowExchangeCalculator(false)} />}
+      {showDigitalCalculator && <DigitalCalculator onClose={() => setShowDigitalCalculator(false)} />}
       {showDirectoryLookup && <DirectoryLookup onClose={() => setShowDirectoryLookup(false)} />}
 
     </section>
@@ -8510,6 +8641,7 @@ function TransactionModal({
   };
   const [cashView, setCashView] = useState<'received' | 'change'>('received');
   const [showExchangeCalculator, setShowExchangeCalculator] = useState(false);
+  const [showDigitalCalculator, setShowDigitalCalculator] = useState(false);
   const [showDirectoryLookup, setShowDirectoryLookup] = useState(false);
   const modalRef = useAutoFocusFirstField<HTMLElement>();
   const restrictToShiftAccounts = mode === 'create';
@@ -8922,6 +9054,14 @@ function TransactionModal({
                 <button
                   type="button"
                   className="secondary-button secondary-button--compact"
+                  onClick={() => setShowDigitalCalculator((current) => !current)}
+                >
+                  <Calculator size={16} />
+                  Calculadora
+                </button>
+                <button
+                  type="button"
+                  className="secondary-button secondary-button--compact"
                   onClick={() => setShowExchangeCalculator((current) => !current)}
                 >
                   <Calculator size={16} />
@@ -9303,6 +9443,7 @@ function TransactionModal({
           )}
         </div>
         {showExchangeCalculator && <ExchangeCalculator onClose={() => setShowExchangeCalculator(false)} />}
+        {showDigitalCalculator && <DigitalCalculator onClose={() => setShowDigitalCalculator(false)} />}
         {showDirectoryLookup && <DirectoryLookup onClose={() => setShowDirectoryLookup(false)} />}
       </section>
     </div>

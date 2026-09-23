@@ -468,10 +468,14 @@ export class ShiftsService {
            tr.monto as amount,
            m.codigo as currency,
            tr.tipo::text as transfer_type,
-           tr.direccion::text as transfer_direction
+           tr.direccion::text as transfer_direction,
+           eb.codigo as transfer_entity,
+           cb.alias as transfer_account
          from temo.notificaciones_usuarios n
          join temo.transferencias tr on tr.id_transferencia = n.id_transferencia
          join temo.monedas m on m.id_moneda = tr.id_moneda
+         left join temo.cuentas_bancarias cb on cb.id_cuenta = tr.id_cuenta
+         left join temo.entidades_bancarias eb on eb.id_entidad = cb.id_entidad
          join temo.turnos t on t.id_turno = n.id_turno
          join temo.usuarios u on u.id_usuario = t.id_cajero
          join temo.sucursales s on s.id_sucursal = t.id_sucursal
@@ -500,7 +504,9 @@ export class ShiftsService {
          null::numeric as amount,
          null::text as currency,
          null::text as transfer_type,
-         null::text as transfer_direction
+         null::text as transfer_direction,
+         null::text as transfer_entity,
+         null::text as transfer_account
        from temo.solicitudes_cierre_turno sc
        join temo.turnos t on t.id_turno = sc.id_turno
        join temo.usuarios u on u.id_usuario = t.id_cajero
@@ -523,7 +529,9 @@ export class ShiftsService {
          coalesce(tr.monto, payment.monto) as amount,
          coalesce(tm.codigo, payment.moneda) as currency,
          tr.tipo::text as transfer_type,
-         tr.direccion::text as transfer_direction
+         tr.direccion::text as transfer_direction,
+         eb.codigo as transfer_entity,
+         cb.alias as transfer_account
        from temo.notificaciones_usuarios n
        left join temo.turnos t on t.id_turno = n.id_turno
        left join temo.usuarios u on u.id_usuario = t.id_cajero
@@ -533,6 +541,8 @@ export class ShiftsService {
        left join temo.contrapartes cp on cp.id_contraparte = pp.id_contraparte
        left join temo.transferencias tr on tr.id_transferencia = n.id_transferencia
        left join temo.monedas tm on tm.id_moneda = tr.id_moneda
+       left join temo.cuentas_bancarias cb on cb.id_cuenta = tr.id_cuenta
+       left join temo.entidades_bancarias eb on eb.id_entidad = cb.id_entidad
        left join lateral (
          select ap.monto, m.codigo as moneda
          from temo.abonos_pendientes ap
@@ -965,8 +975,8 @@ export class ShiftsService {
            when stc.saldo_final_calculado is distinct from computed.amount then computed.amount
            else coalesce(stc.saldo_final_sistema, computed.amount)
          end as system,
-         stc.saldo_ingresos_sistema as system_income,
-         stc.saldo_egresos_sistema as system_expense,
+         case when eb.codigo = 'TELEDOLAR' then coalesce(movements.income, 0) else stc.saldo_ingresos_sistema end as system_income,
+         case when eb.codigo = 'TELEDOLAR' then coalesce(movements.expense, 0) else stc.saldo_egresos_sistema end as system_expense,
          case
            when stc.saldo_final_calculado is distinct from computed.amount then 0
            else coalesce(stc.saldo_final_sistema, computed.amount) - computed.amount

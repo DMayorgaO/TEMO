@@ -253,9 +253,7 @@ export class TransfersService {
     description: string,
     user: AuthenticatedUser,
   ) {
-    const medium = transfer.type === 'EFECTIVO' ? 'efectivo' : 'digital';
-    const direction = transfer.direction === 'ENTRA' ? 'ingreso' : 'egreso';
-    const detail = description.trim() || 'Sin descripcion adicional.';
+    const detail = description.trim();
     await client.query(
       `insert into temo.notificaciones_usuarios (
          id_usuario_destino, tipo, titulo, mensaje, id_transferencia, id_turno, id_usuario_origen
@@ -272,7 +270,7 @@ export class TransfersService {
        where recipients.id_usuario is not null and recipients.id_usuario <> $5`,
       [
         'Transferencia aplicada a un turno',
-        `Se registro una transferencia de ${medium} de ${direction}. ${detail}`,
+        detail || null,
         transferId,
         shift.id_turno,
         user.id,

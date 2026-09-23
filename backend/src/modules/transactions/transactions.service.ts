@@ -533,9 +533,13 @@ export class TransactionsService {
        where t.estado <> 'ANULADA'
          and (
            $1 = 'JEFA'
-           or (
-             t.id_cajero = $2::uuid
-             and tu.estado in ('ABIERTO', 'PENDIENTE_APROBACION')
+           or exists (
+             select 1
+             from temo.turnos active_shift
+             where active_shift.id_cajero = $2::uuid
+               and active_shift.estado in ('ABIERTO', 'PENDIENTE_APROBACION')
+               and active_shift.id_sucursal = t.id_sucursal
+               and active_shift.fecha_apertura::date = t.fecha_apertura::date
            )
          )
        order by
@@ -576,6 +580,8 @@ export class TransactionsService {
         pending_balance: string | null;
         descripcion: string;
         id_cajero: string;
+        id_sucursal: string;
+        fecha_turno: string;
         id_contraparte: string;
         estado_turno: string;
         tasa_compra_usada: string;
@@ -604,6 +610,8 @@ export class TransactionsService {
            pp.saldo_pendiente as pending_balance,
            coalesce(t.descripcion, '') as descripcion,
            t.id_cajero,
+           t.id_sucursal,
+           tu.fecha_apertura::date as fecha_turno,
            tu.estado as estado_turno,
            coalesce(t.tasa_compra_usada, 36.40) as tasa_compra_usada,
            coalesce(t.tasa_venta_usada, 37.00) as tasa_venta_usada
@@ -635,12 +643,16 @@ export class TransactionsService {
       if (!transaction) {
         throw new NotFoundException('La transaccion seleccionada no existe.');
       }
-      if (
-        user.roleCode !== 'JEFA' &&
-        (transaction.id_cajero !== user.id ||
-          !['ABIERTO', 'PENDIENTE_APROBACION'].includes(transaction.estado_turno))
-      ) {
-        throw new ForbiddenException('No tiene permiso para consultar esta transaccion.');
+      if (user.roleCode !== 'JEFA') {
+        const sameCashierOpen = transaction.id_cajero === user.id && ['ABIERTO', 'PENDIENTE_APROBACION'].includes(transaction.estado_turno);
+        const sameBranchDay = sameCashierOpen ? true : Boolean((await client.query(
+          `select 1 from temo.turnos
+           where id_cajero = $1 and id_sucursal = $2
+             and estado in ('ABIERTO', 'PENDIENTE_APROBACION')
+             and fecha_apertura::date = $3::date limit 1`,
+          [user.id, transaction.id_sucursal, transaction.fecha_turno],
+        )).rowCount);
+        if (!sameBranchDay) throw new ForbiddenException('No tiene permiso para consultar esta transaccion.');
       }
 
       // Recupera primero el arqueo propio de la transaccion y conserva compatibilidad con grupos antiguos.
@@ -701,7 +713,7 @@ export class TransactionsService {
         }
       }
 
-      const { id_cajero: _cashierId, estado_turno: _shiftState, ...visibleTransaction } = transaction;
+      const { id_cajero: _cashierId, id_sucursal: _branchId, fecha_turno: _shiftDate, estado_turno: _shiftState, ...visibleTransaction } = transaction;
       return {
         transaction: visibleTransaction,
         rates: {
@@ -934,6 +946,8 @@ export class TransactionsService {
         id_transaccion: string;
         id_turno: string;
         id_cajero: string;
+        id_sucursal: string;
+        fecha_turno: string;
         tipo: 'POR_COBRAR' | 'POR_PAGAR';
         id_moneda: string;
         moneda: CurrencyCode;
@@ -946,6 +960,8 @@ export class TransactionsService {
            pp.id_transaccion,
            t.id_turno,
            t.id_cajero,
+           t.id_sucursal,
+           tu.fecha_apertura::date as fecha_turno,
            pp.tipo,
            pp.id_moneda,
            m.codigo as moneda,
@@ -953,6 +969,7 @@ export class TransactionsService {
            cp.nombre as contraparte
          from temo.pagos_pendientes pp
          join temo.transacciones t on t.id_transaccion = pp.id_transaccion
+         join temo.turnos tu on tu.id_turno = t.id_turno
          join temo.monedas m on m.id_moneda = pp.id_moneda
          join temo.contrapartes cp on cp.id_contraparte = pp.id_contraparte
          where pp.id_pendiente = $1
@@ -962,11 +979,6 @@ export class TransactionsService {
       const pending = result.rows[0];
       if (!pending) {
         throw new NotFoundException('El pendiente seleccionado no existe.');
-      }
-      if (user.roleCode !== 'JEFA' && pending.id_cajero !== user.id) {
-        throw new ForbiddenException(
-          'No tiene permiso para pagar este pendiente.',
-        );
       }
       if (pending.estado === 'PAGADO') {
         throw new ConflictException('Este pendiente ya fue pagado.');
@@ -978,16 +990,17 @@ export class TransactionsService {
       const shiftResult = await client.query<ShiftRow>(
         `select id_turno, id_sucursal, id_caja, id_cajero
          from temo.turnos
-         where id_turno = $1
-           and id_cajero = $2
+         where ${user.roleCode === 'JEFA' ? 'id_turno = $1' : 'id_cajero = $1 and id_sucursal = $2 and fecha_apertura::date = $3::date'}
            and estado in ('ABIERTO', 'PENDIENTE_APROBACION')
          for update`,
-        [pending.id_turno, pending.id_cajero],
+        user.roleCode === 'JEFA'
+          ? [pending.id_turno]
+          : [user.id, pending.id_sucursal, pending.fecha_turno],
       );
       const activeShift = shiftResult.rows[0] ?? null;
-      if (user.roleCode !== 'JEFA' && !activeShift) {
+      if (!activeShift) {
         throw new ConflictException(
-          'El turno donde se registro el pendiente ya no esta activo.',
+          'No existe un turno activo en la misma sucursal y fecha para liquidar el pendiente.',
         );
       }
 
@@ -1193,6 +1206,7 @@ export class TransactionsService {
         id_sucursal: string;
         id_caja: string;
         id_cajero: string;
+        fecha_turno: string;
         tipo: 'POR_COBRAR' | 'POR_PAGAR';
         id_moneda: string;
         moneda: CurrencyCode;
@@ -1200,11 +1214,12 @@ export class TransactionsService {
         contraparte: string;
       } & QueryResultRow>(
         `select pp.id_pendiente, pp.estado, pp.id_transaccion,
-           t.id_turno, t.id_sucursal, t.id_caja, t.id_cajero,
+           t.id_turno, t.id_sucursal, t.id_caja, t.id_cajero, tu.fecha_apertura::date as fecha_turno,
            pp.tipo, pp.id_moneda, pp.id_contraparte, m.codigo as moneda,
            pp.saldo_pendiente, cp.nombre as contraparte
          from temo.pagos_pendientes pp
          join temo.transacciones t on t.id_transaccion = pp.id_transaccion
+         join temo.turnos tu on tu.id_turno = t.id_turno
          join temo.monedas m on m.id_moneda = pp.id_moneda
          join temo.contrapartes cp on cp.id_contraparte = pp.id_contraparte
          where pp.id_pendiente = any($1::uuid[])
@@ -1220,23 +1235,23 @@ export class TransactionsService {
       if (pendings.some((pending) => pending.estado !== 'PENDIENTE' && pending.estado !== 'ABONADO' && pending.estado !== 'VENCIDO')) {
         throw new ConflictException('Todos los pendientes seleccionados deben estar disponibles para pago.');
       }
-      if (pendings.some((pending) => pending.tipo !== reference.tipo || pending.moneda !== reference.moneda || pending.id_turno !== reference.id_turno)) {
-        throw new ConflictException('Seleccione pendientes del mismo tipo, moneda y turno.');
-      }
-      if (user.roleCode !== 'JEFA' && pendings.some((pending) => pending.id_cajero !== user.id)) {
-        throw new ForbiddenException('No tiene permiso para pagar uno o mas pendientes seleccionados.');
+      if (pendings.some((pending) => pending.tipo !== reference.tipo || pending.moneda !== reference.moneda || pending.id_sucursal !== reference.id_sucursal || pending.fecha_turno !== reference.fecha_turno)) {
+        throw new ConflictException('Seleccione pendientes del mismo tipo, moneda, sucursal y fecha.');
       }
 
       const shiftResult = await client.query<ShiftRow>(
-        `select id_turno, id_sucursal, id_caja, id_cajero
+         `select id_turno, id_sucursal, id_caja, id_cajero
          from temo.turnos
-         where id_turno = $1 and estado in ('ABIERTO', 'PENDIENTE_APROBACION')
+         where ${user.roleCode === 'JEFA' ? 'id_turno = $1' : 'id_cajero = $1 and id_sucursal = $2 and fecha_apertura::date = $3::date'}
+           and estado in ('ABIERTO', 'PENDIENTE_APROBACION')
          for update`,
-        [reference.id_turno],
+        user.roleCode === 'JEFA'
+          ? [reference.id_turno]
+          : [user.id, reference.id_sucursal, reference.fecha_turno],
       );
       const activeShift = shiftResult.rows[0];
       if (!activeShift) {
-        throw new ConflictException('El turno de los pendientes seleccionados ya no esta activo.');
+        throw new ConflictException('No existe un turno activo en la misma sucursal y fecha para liquidar los pendientes.');
       }
 
       const totalAmount = pendings.reduce((sum, pending) => sum + Number(pending.saldo_pendiente), 0);
