@@ -45,6 +45,7 @@ Cada error mostrado por TEMO incluye un código estable y, cuando corresponde, u
 | Fecha | Pantalla | Síntoma | Causa | Corrección |
 | --- | --- | --- | --- | --- |
 | 2026-09-23 | Transferencias | `Internal server error` al registrar sin descripción | La notificación enviaba `NULL` a un campo obligatorio | Se almacena texto vacío y la notificación omite visualmente la descripción. |
+| 2026-09-23 | Transacciones | La confirmación de anulación no producía cambios | El botón sólo alteraba el estado local de la tabla y no llamaba al API | Se agregó anulación atómica con reversión de arqueo, saldos y pendiente abierto. |
 | 2026-09-22 | Pendientes | `Internal server error` para Administrador | Alias SQL incorrecto en la consulta de turnos | Se corrigió la referencia a la fecha del turno. |
 
 ## Datos para un reporte

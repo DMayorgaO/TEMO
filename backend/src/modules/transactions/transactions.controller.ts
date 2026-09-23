@@ -158,6 +158,14 @@ export class TransactionsController {
     return this.transactions.update(id, parsed.data, request.user);
   }
 
+  @Post(':id/void')
+  voidTransaction(
+    @Param('id') id: string,
+    @Req() request: { user: AuthenticatedUser },
+  ) {
+    return this.transactions.void(id, request.user);
+  }
+
   @Get(':id/detail')
   detail(
     @Param('id') id: string,

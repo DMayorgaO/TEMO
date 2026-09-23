@@ -934,6 +934,97 @@ export class TransactionsService {
     });
   }
 
+  void(transactionId: string, user: AuthenticatedUser) {
+    return this.db.transaction(async (client) => {
+      const transaction = await this.loadEditableTransaction(client, transactionId, user);
+      if (transaction.id_pendiente) {
+        const payments = await client.query(
+          `select 1 from temo.abonos_pendientes where id_pendiente = $1 limit 1`,
+          [transaction.id_pendiente],
+        );
+        if (payments.rowCount) {
+          throw new ConflictException(
+            'La transacción no puede anularse porque su pendiente ya recibió un pago.',
+          );
+        }
+      }
+
+      const previousSettlement = await this.loadStoredSettlement(
+        client,
+        transaction.id_grupo_transacciones,
+        transaction.id_transaccion,
+      );
+      if (!previousSettlement.independent) {
+        const activeGroup = await client.query<{ total: number } & QueryResultRow>(
+          `select count(*)::integer as total
+           from temo.transacciones
+           where id_grupo_transacciones = $1 and estado <> 'ANULADA'`,
+          [transaction.id_grupo_transacciones],
+        );
+        if (Number(activeGroup.rows[0]?.total ?? 0) > 1) {
+          throw new ConflictException(
+            'Esta transacción pertenece a una operación múltiple con arqueo compartido y no puede anularse individualmente.',
+          );
+        }
+      }
+
+      const emptySettlement: StoredSettlement = {
+        independent: previousSettlement.independent,
+        primaryDirection: previousSettlement.primaryDirection,
+        primaryCounts: { NIO: [], USD: [] },
+        changeCounts: { NIO: [], USD: [] },
+      };
+      await this.applySettlementDeltaToCurrentCashCount(
+        client,
+        transaction.id_turno,
+        previousSettlement,
+        emptySettlement,
+        true,
+      );
+
+      await client.query(
+        `update temo.transacciones
+         set estado = 'ANULADA', id_usuario_modificacion = $2, fecha_modificacion = now()
+         where id_transaccion = $1`,
+        [transactionId, user.id],
+      );
+
+      if (transaction.id_pendiente && transaction.estado_pendiente !== 'CANCELADO') {
+        await client.query(
+          `update temo.pagos_pendientes
+           set estado = 'CANCELADO', saldo_pendiente = 0, fecha_modificacion = now()
+           where id_pendiente = $1`,
+          [transaction.id_pendiente],
+        );
+        await client.query(
+          `insert into temo.historial_pendientes (
+             id_pendiente, estado_anterior, estado_nuevo, id_usuario, motivo
+           ) values ($1, $2::temo.estado_pendiente, 'CANCELADO', $3, 'Pendiente cancelado al anular la transacción')`,
+          [transaction.id_pendiente, transaction.estado_pendiente, user.id],
+        );
+      }
+
+      await client.query(
+        `update temo.grupos_transacciones g
+         set estado = case when exists (
+           select 1 from temo.transacciones t
+           where t.id_grupo_transacciones = g.id_grupo_transacciones and t.estado <> 'ANULADA'
+         ) then 'COMPLETADO'::temo.estado_grupo_transacciones else 'ANULADO'::temo.estado_grupo_transacciones end,
+         id_usuario_modificacion = $2,
+         fecha_modificacion = now()
+         where id_grupo_transacciones = $1`,
+        [transaction.id_grupo_transacciones, user.id],
+      );
+      await this.refreshShiftAccountBalances(client, transaction.id_turno);
+      await client.query(
+        `insert into temo.bitacora (id_usuario, accion, tabla, id_registro, datos_nuevos)
+         values ($1, 'ANULAR', 'transacciones', $2, $3::jsonb)`,
+        [user.id, transactionId, JSON.stringify({ pendingId: transaction.id_pendiente })],
+      );
+      return { id: transactionId, status: 'ANULADA' };
+    });
+  }
+
   payPending(
     pendingId: string,
     input: PayPendingInput,
@@ -1802,6 +1893,7 @@ export class TransactionsService {
     shiftId: string,
     previous: StoredSettlement,
     next: StoredSettlement,
+    rejectNegative = false,
   ) {
     const quantityMap = (counts: CashCounts, currency: CurrencyCode) =>
       new Map(counts[currency].map((line) => [
@@ -1853,7 +1945,13 @@ export class TransactionsService {
         const newNet =
           (newPrimary.get(value) ?? 0) * (next.primaryDirection === 'ENTRA' ? 1 : -1) -
           (newChange.get(value) ?? 0);
-        const quantity = Math.max(0, Number(row.quantity) + newNet - oldNet);
+        const calculatedQuantity = Number(row.quantity) + newNet - oldNet;
+        if (rejectNegative && calculatedQuantity < 0) {
+          throw new ConflictException(
+            `No se puede revertir el arqueo porque ya no están disponibles todos los billetes de ${value} ${currency}.`,
+          );
+        }
+        const quantity = Math.max(0, calculatedQuantity);
         const keepsLooseCounting = Number(row.piles25) === 0;
         await client.query(
           `insert into temo.arqueos_denominaciones (

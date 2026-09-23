@@ -8336,14 +8336,28 @@ function TransactionTable({ config, currentUser }: { config: CrudConfig; current
   }
 
   async function toggleVoid(row: CrudRow) {
-    if (row.status !== 'Anulada' && !await requestSystemConfirm(`La transaccion ${row.id} quedara anulada y sus movimientos seran revertidos.`, { title:'Anular transaccion', confirmLabel:'Anular', tone:'danger' })) {
+    if (row.status === 'Anulada') {
       return;
     }
-    setRows((currentRows) =>
-      currentRows.map((item) =>
-        item.id === row.id ? { ...item, status: item.status === 'Anulada' ? 'Registrada' : 'Anulada' } : item,
-      ),
-    );
+    if (!await requestSystemConfirm(`La transacción ${row.id} quedará anulada y sus movimientos serán revertidos.`, { title:'Anular transacción', confirmLabel:'Anular', tone:'danger' })) return;
+    if (!row.databaseId) {
+      setTransactionSaveError('La transacción no tiene un identificador válido para anularse.');
+      return;
+    }
+    setIsSavingTransactions(true);
+    setTransactionSaveError('');
+    try {
+      await apiRequest(`/transactions/${row.databaseId}/void`, { method: 'POST' });
+      await reloadTransactions();
+      const shift = await apiRequest<ShiftDetail | null>('/shifts/current');
+      setCurrentShift(shift);
+      announceOperationalDataChange();
+      await requestSystemAlert(`La transacción ${row.id} fue anulada y sus movimientos fueron revertidos.`, 'Transacción anulada');
+    } catch (error) {
+      setTransactionSaveError(error instanceof Error ? error.message : 'No fue posible anular la transacción.');
+    } finally {
+      setIsSavingTransactions(false);
+    }
   }
 
   return (
@@ -8431,6 +8445,7 @@ function TransactionTable({ config, currentUser }: { config: CrudConfig; current
         </div>
 
         <PeriodFilterControl value={periodFilter} onChange={setPeriodFilter} includeDates={isBoss} />
+        {transactionSaveError && !modal && <p className="transaction-save-error" role="alert">{transactionSaveError}</p>}
         <div className="table-toolbar">
           <label className="search-box">
             <Search size={17} />
@@ -8526,10 +8541,11 @@ function TransactionTable({ config, currentUser }: { config: CrudConfig; current
                       <button
                         type="button"
                         className={`icon-action ${row.status === 'Anulada' ? 'icon-action--inactive' : ''}`}
-                        title={row.status === 'Anulada' ? 'Reactivar' : 'Anular'}
-                        onClick={(event) => { event.stopPropagation(); toggleVoid(row); }}
+                        title={row.status === 'Anulada' ? 'Transacción anulada' : 'Anular'}
+                        disabled={row.status === 'Anulada' || isSavingTransactions}
+                        onClick={(event) => { event.stopPropagation(); void toggleVoid(row); }}
                       >
-                        {row.status === 'Anulada' ? <RotateCcw size={16} /> : <Ban size={16} />}
+                        <Ban size={16} />
                       </button>
                     </div>
                   </td>
