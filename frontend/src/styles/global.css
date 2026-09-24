@@ -1978,8 +1978,46 @@ td {
   grid-column: span 3;
 }
 
+.transaction-form-pending-action {
+  align-items: end;
+  display: flex;
+  grid-column: span 1;
+  padding-bottom: 1px;
+}
+
+.transaction-form-pending-action .icon-button {
+  position: relative;
+}
+
+.transaction-form-pending-action .icon-button--active {
+  background: #e3f3f0;
+  border-color: #80bdb3;
+  color: var(--teal-700);
+}
+
+.transaction-form-pending-action .icon-button span {
+  align-items: center;
+  background: var(--teal-700);
+  border-radius: 999px;
+  color: #fff;
+  display: flex;
+  font-size: .62rem;
+  font-weight: 800;
+  height: 16px;
+  justify-content: center;
+  min-width: 16px;
+  padding: 0 4px;
+  position: absolute;
+  right: -5px;
+  top: -6px;
+}
+
 .transaction-form-description {
   grid-column: span 9;
+}
+
+.transaction-form-pending-action + .transaction-form-description {
+  grid-column: span 8;
 }
 
 .transaction-form-description textarea {
@@ -4424,6 +4462,7 @@ tbody tr:hover td {
   .transaction-form-meta,
   .transaction-form-amount,
   .transaction-form-pending,
+  .transaction-form-pending-action,
   .transaction-form-description {
     grid-column: 1 / -1;
   }

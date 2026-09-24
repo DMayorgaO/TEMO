@@ -1961,7 +1961,7 @@ function buildTransactionBatchPayload(rows: CrudRow[]) {
       movementCode: row.movementCode,
       currencyCode: row.currency === 'USD' ? 'USD' as const : 'NIO' as const,
       amount: parseMoneyValue(row.amountValue),
-      pendingName: row.pendingName.trim(),
+      pendingName: row.pendingName.trim().toUpperCase(),
       description: row.description.trim(),
       settlement: transactionSettlementPayload(row),
     })),
@@ -5336,14 +5336,14 @@ function DirectoryModal({ mode, row, onClose, onEdit, onSaved }: { mode: ModalMo
 
   function updateIdentifier(index:number, patch:Partial<DirectoryIdentifier>){setIdentifiers((current)=>current.map((item,itemIndex)=>itemIndex===index?{...item,...patch}:item));}
   function normalizeIdentityInput(value:string){const compact=value.replace(/[^0-9A-Za-z]/g,'').toUpperCase().slice(0,14);return [compact.slice(0,3),compact.slice(3,9),compact.slice(9)].filter(Boolean).join('-');}
-  async function save(event:FormEvent){event.preventDefault();setSaving(true);setError('');try{const payload={name,status,observations,identifiers:identifiers.filter((item)=>item.number.trim()&&item.type.trim()),identities:identities.filter((item)=>item.number.trim()),references:references.filter((item)=>item.trim())};await apiRequest(row?`/directory/${row.database_id}`:'/directory',{method:row?'PUT':'POST',body:JSON.stringify(payload)});await onSaved();}catch(saveError){setError(saveError instanceof Error?saveError.message:'No fue posible guardar el registro.');}finally{setSaving(false)}}
+  async function save(event:FormEvent){event.preventDefault();setSaving(true);setError('');try{const payload={name:name.toUpperCase(),status,observations:observations.toUpperCase(),identifiers:identifiers.filter((item)=>item.number.trim()&&item.type.trim()).map((item)=>({...item,institution:item.institution.toUpperCase(),type:item.type.toUpperCase(),number:item.number.toUpperCase()})),identities:identities.filter((item)=>item.number.trim()).map((item)=>({...item,number:item.number.toUpperCase(),holder:item.holder.toUpperCase()})),references:references.filter((item)=>item.trim()).map((item)=>item.toUpperCase())};await apiRequest(row?`/directory/${row.database_id}`:'/directory',{method:row?'PUT':'POST',body:JSON.stringify(payload)});await onSaved();}catch(saveError){setError(saveError instanceof Error?saveError.message:'No fue posible guardar el registro.');}finally{setSaving(false)}}
 
   return <div className="modal-backdrop" role="dialog" aria-modal="true"><form className="modal-panel directory-modal" onSubmit={save} ref={modalRef}>
     <div className="modal-header"><div><p>{mode==='create'?'Nuevo registro':readOnly?'Vista de registro':'Editar registro'}</p><h2>Destinatario frecuente</h2></div><button type="button" className="icon-button icon-button--danger" onClick={onClose}><X size={18}/></button></div>
-    <div className="directory-main-fields"><label className="form-field directory-id">ID<input readOnly value={row?.id ?? 'Automatico'}/></label><label className="form-field">Nombre<input readOnly={readOnly} value={name} onChange={(event)=>setName(event.target.value)} required/></label><label className="form-field directory-status">Estado<select disabled={readOnly} value={status} onChange={(event)=>setStatus(event.target.value as 'ACTIVO'|'INACTIVO')}><option value="ACTIVO">Activo</option><option value="INACTIVO">Inactivo</option></select></label></div>
-    <section className="directory-editor-section"><div className="directory-editor-heading"><strong>Numeros y servicios</strong>{!readOnly&&<button type="button" className="icon-button" title="Agregar numero" onClick={()=>setIdentifiers((current)=>[...current,blankDirectoryIdentifier()])}><Plus size={16}/></button>}</div><div className="directory-identifier-grid directory-identifier-grid--header"><span>Institucion</span><span>Tipo</span><span>Numero</span><span>Moneda</span><span/></div>{identifiers.map((item,index)=><div className="directory-identifier-grid" key={index}><input readOnly={readOnly} value={item.institution} onChange={(event)=>updateIdentifier(index,{institution:event.target.value})} placeholder="BAC, Claro..."/><input readOnly={readOnly} value={item.type} onChange={(event)=>updateIdentifier(index,{type:event.target.value})} placeholder="Cuenta, contrato..."/><input readOnly={readOnly} value={item.number} onChange={(event)=>updateIdentifier(index,{number:event.target.value})} placeholder="Numero"/><select disabled={readOnly} value={item.currency ?? ''} onChange={(event)=>updateIdentifier(index,{currency:(event.target.value||null) as CashCurrency|null})}><option value="">---</option><option value="NIO">NIO</option><option value="USD">USD</option></select>{!readOnly&&<button type="button" className="icon-button icon-button--danger" title="Quitar" onClick={()=>setIdentifiers((current)=>current.filter((_,itemIndex)=>itemIndex!==index))}><Trash2 size={15}/></button>}</div>)}</section>
-    <div className="directory-secondary-grid"><section className="directory-editor-section"><div className="directory-editor-heading"><strong>Cedulas</strong>{!readOnly&&<button type="button" className="icon-button" onClick={()=>setIdentities((current)=>[...current,{number:'',holder:''}])}><Plus size={16}/></button>}</div>{identities.map((item,index)=><div className="directory-paired-row" key={index}><input readOnly={readOnly} value={item.number} onChange={(event)=>setIdentities((current)=>current.map((entry,itemIndex)=>itemIndex===index?{...entry,number:normalizeIdentityInput(event.target.value)}:entry))} placeholder="000-000000-0000A"/><input readOnly={readOnly} value={item.holder} onChange={(event)=>setIdentities((current)=>current.map((entry,itemIndex)=>itemIndex===index?{...entry,holder:event.target.value}:entry))} placeholder="Titular (opcional)"/>{!readOnly&&<button type="button" className="icon-button icon-button--danger" onClick={()=>setIdentities((current)=>current.filter((_,itemIndex)=>itemIndex!==index))}><Trash2 size={15}/></button>}</div>)}</section><section className="directory-editor-section"><div className="directory-editor-heading"><strong>Referencias</strong>{!readOnly&&<button type="button" className="icon-button" onClick={()=>setReferences((current)=>[...current,''])}><Plus size={16}/></button>}</div>{references.map((item,index)=><div className="directory-single-row" key={index}><input readOnly={readOnly} value={item} onChange={(event)=>setReferences((current)=>current.map((entry,itemIndex)=>itemIndex===index?event.target.value:entry))} placeholder="Referencia"/>{!readOnly&&<button type="button" className="icon-button icon-button--danger" onClick={()=>setReferences((current)=>current.filter((_,itemIndex)=>itemIndex!==index))}><Trash2 size={15}/></button>}</div>)}</section></div>
-    <label className="form-field">Observaciones<textarea readOnly={readOnly} value={observations} onChange={(event)=>setObservations(event.target.value)} rows={2}/></label>
+    <div className="directory-main-fields"><label className="form-field directory-id">ID<input readOnly value={row?.id ?? 'Automatico'}/></label><label className="form-field">Nombre<input readOnly={readOnly} value={name} onChange={(event)=>setName(event.target.value.toUpperCase())} required/></label><label className="form-field directory-status">Estado<select disabled={readOnly} value={status} onChange={(event)=>setStatus(event.target.value as 'ACTIVO'|'INACTIVO')}><option value="ACTIVO">Activo</option><option value="INACTIVO">Inactivo</option></select></label></div>
+    <section className="directory-editor-section"><div className="directory-editor-heading"><strong>Numeros y servicios</strong>{!readOnly&&<button type="button" className="icon-button" title="Agregar numero" onClick={()=>setIdentifiers((current)=>[...current,blankDirectoryIdentifier()])}><Plus size={16}/></button>}</div><div className="directory-identifier-grid directory-identifier-grid--header"><span>Institucion</span><span>Tipo</span><span>Numero</span><span>Moneda</span><span/></div>{identifiers.map((item,index)=><div className="directory-identifier-grid" key={index}><input readOnly={readOnly} value={item.institution} onChange={(event)=>updateIdentifier(index,{institution:event.target.value.toUpperCase()})} placeholder="BAC, Claro..."/><input readOnly={readOnly} value={item.type} onChange={(event)=>updateIdentifier(index,{type:event.target.value.toUpperCase()})} placeholder="Cuenta, contrato..."/><input readOnly={readOnly} value={item.number} onChange={(event)=>updateIdentifier(index,{number:event.target.value.toUpperCase()})} placeholder="Numero"/><select disabled={readOnly} value={item.currency ?? ''} onChange={(event)=>updateIdentifier(index,{currency:(event.target.value||null) as CashCurrency|null})}><option value="">---</option><option value="NIO">NIO</option><option value="USD">USD</option></select>{!readOnly&&<button type="button" className="icon-button icon-button--danger" title="Quitar" onClick={()=>setIdentifiers((current)=>current.filter((_,itemIndex)=>itemIndex!==index))}><Trash2 size={15}/></button>}</div>)}</section>
+    <div className="directory-secondary-grid"><section className="directory-editor-section"><div className="directory-editor-heading"><strong>Cedulas</strong>{!readOnly&&<button type="button" className="icon-button" onClick={()=>setIdentities((current)=>[...current,{number:'',holder:''}])}><Plus size={16}/></button>}</div>{identities.map((item,index)=><div className="directory-paired-row" key={index}><input readOnly={readOnly} value={item.number} onChange={(event)=>setIdentities((current)=>current.map((entry,itemIndex)=>itemIndex===index?{...entry,number:normalizeIdentityInput(event.target.value)}:entry))} placeholder="000-000000-0000A"/><input readOnly={readOnly} value={item.holder} onChange={(event)=>setIdentities((current)=>current.map((entry,itemIndex)=>itemIndex===index?{...entry,holder:event.target.value.toUpperCase()}:entry))} placeholder="Titular (opcional)"/>{!readOnly&&<button type="button" className="icon-button icon-button--danger" onClick={()=>setIdentities((current)=>current.filter((_,itemIndex)=>itemIndex!==index))}><Trash2 size={15}/></button>}</div>)}</section><section className="directory-editor-section"><div className="directory-editor-heading"><strong>Referencias</strong>{!readOnly&&<button type="button" className="icon-button" onClick={()=>setReferences((current)=>[...current,''])}><Plus size={16}/></button>}</div>{references.map((item,index)=><div className="directory-single-row" key={index}><input readOnly={readOnly} value={item} onChange={(event)=>setReferences((current)=>current.map((entry,itemIndex)=>itemIndex===index?event.target.value.toUpperCase():entry))} placeholder="Referencia"/>{!readOnly&&<button type="button" className="icon-button icon-button--danger" onClick={()=>setReferences((current)=>current.filter((_,itemIndex)=>itemIndex!==index))}><Trash2 size={15}/></button>}</div>)}</section></div>
+    <label className="form-field">Observaciones<textarea readOnly={readOnly} value={observations} onChange={(event)=>setObservations(event.target.value.toUpperCase())} rows={2}/></label>
     {row?.sources.length ? <p className="directory-source-note">Origen: {row.sources.map((source)=>`${source.sheet}, fila ${source.row}`).join(' · ')}</p> : null}
     {error&&<p className="login-error" role="alert">{error}</p>}<div className="modal-actions"><button type="button" className="secondary-button danger-button" onClick={onClose}><X size={17}/>Cancelar</button>{onEdit&&<button type="button" className="secondary-button" onClick={onEdit}><Edit3 size={17}/>Editar</button>}{!readOnly&&<button type="submit" className="primary-button" disabled={saving||!name.trim()}><Save size={17}/>{saving?'Guardando...':'Guardar'}</button>}</div>
   </form></div>;
@@ -8287,7 +8287,7 @@ function TransactionTable({ config, currentUser }: { config: CrudConfig; current
         direction,
         registeredAt: modal?.mode === 'create' ? registeredAt : normalizedRow.registeredAt,
         amount: formatTransactionMoney({ ...normalizedRow, direction }),
-        pendingName: normalizedRow.pendingName.trim(),
+        pendingName: normalizedRow.pendingName.trim().toUpperCase(),
       };
     });
 
@@ -8750,6 +8750,7 @@ function TransactionModal({
   const [showDirectoryLookup, setShowDirectoryLookup] = useState(false);
   const [availablePendings, setAvailablePendings] = useState<PendingApiRow[]>([]);
   const [selectedSettlementPendingIds, setSelectedSettlementPendingIds] = useState<string[]>([]);
+  const [showPendingSettlement, setShowPendingSettlement] = useState(false);
   const modalRef = useAutoFocusFirstField<HTMLElement>();
   useEffect(() => {
     if (mode !== 'create') return;
@@ -9372,13 +9373,28 @@ function TransactionModal({
           </label>
           <label className="form-field transaction-form-pending">
             Pendiente
-            <input value={draft.pendingName} placeholder="Nombre Pendiente" onChange={(event) => updateField('pendingName', event.target.value)} readOnly={isTransactionLocked} />
+            <input value={draft.pendingName} placeholder="Nombre Pendiente" onChange={(event) => updateField('pendingName', event.target.value.toUpperCase())} readOnly={isTransactionLocked} />
           </label>
+          {mode === 'create' && availablePendings.length > 0 && (
+            <div className="transaction-form-pending-action">
+              <button
+                type="button"
+                className={`icon-button ${showPendingSettlement || selectedSettlementPendingIds.length ? 'icon-button--active' : ''}`}
+                title={showPendingSettlement ? 'Ocultar pendientes' : 'Liquidar pendientes'}
+                aria-label={showPendingSettlement ? 'Ocultar pendientes' : 'Liquidar pendientes'}
+                aria-expanded={showPendingSettlement}
+                onClick={() => setShowPendingSettlement((current) => !current)}
+              >
+                <ReceiptText size={18} />
+                {selectedSettlementPendingIds.length > 0 && <span>{selectedSettlementPendingIds.length}</span>}
+              </button>
+            </div>
+          )}
           <label className="form-field transaction-form-description">
             Descripcion
             <textarea value={draft.description} rows={1} onChange={(event) => updateField('description', event.target.value)} readOnly={isTransactionLocked} />
           </label>
-          {mode === 'create' && availablePendings.length > 0 && (
+          {mode === 'create' && showPendingSettlement && availablePendings.length > 0 && (
             <fieldset className="transaction-pending-settlement">
               <legend>Aplicar saldo a pendientes</legend>
               <div className="transaction-pending-settlement__list">
