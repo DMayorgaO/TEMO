@@ -1120,6 +1120,7 @@ export class ShiftsService {
          (
            case when m.codigo = 'NIO' then t.efectivo_inicial_nio else t.efectivo_inicial_usd end
            + coalesce(transaction_cash.amount, 0)
+           + coalesce(pending_compensation.amount, 0)
            + coalesce(paid_pending_cash.amount, 0)
            + coalesce(transfer_cash.amount, 0)
          ) as expected_amount,
@@ -1136,6 +1137,15 @@ export class ShiftsService {
            and tm.id_moneda = m.id_moneda
            and tm.medio = 'EFECTIVO'
        ) transaction_cash on true
+       /* El saldo retenido de una transaccion paga la deuda sin entrar ni salir fisicamente de caja. */
+       left join lateral (
+         select sum(case pp.tipo when 'POR_COBRAR' then ap.monto else -ap.monto end) as amount
+         from temo.abonos_pendientes ap
+         join temo.pagos_pendientes pp on pp.id_pendiente = ap.id_pendiente
+         where ap.id_turno_aplicacion = t.id_turno
+           and ap.id_moneda = m.id_moneda
+           and ap.observaciones = 'Compensación con saldo a favor de una transacción en curso'
+       ) pending_compensation on true
        /* Las liquidaciones en efectivo se agregan cuando el pendiente deja de estar abierto. */
        left join lateral (
          select sum(case pp.tipo when 'POR_COBRAR' then ap.monto else -ap.monto end) as amount

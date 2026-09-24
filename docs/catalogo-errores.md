@@ -47,6 +47,7 @@ Cada error mostrado por TEMO incluye un código estable y, cuando corresponde, u
 | 2026-09-23 | Transferencias | `Internal server error` al registrar sin descripción | La notificación enviaba `NULL` a un campo obligatorio | Se almacena texto vacío y la notificación omite visualmente la descripción. |
 | 2026-09-23 | Transacciones | La confirmación de anulación no producía cambios | El botón sólo alteraba el estado local de la tabla y no llamaba al API | Se agregó anulación atómica con reversión de arqueo, saldos y pendiente abierto. |
 | 2026-09-24 | Transacciones | Vuelto de USD entregado en córdobas usaba venta y generaba diferencia | El vuelto heredaba la tasa principal en vez de seguir el sentido físico del dólar | Se usa compra cuando TEMO entrega el equivalente de USD y venta cuando lo recibe, incluso en operaciones múltiples. |
+| 2026-09-24 | Pendientes | Una liquidación podía quedar pagada sin una forma de corregir su arqueo o banco | No existía reversión de liquidaciones ni compensación desde una transacción en curso | Se agregó corrección con reapertura y aplicación de saldo a favor sin movimientos ficticios. |
 | 2026-09-22 | Pendientes | `Internal server error` para Administrador | Alias SQL incorrecto en la consulta de turnos | Se corrigió la referencia a la fecha del turno. |
 
 ## Datos para un reporte

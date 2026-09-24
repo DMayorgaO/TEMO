@@ -195,6 +195,14 @@ export class TransactionsController {
     return this.transactions.payPending(id, parsed.data, request.user);
   }
 
+  @Post('pending/:id/reopen')
+  reopenPendingPayment(
+    @Param('id') id: string,
+    @Req() request: { user: AuthenticatedUser },
+  ) {
+    return this.transactions.reopenPendingPayment(id, request.user);
+  }
+
   @Post('pending/pay-batch')
   payPendingBatch(
     @Body() body: unknown,

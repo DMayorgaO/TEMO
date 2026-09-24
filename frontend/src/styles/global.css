@@ -1989,6 +1989,53 @@ td {
   resize: none;
 }
 
+.transaction-pending-settlement {
+  border: 1px solid #b9d8d2;
+  border-radius: 6px;
+  grid-column: 1 / -1;
+  margin: 0;
+  padding: 10px 12px;
+}
+
+.transaction-pending-settlement legend {
+  color: var(--teal-700);
+  font-size: .78rem;
+  font-weight: 800;
+  padding: 0 5px;
+}
+
+.transaction-pending-settlement__list {
+  display: grid;
+  gap: 6px;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+
+.transaction-pending-settlement__list label {
+  align-items: center;
+  background: #f5faf9;
+  border: 1px solid #d5e5e2;
+  display: grid;
+  gap: 8px;
+  grid-template-columns: 18px minmax(0, 1fr);
+  padding: 7px 8px;
+}
+
+.transaction-pending-settlement__list input {
+  min-height: 18px;
+}
+
+.transaction-pending-settlement__list span,
+.transaction-pending-settlement__list small {
+  display: block;
+  min-width: 0;
+}
+
+.transaction-pending-settlement > p {
+  color: var(--muted);
+  font-size: .76rem;
+  margin: 8px 0 0;
+}
+
 .transaction-cash-count-section {
   border-top: 1px solid var(--line);
   display: grid;

@@ -1943,6 +1943,14 @@ function transactionSettlementPayload(row: CrudRow) {
 function buildTransactionBatchPayload(rows: CrudRow[]) {
   const settlementRow = rows[0];
   const rate = readExchangeRate();
+  const pendingSettlementIds = (() => {
+    try {
+      const parsed = JSON.parse(settlementRow.settledPendingIds || '[]');
+      return Array.isArray(parsed) ? parsed.filter((value): value is string => typeof value === 'string') : [];
+    } catch {
+      return [];
+    }
+  })();
   return {
     rates: {
       buy: parseExchangeRate(rate.buy),
@@ -1957,6 +1965,7 @@ function buildTransactionBatchPayload(rows: CrudRow[]) {
       description: row.description.trim(),
       settlement: transactionSettlementPayload(row),
     })),
+    pendingSettlementIds,
     settlement: transactionSettlementPayload(settlementRow),
   };
 }
@@ -2094,7 +2103,11 @@ type TransactionCustomerBalanceStep = {
 const transactionRoundingToleranceNio = 0.05;
 
 // Calcula en secuencia cuánto efectivo se debe entregar o recibir del cliente en todo el grupo.
-function calculateTransactionCustomerBalanceSteps(rows: CrudRow[], rate: ExchangeRate) {
+function calculateTransactionCustomerBalanceSteps(
+  rows: CrudRow[],
+  rate: ExchangeRate,
+  pendingCompensation?: { currency: CashCurrency; amount: number },
+) {
   let balanceNio = 0;
   let balanceUsd = 0;
 
@@ -2113,7 +2126,7 @@ function calculateTransactionCustomerBalanceSteps(rows: CrudRow[], rate: Exchang
     }
   }
 
-  return rows.map<TransactionCustomerBalanceStep>((row) => {
+  return rows.map<TransactionCustomerBalanceStep>((row, index) => {
     const currency: CashCurrency = row.currency === 'USD' ? 'USD' : 'NIO';
     const direction = row.direction === 'Salida' ? 'Salida' : 'Ingreso';
     const rateKind = getTransactionExchangeRateKind(direction, currency);
@@ -2147,6 +2160,10 @@ function calculateTransactionCustomerBalanceSteps(rows: CrudRow[], rate: Exchang
     else balanceUsd += direction === 'Salida' ? amount : -amount;
     balanceNio += direction === 'Ingreso' ? primaryNio : -primaryNio;
     balanceUsd += direction === 'Ingreso' ? primaryUsd : -primaryUsd;
+    if (index === rows.length - 1 && pendingCompensation?.amount) {
+      if (pendingCompensation.currency === 'USD') balanceUsd -= pendingCompensation.amount;
+      else balanceNio -= pendingCompensation.amount;
+    }
     offsetCurrencyBalances();
     const changeRateKind = getCustomerBalanceRateKind(balanceNio, balanceUsd, rateKind);
     const changeRateValue = getTransactionRateValue(rate, changeRateKind) || 1;
@@ -5526,6 +5543,34 @@ function PendingScreen({ currentUser }: { currentUser: AuthUser }) {
     }
   }
 
+  async function correctPayment(row: PendingApiRow) {
+    if (payingId || row.estado !== 'PAGADO') return;
+    const confirmed = await requestSystemConfirm(
+      `La liquidación de ${row.contraparte} será revertida. El pendiente volverá a estar disponible para capturarlo correctamente.`,
+      { title: 'Corregir liquidación', confirmLabel: 'Revertir', tone: 'danger' },
+    );
+    if (!confirmed) return;
+    setPayingId(row.database_id);
+    setError('');
+    setMessage('');
+    try {
+      await apiRequest(`/transactions/pending/${row.database_id}/reopen`, { method: 'POST' });
+      setRows((current) => current.map((item) => item.database_id === row.database_id ? {
+        ...item,
+        estado: 'PENDIENTE',
+        saldo_pendiente: item.monto_original,
+        fecha_modificacion: new Date().toISOString(),
+      } : item));
+      setSelectedPendingIds([row.database_id]);
+      setMessage('La liquidación fue revertida. Seleccione Efectivo, Combinado o Digital para registrarla nuevamente.');
+      announceOperationalDataChange();
+    } catch (correctionError) {
+      setError(correctionError instanceof Error ? correctionError.message : 'No fue posible revertir la liquidación.');
+    } finally {
+      setPayingId(null);
+    }
+  }
+
   async function payPending(transactionRows: CrudRow[]) {
     if (!paymentModal) return;
     setPayingId(paymentModal.pending.database_id);
@@ -5850,11 +5895,15 @@ function PendingScreen({ currentUser }: { currentUser: AuthUser }) {
                     <button
                       type="button"
                       className="icon-action pending-pay-button"
-                      title={row.estado === 'PAGADO' ? 'Pendiente pagado' : 'Marcar como pagado'}
-                      disabled={row.estado === 'PAGADO' || row.estado === 'CANCELADO' || payingId === row.database_id}
-                      onClick={(event) => { event.stopPropagation(); void openPayment(row); }}
+                      title={row.estado === 'PAGADO' ? 'Corregir liquidación' : 'Liquidar en efectivo'}
+                      disabled={row.estado === 'CANCELADO' || payingId === row.database_id}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        if (row.estado === 'PAGADO') void correctPayment(row);
+                        else void openPayment(row);
+                      }}
                     >
-                      <CheckCircle2 size={17} />
+                      {row.estado === 'PAGADO' ? <Edit3 size={17} /> : <Banknote size={17} />}
                     </button>
                   </td>
                 </tr>
@@ -8607,6 +8656,7 @@ function TransactionTable({ config, currentUser }: { config: CrudConfig; current
           availableAccounts={currentShift?.availableAccounts ?? []}
           availableMovements={currentShift?.availableMovements ?? []}
           accountBalances={currentShift?.balances ?? []}
+          activeBranch={currentShift?.sucursal}
           availableCashCounts={currentShift?.cashCounts.ACTUAL}
           isSaving={isSavingTransactions}
           saveError={transactionSaveError}
@@ -8649,6 +8699,7 @@ function TransactionModal({
   availableAccounts = [],
   availableMovements = [],
   accountBalances = [],
+  activeBranch,
   availableCashCounts,
   isSaving,
   saveError,
@@ -8663,6 +8714,7 @@ function TransactionModal({
   availableAccounts?: ShiftDetail['availableAccounts'];
   availableMovements?: ShiftDetail['availableMovements'];
   accountBalances?: ShiftDetail['balances'];
+  activeBranch?: string;
   availableCashCounts?: Partial<Record<CashCurrency, ShiftCashCount>>;
   isSaving: boolean;
   saveError: string;
@@ -8696,7 +8748,19 @@ function TransactionModal({
   const [showExchangeCalculator, setShowExchangeCalculator] = useState(false);
   const [showDigitalCalculator, setShowDigitalCalculator] = useState(false);
   const [showDirectoryLookup, setShowDirectoryLookup] = useState(false);
+  const [availablePendings, setAvailablePendings] = useState<PendingApiRow[]>([]);
+  const [selectedSettlementPendingIds, setSelectedSettlementPendingIds] = useState<string[]>([]);
   const modalRef = useAutoFocusFirstField<HTMLElement>();
+  useEffect(() => {
+    if (mode !== 'create') return;
+    void apiRequest<PendingApiRow[]>('/transactions/pending')
+      .then((items) => setAvailablePendings(items.filter((item) =>
+        item.tipo === 'POR_COBRAR' &&
+        !['PAGADO', 'CANCELADO'].includes(item.estado) &&
+        (!activeBranch || normalizeLookupValue(item.sucursal) === normalizeLookupValue(activeBranch)),
+      )))
+      .catch(() => setAvailablePendings([]));
+  }, [activeBranch, mode]);
   const restrictToShiftAccounts = mode === 'create';
   const entityOptions = restrictToShiftAccounts
     ? [...new Set(availableAccounts.map((account) => account.entity))]
@@ -8769,7 +8833,14 @@ function TransactionModal({
     NIO: calculateCashPileTotal(cashDenominations.NIO, cashCounts.NIO),
     USD: calculateCashPileTotal(cashDenominations.USD, cashCounts.USD),
   };
-  const customerBalanceSteps = calculateTransactionCustomerBalanceSteps(drafts, exchangeRate);
+  const selectedSettlementPendings = availablePendings.filter((pending) =>
+    selectedSettlementPendingIds.includes(pending.database_id),
+  );
+  const pendingCompensation = selectedSettlementPendings.length ? {
+    currency: selectedSettlementPendings[0].moneda,
+    amount: selectedSettlementPendings.reduce((sum, pending) => sum + Number(pending.saldo_pendiente), 0),
+  } : undefined;
+  const customerBalanceSteps = calculateTransactionCustomerBalanceSteps(drafts, exchangeRate, pendingCompensation);
   const activeBalanceStep = customerBalanceSteps[activeTabIndex];
   const activeRate = activeBalanceStep?.changeRateValue || activeBalanceStep?.rateValue || 1;
   const activeBalanceBeforeChangeNio = activeBalanceStep?.balanceBeforeChangeNio || 0;
@@ -9045,7 +9116,7 @@ function TransactionModal({
       );
       return;
     }
-    const customerBalanceSteps = calculateTransactionCustomerBalanceSteps(drafts, exchangeRate);
+    const customerBalanceSteps = calculateTransactionCustomerBalanceSteps(drafts, exchangeRate, pendingCompensation);
     const finalBalanceStep = customerBalanceSteps[customerBalanceSteps.length - 1];
     const finalBalanceNio = (finalBalanceStep?.balanceNio || 0)
       + (finalBalanceStep?.balanceUsd || 0)
@@ -9071,6 +9142,7 @@ function TransactionModal({
         const rowChangeRate = rowBalanceStep?.changeRateValue || 1;
         return {
           ...transactionDraft,
+          settledPendingIds: JSON.stringify(selectedSettlementPendingIds),
           cashCountNio: transactionDraft.cashCountNio,
           cashCountUsd: transactionDraft.cashCountUsd,
           changeCashCountNio: transactionDraft.changeCashCountNio,
@@ -9306,6 +9378,32 @@ function TransactionModal({
             Descripcion
             <textarea value={draft.description} rows={1} onChange={(event) => updateField('description', event.target.value)} readOnly={isTransactionLocked} />
           </label>
+          {mode === 'create' && availablePendings.length > 0 && (
+            <fieldset className="transaction-pending-settlement">
+              <legend>Aplicar saldo a pendientes</legend>
+              <div className="transaction-pending-settlement__list">
+                {availablePendings.map((pending) => {
+                  const checked = selectedSettlementPendingIds.includes(pending.database_id);
+                  const selectedCurrency = selectedSettlementPendings[0]?.moneda;
+                  const incompatible = Boolean(selectedCurrency && selectedCurrency !== pending.moneda && !checked);
+                  return <label key={pending.database_id}>
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      disabled={incompatible}
+                      onChange={(event) => setSelectedSettlementPendingIds((current) =>
+                        event.target.checked
+                          ? [...current, pending.database_id]
+                          : current.filter((id) => id !== pending.database_id),
+                      )}
+                    />
+                    <span><strong>{pending.contraparte}</strong><small>{pending.id} · {formatCashCountMoney(Number(pending.saldo_pendiente), pending.moneda)}</small></span>
+                  </label>;
+                })}
+              </div>
+              {pendingCompensation && <p>Se aplicarán {formatCashCountMoney(pendingCompensation.amount, pendingCompensation.currency)} del saldo a favor, sin registrar efectivo ni movimiento digital adicional.</p>}
+            </fieldset>
+          )}
           <div className="transaction-cash-count-section">
             <div
               className={`transaction-group-change-summary transaction-group-change-summary--${customerBalanceTone}`}

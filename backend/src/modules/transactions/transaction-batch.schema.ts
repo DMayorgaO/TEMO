@@ -73,6 +73,7 @@ export const createTransactionBatchSchema = z
       )
       .min(1)
       .max(20),
+    pendingSettlementIds: z.array(z.string().uuid()).max(50).optional().default([]),
     settlement: settlementSchema,
   })
   .strict();
