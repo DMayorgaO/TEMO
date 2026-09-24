@@ -160,6 +160,7 @@ export class TransactionsService {
       const firstConsecutive = consecutiveResult.rows[0].next_value;
       const persisted: PersistedTransaction[] = [];
       const expectedNet: Record<CurrencyCode, number> = { NIO: 0, USD: 0 };
+      const customerBalance: Record<CurrencyCode, number> = { NIO: 0, USD: 0 };
       let expectedNetNio = 0;
 
       for (const [index, transaction] of input.transactions.entries()) {
@@ -177,7 +178,7 @@ export class TransactionsService {
         }
 
         const direction = movement.direccion_efectivo;
-        this.assertChangeRateRule(input, transaction, direction);
+        this.assertChangeRateRule(input, transaction, direction, customerBalance);
         const sign = direction === 'ENTRA' ? 1 : -1;
         const rateKind = this.transactionRateKind(
           direction,
@@ -2961,48 +2962,56 @@ export class TransactionsService {
       settlement?: CreateTransactionBatchInput['settlement'];
     },
     direction: MoneyDirection,
+    balance: Record<CurrencyCode, number> = { NIO: 0, USD: 0 },
   ) {
     if (transaction.pendingName || !transaction.settlement) return;
     const settlement = transaction.settlement;
     const primaryTotals = this.cashTotals(settlement.primaryCounts);
     const changeTotals = this.cashTotals(settlement.changeCounts);
-    if (
-      changeTotals.NIO <= 0 && changeTotals.USD <= 0 &&
-      settlement.expectedChange.NIO <= 0 && settlement.expectedChange.USD <= 0
-    ) return;
 
-    let balanceNio = transaction.currencyCode === 'NIO'
-      ? (direction === 'SALE' ? transaction.amount : -transaction.amount)
-      : 0;
-    let balanceUsd = transaction.currencyCode === 'USD'
-      ? (direction === 'SALE' ? transaction.amount : -transaction.amount)
-      : 0;
-    balanceNio += direction === 'ENTRA' ? primaryTotals.NIO : -primaryTotals.NIO;
-    balanceUsd += direction === 'ENTRA' ? primaryTotals.USD : -primaryTotals.USD;
-
-    if (balanceNio < 0 && balanceUsd > 0) {
-      const usdUsed = Math.min(balanceUsd, -balanceNio / input.rates.buy);
-      balanceUsd -= usdUsed;
-      balanceNio += usdUsed * input.rates.buy;
-    } else if (balanceUsd < 0 && balanceNio > 0) {
-      const nioUsed = Math.min(balanceNio, -balanceUsd * input.rates.sell);
-      balanceNio -= nioUsed;
-      balanceUsd += nioUsed / input.rates.sell;
+    if (transaction.currencyCode === 'NIO') {
+      balance.NIO += direction === 'SALE' ? transaction.amount : -transaction.amount;
+    } else {
+      balance.USD += direction === 'SALE' ? transaction.amount : -transaction.amount;
     }
+    balance.NIO += direction === 'ENTRA' ? primaryTotals.NIO : -primaryTotals.NIO;
+    balance.USD += direction === 'ENTRA' ? primaryTotals.USD : -primaryTotals.USD;
+    this.offsetCustomerBalance(balance, input.rates);
 
-    const expectedKind: RateKind = balanceUsd > 0.0001
+    const expectedKind: RateKind = balance.USD > 0.0001
       ? 'COMPRA'
-      : balanceUsd < -0.0001
+      : balance.USD < -0.0001
         ? 'VENTA'
-        : balanceNio > 0.0001
+        : balance.NIO > 0.0001
           ? 'VENTA'
-          : balanceNio < -0.0001
+          : balance.NIO < -0.0001
             ? 'COMPRA'
             : settlement.changeRateKind;
-    if (settlement.changeRateKind !== expectedKind) {
+    const hasChange = changeTotals.NIO > 0 || changeTotals.USD > 0 ||
+      settlement.expectedChange.NIO > 0 || settlement.expectedChange.USD > 0;
+    if (hasChange && settlement.changeRateKind !== expectedKind) {
       throw new ConflictException(
         `La tasa del vuelto debe ser ${expectedKind === 'COMPRA' ? 'Compra' : 'Venta'} C$ ${this.rateValue(input, expectedKind).toFixed(2)} según el sentido del efectivo.`,
       );
+    }
+
+    balance.NIO -= changeTotals.NIO;
+    balance.USD -= changeTotals.USD;
+    this.offsetCustomerBalance(balance, input.rates);
+  }
+
+  private offsetCustomerBalance(
+    balance: Record<CurrencyCode, number>,
+    rates: { buy: number; sell: number },
+  ) {
+    if (balance.NIO < 0 && balance.USD > 0) {
+      const usdUsed = Math.min(balance.USD, -balance.NIO / rates.buy);
+      balance.USD -= usdUsed;
+      balance.NIO += usdUsed * rates.buy;
+    } else if (balance.USD < 0 && balance.NIO > 0) {
+      const nioUsed = Math.min(balance.NIO, -balance.USD * rates.sell);
+      balance.NIO -= nioUsed;
+      balance.USD += nioUsed / rates.sell;
     }
   }
 
