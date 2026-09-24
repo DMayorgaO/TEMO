@@ -2110,6 +2110,10 @@ function calculateTransactionCustomerBalanceSteps(
 ) {
   let balanceNio = 0;
   let balanceUsd = 0;
+  const lastEffectiveIndex = rows.reduce(
+    (lastIndex, row, index) => row.direction && row.movement && !row.pendingName.trim() ? index : lastIndex,
+    -1,
+  );
 
   // Compensa monedas distintas solo cuando sus saldos tienen signos opuestos.
   function offsetCurrencyBalances() {
@@ -2160,7 +2164,7 @@ function calculateTransactionCustomerBalanceSteps(
     else balanceUsd += direction === 'Salida' ? amount : -amount;
     balanceNio += direction === 'Ingreso' ? primaryNio : -primaryNio;
     balanceUsd += direction === 'Ingreso' ? primaryUsd : -primaryUsd;
-    if (index === rows.length - 1 && pendingCompensation?.amount) {
+    if (index === lastEffectiveIndex && pendingCompensation?.amount) {
       if (pendingCompensation.currency === 'USD') balanceUsd -= pendingCompensation.amount;
       else balanceNio -= pendingCompensation.amount;
     }
@@ -8751,6 +8755,7 @@ function TransactionModal({
   const [availablePendings, setAvailablePendings] = useState<PendingApiRow[]>([]);
   const [selectedSettlementPendingIds, setSelectedSettlementPendingIds] = useState<string[]>([]);
   const [showPendingSettlement, setShowPendingSettlement] = useState(false);
+  const [pendingSettlementQuery, setPendingSettlementQuery] = useState('');
   const modalRef = useAutoFocusFirstField<HTMLElement>();
   useEffect(() => {
     if (mode !== 'create') return;
@@ -8836,6 +8841,22 @@ function TransactionModal({
   };
   const selectedSettlementPendings = availablePendings.filter((pending) =>
     selectedSettlementPendingIds.includes(pending.database_id),
+  );
+  const normalizedPendingSettlementQuery = normalizeLookupValue(pendingSettlementQuery);
+  const visibleSettlementPendings = availablePendings.filter((pending) =>
+    !normalizedPendingSettlementQuery || normalizeLookupValue([
+      pending.id,
+      pending.contraparte,
+      pending.saldo_pendiente,
+      pending.moneda,
+      pending.entidad,
+      pending.codigo_movimiento,
+      pending.movimiento,
+      pending.cajero,
+      pending.sucursal,
+      pending.estado,
+      pending.fecha_creacion,
+    ].join(' ')).includes(normalizedPendingSettlementQuery),
   );
   const pendingCompensation = selectedSettlementPendings.length ? {
     currency: selectedSettlementPendings[0].moneda,
@@ -9397,8 +9418,16 @@ function TransactionModal({
           {mode === 'create' && showPendingSettlement && availablePendings.length > 0 && (
             <fieldset className="transaction-pending-settlement">
               <legend>Aplicar saldo a pendientes</legend>
+              <label className="search-box transaction-pending-settlement__search">
+                <Search size={16} />
+                <input
+                  value={pendingSettlementQuery}
+                  onChange={(event) => setPendingSettlementQuery(event.target.value)}
+                  placeholder="Buscar pendiente"
+                />
+              </label>
               <div className="transaction-pending-settlement__list">
-                {availablePendings.map((pending) => {
+                {visibleSettlementPendings.map((pending) => {
                   const checked = selectedSettlementPendingIds.includes(pending.database_id);
                   const selectedCurrency = selectedSettlementPendings[0]?.moneda;
                   const incompatible = Boolean(selectedCurrency && selectedCurrency !== pending.moneda && !checked);
@@ -9416,6 +9445,7 @@ function TransactionModal({
                     <span><strong>{pending.contraparte}</strong><small>{pending.id} · {formatCashCountMoney(Number(pending.saldo_pendiente), pending.moneda)}</small></span>
                   </label>;
                 })}
+                {!visibleSettlementPendings.length && <p className="transaction-pending-settlement__empty">No hay pendientes que coincidan con la búsqueda.</p>}
               </div>
               {pendingCompensation && <p>Se aplicarán {formatCashCountMoney(pendingCompensation.amount, pendingCompensation.currency)} del saldo a favor, sin registrar efectivo ni movimiento digital adicional.</p>}
             </fieldset>

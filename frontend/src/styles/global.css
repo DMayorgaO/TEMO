@@ -2048,6 +2048,18 @@ td {
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
 }
 
+.transaction-pending-settlement__search {
+  margin-bottom: 8px;
+  max-width: 420px;
+}
+
+.transaction-pending-settlement__empty {
+  color: var(--muted);
+  font-size: .78rem;
+  grid-column: 1 / -1;
+  margin: 4px 0;
+}
+
 .transaction-pending-settlement__list label {
   align-items: center;
   background: #f5faf9;
