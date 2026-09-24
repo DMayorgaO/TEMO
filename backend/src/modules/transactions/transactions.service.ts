@@ -177,6 +177,7 @@ export class TransactionsService {
         }
 
         const direction = movement.direccion_efectivo;
+        this.assertChangeRateRule(input, transaction, direction);
         const sign = direction === 'ENTRA' ? 1 : -1;
         const rateKind = this.transactionRateKind(
           direction,
@@ -760,6 +761,12 @@ export class TransactionsService {
           `El movimiento ${input.movementCode} no tiene direccion de efectivo configurada.`,
         );
       }
+      this.assertChangeRateRule(input, {
+        currencyCode: input.currencyCode,
+        amount: input.amount,
+        pendingName: input.pendingName,
+        settlement: input.settlement,
+      }, movement.direccion_efectivo);
 
       if (transaction.estado_pendiente === 'PAGADO') {
         throw new ConflictException(
@@ -2685,6 +2692,60 @@ export class TransactionsService {
       return 'COMPRA';
     }
     return 'VENTA';
+  }
+
+  private assertChangeRateRule(
+    input: { rates: { buy: number; sell: number } },
+    transaction: {
+      currencyCode: CurrencyCode;
+      amount: number;
+      pendingName?: string;
+      settlement?: CreateTransactionBatchInput['settlement'];
+    },
+    direction: MoneyDirection,
+  ) {
+    if (transaction.pendingName || !transaction.settlement) return;
+    const settlement = transaction.settlement;
+    const primaryTotals = this.cashTotals(settlement.primaryCounts);
+    const changeTotals = this.cashTotals(settlement.changeCounts);
+    if (
+      changeTotals.NIO <= 0 && changeTotals.USD <= 0 &&
+      settlement.expectedChange.NIO <= 0 && settlement.expectedChange.USD <= 0
+    ) return;
+
+    let balanceNio = transaction.currencyCode === 'NIO'
+      ? (direction === 'SALE' ? transaction.amount : -transaction.amount)
+      : 0;
+    let balanceUsd = transaction.currencyCode === 'USD'
+      ? (direction === 'SALE' ? transaction.amount : -transaction.amount)
+      : 0;
+    balanceNio += direction === 'ENTRA' ? primaryTotals.NIO : -primaryTotals.NIO;
+    balanceUsd += direction === 'ENTRA' ? primaryTotals.USD : -primaryTotals.USD;
+
+    if (balanceNio < 0 && balanceUsd > 0) {
+      const usdUsed = Math.min(balanceUsd, -balanceNio / input.rates.buy);
+      balanceUsd -= usdUsed;
+      balanceNio += usdUsed * input.rates.buy;
+    } else if (balanceUsd < 0 && balanceNio > 0) {
+      const nioUsed = Math.min(balanceNio, -balanceUsd * input.rates.sell);
+      balanceNio -= nioUsed;
+      balanceUsd += nioUsed / input.rates.sell;
+    }
+
+    const expectedKind: RateKind = balanceUsd > 0.0001
+      ? 'COMPRA'
+      : balanceUsd < -0.0001
+        ? 'VENTA'
+        : balanceNio > 0.0001
+          ? 'VENTA'
+          : balanceNio < -0.0001
+            ? 'COMPRA'
+            : settlement.changeRateKind;
+    if (settlement.changeRateKind !== expectedKind) {
+      throw new ConflictException(
+        `La tasa del vuelto debe ser ${expectedKind === 'COMPRA' ? 'Compra' : 'Venta'} C$ ${this.rateValue(input, expectedKind).toFixed(2)} según el sentido del efectivo.`,
+      );
+    }
   }
 
   private rateValue(input: { rates: { buy: number; sell: number } }, kind: RateKind) {
