@@ -1339,10 +1339,11 @@ export class TransactionsService {
       }
       const pendings = result.rows;
       const reference = pendings[0];
+      const referenceDate = this.databaseDateKey(reference.fecha_pendiente);
       if (pendings.some((pending) => pending.estado !== 'PENDIENTE' && pending.estado !== 'ABONADO' && pending.estado !== 'VENCIDO')) {
         throw new ConflictException('Todos los pendientes seleccionados deben estar disponibles para pago.');
       }
-      if (pendings.some((pending) => pending.tipo !== reference.tipo || pending.moneda !== reference.moneda || pending.id_sucursal !== reference.id_sucursal || pending.fecha_pendiente !== reference.fecha_pendiente)) {
+      if (pendings.some((pending) => pending.tipo !== reference.tipo || pending.moneda !== reference.moneda || pending.id_sucursal !== reference.id_sucursal || this.databaseDateKey(pending.fecha_pendiente) !== referenceDate)) {
         throw new ConflictException('Seleccione pendientes del mismo tipo, moneda, sucursal y fecha.');
       }
 
@@ -1354,7 +1355,7 @@ export class TransactionsService {
          for update`,
         user.roleCode === 'JEFA'
           ? [reference.id_turno]
-          : [user.id, reference.id_sucursal, reference.fecha_pendiente],
+          : [user.id, reference.id_sucursal, referenceDate],
       );
       const activeShift = shiftResult.rows[0];
       if (!activeShift) {
@@ -3017,6 +3018,12 @@ export class TransactionsService {
 
   private rateValue(input: { rates: { buy: number; sell: number } }, kind: RateKind) {
     return kind === 'COMPRA' ? input.rates.buy : input.rates.sell;
+  }
+
+  private databaseDateKey(value: string | Date) {
+    if (value instanceof Date) return value.toISOString().slice(0, 10);
+    const match = String(value).match(/^\d{4}-\d{2}-\d{2}/);
+    return match?.[0] ?? String(value);
   }
 
   private denominationKey(currency: CurrencyCode, value: number) {

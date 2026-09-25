@@ -8886,7 +8886,11 @@ function TransactionModal({
     currency: selectedSettlementPendings[0].moneda,
     amount: selectedSettlementPendings.reduce((sum, pending) => sum + Number(pending.saldo_pendiente), 0),
   } : undefined;
-  const customerBalanceSteps = calculateTransactionCustomerBalanceSteps(drafts, exchangeRate, pendingCompensation);
+  // Al liquidar, el nombre identifica el pendiente pero el monto sí debe participar en el balance físico.
+  const balanceDrafts = isPayment
+    ? drafts.map((transactionDraft) => ({ ...transactionDraft, pendingName: '' }))
+    : drafts;
+  const customerBalanceSteps = calculateTransactionCustomerBalanceSteps(balanceDrafts, exchangeRate, pendingCompensation);
   const activeBalanceStep = customerBalanceSteps[activeTabIndex];
   const activeRate = activeBalanceStep?.changeRateValue || activeBalanceStep?.rateValue || 1;
   const activeBalanceBeforeChangeNio = activeBalanceStep?.balanceBeforeChangeNio || 0;
@@ -9162,7 +9166,7 @@ function TransactionModal({
       );
       return;
     }
-    const customerBalanceSteps = calculateTransactionCustomerBalanceSteps(drafts, exchangeRate, pendingCompensation);
+    const customerBalanceSteps = calculateTransactionCustomerBalanceSteps(balanceDrafts, exchangeRate, pendingCompensation);
     const finalBalanceStep = customerBalanceSteps[customerBalanceSteps.length - 1];
     const finalBalanceNio = (finalBalanceStep?.balanceNio || 0)
       + (finalBalanceStep?.balanceUsd || 0)
