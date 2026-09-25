@@ -5194,11 +5194,18 @@ function TransferModal({ mode, row, context, isBoss, onClose, onSaved, onEdit }:
     const next:Record<string,CashPileDraft>={}; for(const line of row?.cashLines ?? []) { const d=cashDenominations[row?.moneda ?? 'NIO'].find((item)=>item.value===Number(line.denomination)); if(d) next[d.id]={groups:String(line.piles25||''),loose:String(line.loose||'')}; } return next;
   });
   const [saving,setSaving]=useState(false); const [error,setError]=useState('');
+  const [availableCashCounts,setAvailableCashCounts]=useState<Partial<Record<CashCurrency,ShiftCashCount>>>();
   const selectedShift=context.shifts.find((item)=>item.id===shiftId);
   const accounts=context.accounts.filter((item)=>item.currency===currency && (!item.branch_id || item.branch_id===selectedShift?.branch_id));
   const cashTotal=calculateCashPileTotal(cashDenominations[currency],piles);
   useEffect(()=>{if(type==='EFECTIVO')setAmount(String(cashTotal));},[cashTotal,type]);
   useEffect(()=>{if(!isBoss){setType('EFECTIVO');setDirection('EGRESO');}},[isBoss]);
+  useEffect(()=>{
+    if(isBoss)return;
+    void apiRequest<ShiftDetail|null>('/shifts/current')
+      .then((shift)=>setAvailableCashCounts(shift?.cashCounts.ACTUAL))
+      .catch(()=>setAvailableCashCounts(undefined));
+  },[isBoss]);
   function updatePile(id:string,field:'groups'|'loose',value:string){if(readOnly)return;setPiles((current)=>({...current,[id]:{...current[id],[field]:value.replace(/\D/g,'')}}));}
   function handleAmountKeyDown(event: KeyboardEvent<HTMLInputElement>) {
     const nextValue = getAccountingMoneyKeyValue(event, amount);
@@ -5219,7 +5226,7 @@ function TransferModal({ mode, row, context, isBoss, onClose, onSaved, onEdit }:
       <label className="form-field">Monto<input readOnly={readOnly||type==='EFECTIVO'} inputMode="decimal" value={formatAccountingMoneyInput(amount)} onChange={(event)=>setAmount(normalizeSignedAccountingMoneyRaw(event.target.value))} onKeyDown={handleAmountKeyDown} onFocus={(event)=>placeAccountingMoneyCaretBeforeDecimals(event.currentTarget)} onClick={(event)=>placeAccountingMoneyCaretBeforeDecimals(event.currentTarget)}/></label>
       <label className="form-field transfer-form-description">Descripcion<input readOnly={readOnly} value={description} onChange={(event)=>setDescription(event.target.value)}/></label>
     </div>
-    {type==='EFECTIVO'&&<div className="transfer-cash"><TransactionCashCountTable currency={currency} denominations={cashDenominations[currency]} focusScope="transfer-cash" pileDrafts={piles} conversionRate={parseExchangeRate(readExchangeRate().buy)} readOnly={readOnly} showConvertedTotal={false} onPileFieldChange={updatePile}/></div>}
+    {type==='EFECTIVO'&&<div className="transfer-cash"><TransactionCashCountTable currency={currency} denominations={cashDenominations[currency]} focusScope="transfer-cash" pileDrafts={piles} availablePileDrafts={!isBoss&&direction==='EGRESO'?cashDraftFromShiftCounts(availableCashCounts):undefined} conversionRate={parseExchangeRate(readExchangeRate().buy)} readOnly={readOnly} showConvertedTotal={false} onPileFieldChange={updatePile}/></div>}
     {error&&<p className="login-error" role="alert">{error}</p>}<div className="modal-actions"><button type="button" className="secondary-button danger-button" onClick={onClose}><X size={17}/>Cancelar</button>{onEdit&&<button type="button" className="secondary-button" onClick={onEdit}><Edit3 size={17}/>Editar</button>}{!readOnly&&<button type="submit" className="primary-button" disabled={saving||!shiftId||!parseMoneyValue(amount)}><Save size={17}/>{saving?'Guardando...':'Guardar'}</button>}</div>
   </form></div>;
 }
@@ -5397,6 +5404,7 @@ function PendingScreen({ currentUser }: { currentUser: AuthUser }) {
   const [error, setError] = useState('');
   const [periodFilter, setPeriodFilter] = useState<PeriodFilter>(emptyPeriodFilter);
   const isBoss = currentUser.roleCode === 'JEFA';
+  const [availableCashCounts, setAvailableCashCounts] = useState<Partial<Record<CashCurrency, ShiftCashCount>>>();
 
   const columns = useMemo(() => [
     { key: 'id' as const, label: 'ID' },
@@ -5428,8 +5436,22 @@ function PendingScreen({ currentUser }: { currentUser: AuthUser }) {
     };
   }, [currentUser.id]);
 
+  useEffect(() => {
+    if (isBoss) {
+      setAvailableCashCounts(undefined);
+      return;
+    }
+    void apiRequest<ShiftDetail | null>('/shifts/current')
+      .then((shift) => setAvailableCashCounts(shift?.cashCounts.ACTUAL))
+      .catch(() => setAvailableCashCounts(undefined));
+  }, [isBoss, currentUser.id]);
+
   useOperationalRefresh(async () => {
     setRows(await apiRequest<PendingApiRow[]>('/transactions/pending'));
+    if (!isBoss) {
+      const shift = await apiRequest<ShiftDetail | null>('/shifts/current');
+      setAvailableCashCounts(shift?.cashCounts.ACTUAL);
+    }
   }, !detail && !paymentModal && !payingId);
 
   const processedRows = useMemo(() => {
@@ -5965,6 +5987,7 @@ function PendingScreen({ currentUser }: { currentUser: AuthUser }) {
           row={paymentModal.row}
           isSaving={payingId === paymentModal.pending.database_id}
           saveError={error}
+          availableCashCounts={availableCashCounts}
           onCancel={() => {
             if (!payingId) setPaymentModal(null);
           }}
@@ -5978,6 +6001,7 @@ function PendingScreen({ currentUser }: { currentUser: AuthUser }) {
           row={batchCashModal.row}
           isSaving={payingId === 'batch'}
           saveError={error}
+          availableCashCounts={availableCashCounts}
           onCancel={() => { if (!payingId) setBatchCashModal(null); }}
           onSave={submitBatchCash}
         />

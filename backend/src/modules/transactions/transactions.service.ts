@@ -591,7 +591,7 @@ export class TransactionsService {
         descripcion: string;
         id_cajero: string;
         id_sucursal: string;
-        fecha_turno: string;
+        fecha_pendiente: string;
         id_contraparte: string;
         estado_turno: string;
         tasa_compra_usada: string;
@@ -1321,12 +1321,12 @@ export class TransactionsService {
         contraparte: string;
       } & QueryResultRow>(
         `select pp.id_pendiente, pp.estado, pp.id_transaccion,
-           t.id_turno, t.id_sucursal, t.id_caja, t.id_cajero, tu.fecha_apertura::date as fecha_turno,
+           t.id_turno, t.id_sucursal, t.id_caja, t.id_cajero,
+           (pp.fecha_creacion at time zone 'America/Managua')::date as fecha_pendiente,
            pp.tipo, pp.id_moneda, pp.id_contraparte, m.codigo as moneda,
            pp.saldo_pendiente, cp.nombre as contraparte
          from temo.pagos_pendientes pp
          join temo.transacciones t on t.id_transaccion = pp.id_transaccion
-         join temo.turnos tu on tu.id_turno = t.id_turno
          join temo.monedas m on m.id_moneda = pp.id_moneda
          join temo.contrapartes cp on cp.id_contraparte = pp.id_contraparte
          where pp.id_pendiente = any($1::uuid[])
@@ -1342,19 +1342,19 @@ export class TransactionsService {
       if (pendings.some((pending) => pending.estado !== 'PENDIENTE' && pending.estado !== 'ABONADO' && pending.estado !== 'VENCIDO')) {
         throw new ConflictException('Todos los pendientes seleccionados deben estar disponibles para pago.');
       }
-      if (pendings.some((pending) => pending.tipo !== reference.tipo || pending.moneda !== reference.moneda || pending.id_sucursal !== reference.id_sucursal || pending.fecha_turno !== reference.fecha_turno)) {
+      if (pendings.some((pending) => pending.tipo !== reference.tipo || pending.moneda !== reference.moneda || pending.id_sucursal !== reference.id_sucursal || pending.fecha_pendiente !== reference.fecha_pendiente)) {
         throw new ConflictException('Seleccione pendientes del mismo tipo, moneda, sucursal y fecha.');
       }
 
       const shiftResult = await client.query<ShiftRow>(
          `select id_turno, id_sucursal, id_caja, id_cajero
          from temo.turnos
-         where ${user.roleCode === 'JEFA' ? 'id_turno = $1' : 'id_cajero = $1 and id_sucursal = $2 and fecha_apertura::date = $3::date'}
+         where ${user.roleCode === 'JEFA' ? 'id_turno = $1' : "id_cajero = $1 and id_sucursal = $2 and (fecha_apertura at time zone 'America/Managua')::date = $3::date"}
            and estado in ('ABIERTO', 'PENDIENTE_APROBACION')
          for update`,
         user.roleCode === 'JEFA'
           ? [reference.id_turno]
-          : [user.id, reference.id_sucursal, reference.fecha_turno],
+          : [user.id, reference.id_sucursal, reference.fecha_pendiente],
       );
       const activeShift = shiftResult.rows[0];
       if (!activeShift) {
