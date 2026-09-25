@@ -1956,6 +1956,7 @@ function buildTransactionBatchPayload(rows: CrudRow[]) {
       buy: parseExchangeRate(rate.buy),
       sell: parseExchangeRate(rate.sell),
     },
+    ...(rows.some((row) => row.specialExchangeRate === '36.55') ? { specialExchangeRate: 36.55 } : {}),
     transactions: rows.map((row) => ({
       entityCode: row.entity,
       movementCode: row.movementCode,
@@ -4605,6 +4606,17 @@ function CashCountScreen({ currentUser }: { currentUser: AuthUser }) {
       .catch((error) => setMessage(error instanceof Error ? error.message : 'No fue posible cargar el arqueo seleccionado.'));
   }, [isBoss, selectedShiftId]);
 
+  useOperationalRefresh(async () => {
+    const latestShift = isBoss
+      ? selectedShiftId ? await apiRequest<ShiftDetail>(`/shifts/${selectedShiftId}`) : null
+      : await apiRequest<ShiftDetail | null>('/shifts/current');
+    if (!latestShift) return;
+    setShift(latestShift);
+    const editingCash = document.activeElement instanceof HTMLElement
+      && Boolean(document.activeElement.closest('[data-cash-scope="general-cash-count"]'));
+    if (!editingCash) setPileDrafts(cashDraftFromShiftCounts(latestShift.cashCounts.ACTUAL));
+  }, Boolean((isBoss && selectedShiftId) || (!isBoss && shift)), 3000);
+
   useEffect(() => {
     if (isBoss || !isLoaded || !shift || shift.estado === 'CERRADO') {
       return;
@@ -4657,7 +4669,7 @@ function CashCountScreen({ currentUser }: { currentUser: AuthUser }) {
   return (
     <section className="screen-stack">
       <article className="panel">
-        <div className="panel__header table-panel-header">
+        <div className="panel__header table-panel-header cash-count-header">
           <div className="cash-count-title-row">
             <div>
               <p>Conteo fisico</p>
@@ -4740,7 +4752,10 @@ function CashCountScreen({ currentUser }: { currentUser: AuthUser }) {
             <div><strong>Diferencia USD</strong>{renderDifference(differenceUsd, 'USD', { positiveLabel: '' })}</div>
             <label>
               <strong>Diferencia registrada</strong>
-              <span className="cash-change-entry"><span>C$</span><input data-general-cash-change value={changeNio} inputMode="decimal" readOnly={isBoss} onChange={(event) => setChangeNio(normalizeSignedAccountingMoneyRaw(event.target.value))} /></span>
+              <span className="cash-change-values">
+                <span className="cash-change-entry"><span>C$</span><input data-general-cash-change value={changeNio} inputMode="decimal" readOnly={isBoss} onChange={(event) => setChangeNio(normalizeSignedAccountingMoneyRaw(event.target.value))} /></span>
+                <small>{formatCashCountMoney(parseMoneyValue(changeNio) / 36.4, 'USD')}</small>
+              </span>
               {!isBoss && <button type="button" className="secondary-button" onClick={() => setChangeNio(formatAccountingMoneyRaw(parseMoneyValue(changeNio) + differenceNio))}>Registrar diferencia</button>}
             </label>
           </div>
@@ -5414,7 +5429,7 @@ function PendingScreen({ currentUser }: { currentUser: AuthUser }) {
     { key: 'movimiento' as const, label: 'MOVIMIENTO' },
     { key: 'monto_original' as const, label: 'MONTO' },
     { key: 'estado' as const, label: 'ESTADO' },
-    ...(isBoss ? [{ key: 'cajero' as const, label: 'CAJERO / SUCURSAL' }] : []),
+    { key: 'cajero' as const, label: isBoss ? 'CAJERO / SUCURSAL' : 'CAJERO' },
   ], [isBoss]);
 
   useEffect(() => {
@@ -5916,7 +5931,7 @@ function PendingScreen({ currentUser }: { currentUser: AuthUser }) {
                     </span>
                   </td>
                   <td><span className={`pending-status pending-status--${row.estado.toLowerCase()}`}>{row.estado}</span></td>
-                  {isBoss && <td className="multi-line-cell transaction-operator-cell">{`${row.cajero}\n${row.sucursal}`}</td>}
+                  <td className="multi-line-cell transaction-operator-cell">{isBoss ? `${row.cajero}\n${row.sucursal}` : row.cajero}</td>
                   <td>
                     <button
                       type="button"
@@ -8780,6 +8795,7 @@ function TransactionModal({
   const [selectedSettlementPendingIds, setSelectedSettlementPendingIds] = useState<string[]>([]);
   const [showPendingSettlement, setShowPendingSettlement] = useState(false);
   const [pendingSettlementQuery, setPendingSettlementQuery] = useState('');
+  const [specialExchangeRateEnabled, setSpecialExchangeRateEnabled] = useState(false);
   const modalRef = useAutoFocusFirstField<HTMLElement>();
   useEffect(() => {
     if (mode !== 'create') return;
@@ -8859,6 +8875,9 @@ function TransactionModal({
       sell: row.exchangeRateSell || current.sell,
     };
   });
+  const transactionExchangeRate: ExchangeRate = specialExchangeRateEnabled
+    ? { ...exchangeRate, buy: '36.55' }
+    : exchangeRate;
   const cashTotals = {
     NIO: calculateCashPileTotal(cashDenominations.NIO, cashCounts.NIO),
     USD: calculateCashPileTotal(cashDenominations.USD, cashCounts.USD),
@@ -8890,7 +8909,7 @@ function TransactionModal({
   const balanceDrafts = isPayment
     ? drafts.map((transactionDraft) => ({ ...transactionDraft, pendingName: '' }))
     : drafts;
-  const customerBalanceSteps = calculateTransactionCustomerBalanceSteps(balanceDrafts, exchangeRate, pendingCompensation);
+  const customerBalanceSteps = calculateTransactionCustomerBalanceSteps(balanceDrafts, transactionExchangeRate, pendingCompensation);
   const activeBalanceStep = customerBalanceSteps[activeTabIndex];
   const activeRate = activeBalanceStep?.changeRateValue || activeBalanceStep?.rateValue || 1;
   const activeBalanceBeforeChangeNio = activeBalanceStep?.balanceBeforeChangeNio || 0;
@@ -8903,7 +8922,7 @@ function TransactionModal({
     rateValue: activeRate,
   };
   const changeRateKind = activeBalanceStep?.changeRateKind || transactionDifference.rateKind;
-  const changeRateValue = getTransactionRateValue(exchangeRate, changeRateKind);
+  const changeRateValue = getTransactionRateValue(transactionExchangeRate, changeRateKind);
   const hasPositiveChange = draft.direction === 'Ingreso' && transactionDifference.differenceNio > 0.005;
   const expectedChange = {
     NIO: Math.max(0, transactionDifference.differenceNio),
@@ -9004,6 +9023,22 @@ function TransactionModal({
       return currentIndex;
     });
     setCashView('received');
+  }
+
+  useEffect(() => {
+    if (drafts.length < 2 && specialExchangeRateEnabled) setSpecialExchangeRateEnabled(false);
+  }, [drafts.length, specialExchangeRateEnabled]);
+
+  async function toggleSpecialExchangeRate() {
+    if (specialExchangeRateEnabled) {
+      setSpecialExchangeRateEnabled(false);
+      return;
+    }
+    const confirmed = await requestSystemConfirm(
+      'Se aplicará la tasa especial D de C$ 36.55 únicamente para entregar córdobas provenientes de dólares en este grupo de transacciones.',
+      { title: 'Aplicar tasa especial', confirmLabel: 'Confirmar' },
+    );
+    if (confirmed) setSpecialExchangeRateEnabled(true);
   }
 
   function updateField(key: string, value: string) {
@@ -9112,6 +9147,28 @@ function TransactionModal({
     }, 0);
   }
 
+  function focusTransactionAmount() {
+    window.setTimeout(() => document.querySelector<HTMLInputElement>('[data-transaction-amount]')?.focus(), 0);
+  }
+
+  function handleMovementCodeKeyDown(event: KeyboardEvent<HTMLInputElement>) {
+    if (event.key !== 'Tab' || event.shiftKey || !draft.movementCode.trim() || !selectedMovement) return;
+    event.preventDefault();
+    if (allowedCurrencies.length === 1) {
+      focusTransactionAmount();
+      return;
+    }
+    window.setTimeout(() => {
+      document.querySelector<HTMLButtonElement>(`[data-transaction-currency="${draft.currency}"]:not(:disabled)`)?.focus();
+    }, 0);
+  }
+
+  function handleMovementKeyDown(event: KeyboardEvent<HTMLSelectElement>) {
+    if (event.key !== 'Tab' || event.shiftKey || !selectedMovement || allowedCurrencies.length !== 1) return;
+    event.preventDefault();
+    focusTransactionAmount();
+  }
+
   function updateCashCount(currency: CashCurrency, denominationId: string, field: 'groups' | 'loose', value: string) {
     const cleanValue = value.replace(/\D/g, '');
     setDraft((current) => {
@@ -9166,7 +9223,7 @@ function TransactionModal({
       );
       return;
     }
-    const customerBalanceSteps = calculateTransactionCustomerBalanceSteps(balanceDrafts, exchangeRate, pendingCompensation);
+    const customerBalanceSteps = calculateTransactionCustomerBalanceSteps(balanceDrafts, transactionExchangeRate, pendingCompensation);
     const finalBalanceStep = customerBalanceSteps[customerBalanceSteps.length - 1];
     const finalBalanceNio = (finalBalanceStep?.balanceNio || 0)
       + (finalBalanceStep?.balanceUsd || 0)
@@ -9186,13 +9243,14 @@ function TransactionModal({
           transactionDraft.direction || 'Ingreso',
           currency,
         );
-        const exchangeRateValue = getTransactionRateValue(exchangeRate, exchangeRateType);
+        const exchangeRateValue = getTransactionRateValue(transactionExchangeRate, exchangeRateType);
         const rowBalanceStep = customerBalanceSteps[index];
         const rowChangeKind = rowBalanceStep?.changeRateKind || 'Compra';
         const rowChangeRate = rowBalanceStep?.changeRateValue || 1;
         return {
           ...transactionDraft,
           settledPendingIds: JSON.stringify(selectedSettlementPendingIds),
+          specialExchangeRate: specialExchangeRateEnabled ? '36.55' : '',
           cashCountNio: transactionDraft.cashCountNio,
           cashCountUsd: transactionDraft.cashCountUsd,
           changeCashCountNio: transactionDraft.changeCashCountNio,
@@ -9333,6 +9391,7 @@ function TransactionModal({
               list="transaction-movement-codes"
               value={draft.movementCode}
               onChange={(event) => updateMovementCode(event.target.value)}
+              onKeyDown={handleMovementCodeKeyDown}
               placeholder="---"
               autoComplete="off"
               disabled={isTransactionLocked || !movementRows.length}
@@ -9347,7 +9406,7 @@ function TransactionModal({
           </label>
           <label className="form-field transaction-form-movement">
             Movimiento
-            <select value={selectedMovement?.name ?? draft.movement} onChange={(event) => updateMovement(event.target.value)} disabled={isTransactionLocked || !movementOptions.length}>
+            <select value={selectedMovement?.name ?? draft.movement} onChange={(event) => updateMovement(event.target.value)} onKeyDown={handleMovementKeyDown} disabled={isTransactionLocked || !movementOptions.length}>
               <option value="">{movementOptions.length ? '---' : 'Sin movimientos activos'}</option>
               {movementOptions.map((option) => (
                 <option key={option}>{option}</option>
@@ -9409,6 +9468,7 @@ function TransactionModal({
               )}
             </span>
             <input
+              data-transaction-amount
               value={formatAccountingMoneyInput(draft.amountValue)}
               inputMode="decimal"
               onChange={(event) => updateField('amountValue', normalizeAccountingMoneyRaw(event.target.value))}
@@ -9503,9 +9563,20 @@ function TransactionModal({
                       <span>{drafts.length > 1 ? `Arqueo de transaccion ${activeTabIndex + 1}` : 'Arqueo de transaccion'}</span>
                       <strong>Conteo fisico {draft.direction === 'Salida' ? 'entregado' : 'recibido'}</strong>
                     </div>
-                    <div className="transaction-rate-chip" aria-label="Tasa de cambio utilizada">
-                      <span>Tasa de cambio utilizada</span>
-                      <strong>{transactionDifference.rateKind} C$ {formatRateDisplay(String(transactionDifference.rateValue))}</strong>
+                    <div className="transaction-rate-actions">
+                      <div className="transaction-rate-chip" aria-label="Tasa de cambio utilizada">
+                        <span>Tasa de cambio utilizada</span>
+                        <strong>{transactionDifference.rateKind} C$ {formatRateDisplay(String(transactionDifference.rateValue))}</strong>
+                      </div>
+                      {mode === 'create' && drafts.length > 1 && (
+                        <button
+                          type="button"
+                          className={`transaction-special-rate-button ${specialExchangeRateEnabled ? 'transaction-special-rate-button--active' : ''}`}
+                          aria-pressed={specialExchangeRateEnabled}
+                          title="Tasa especial D C$ 36.55"
+                          onClick={() => void toggleSpecialExchangeRate()}
+                        >D</button>
+                      )}
                     </div>
                   </div>
                   <div className="transaction-cash-count-grid">

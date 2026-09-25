@@ -136,9 +136,10 @@ export class TransactionsService {
            id_tipo_cambio_vuelto,
            tipo_tasa_vuelto,
            tasa_vuelto_usada,
+           observaciones,
            id_usuario_creacion
          )
-         values ($1, $2, $3, $4, $5, $6)
+         values ($1, $2, $3, $4, $5, $6, $7)
          returning id_grupo_transacciones, codigo_operacion`,
         [
           shift.id_turno,
@@ -146,6 +147,7 @@ export class TransactionsService {
           rateId,
           input.settlement.changeRateKind,
           this.rateValue(input, input.settlement.changeRateKind),
+          input.specialExchangeRate ? 'Tasa especial D C$ 36.55 aplicada al grupo.' : null,
           userId,
         ],
       );
@@ -236,7 +238,7 @@ export class TransactionsService {
             movement.id_moneda,
             transaction.amount,
             rateId,
-            input.rates.buy,
+            this.rateValue(input, 'COMPRA'),
             input.rates.sell,
             transaction.description || null,
             firstConsecutive + index,
@@ -2400,7 +2402,7 @@ export class TransactionsService {
 
   private async resolveExchangeRate(
     client: PoolClient,
-    input: { rates: { buy: number; sell: number } },
+    input: { rates: { buy: number; sell: number }; specialExchangeRate?: number },
     userId: string,
   ) {
     const current = await client.query<{ id_tipo_cambio: string } & QueryResultRow>(
@@ -2977,7 +2979,7 @@ export class TransactionsService {
     }
     balance.NIO += direction === 'ENTRA' ? primaryTotals.NIO : -primaryTotals.NIO;
     balance.USD += direction === 'ENTRA' ? primaryTotals.USD : -primaryTotals.USD;
-    this.offsetCustomerBalance(balance, input.rates);
+    this.offsetCustomerBalance(balance, input);
 
     const expectedKind: RateKind = balance.USD > 0.0001
       ? 'COMPRA'
@@ -2998,26 +3000,32 @@ export class TransactionsService {
 
     balance.NIO -= changeTotals.NIO;
     balance.USD -= changeTotals.USD;
-    this.offsetCustomerBalance(balance, input.rates);
+    this.offsetCustomerBalance(balance, input);
   }
 
   private offsetCustomerBalance(
     balance: Record<CurrencyCode, number>,
-    rates: { buy: number; sell: number },
+    input: { rates: { buy: number; sell: number }; specialExchangeRate?: number },
   ) {
     if (balance.NIO < 0 && balance.USD > 0) {
-      const usdUsed = Math.min(balance.USD, -balance.NIO / rates.buy);
+      const buyRate = input.specialExchangeRate ?? input.rates.buy;
+      const usdUsed = Math.min(balance.USD, -balance.NIO / buyRate);
       balance.USD -= usdUsed;
-      balance.NIO += usdUsed * rates.buy;
+      balance.NIO += usdUsed * buyRate;
     } else if (balance.USD < 0 && balance.NIO > 0) {
-      const nioUsed = Math.min(balance.NIO, -balance.USD * rates.sell);
+      const nioUsed = Math.min(balance.NIO, -balance.USD * input.rates.sell);
       balance.NIO -= nioUsed;
-      balance.USD += nioUsed / rates.sell;
+      balance.USD += nioUsed / input.rates.sell;
     }
   }
 
-  private rateValue(input: { rates: { buy: number; sell: number } }, kind: RateKind) {
-    return kind === 'COMPRA' ? input.rates.buy : input.rates.sell;
+  private rateValue(
+    input: { rates: { buy: number; sell: number }; specialExchangeRate?: number },
+    kind: RateKind,
+  ) {
+    return kind === 'COMPRA'
+      ? input.specialExchangeRate ?? input.rates.buy
+      : input.rates.sell;
   }
 
   private databaseDateKey(value: string | Date) {

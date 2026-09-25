@@ -2194,6 +2194,41 @@ td {
   text-align: right;
 }
 
+.cash-count-header {
+  align-items: center;
+}
+
+.cash-count-header > .action-row {
+  align-self: center;
+}
+
+.transaction-rate-actions {
+  align-items: stretch;
+  display: flex;
+  gap: 6px;
+}
+
+.transaction-special-rate-button {
+  align-items: center;
+  background: #f5f7f7;
+  border: 1px solid #bdcac8;
+  border-radius: 6px;
+  color: #53615f;
+  display: flex;
+  font-size: .9rem;
+  font-weight: 900;
+  justify-content: center;
+  min-width: 38px;
+  padding: 6px;
+}
+
+.transaction-special-rate-button--active {
+  background: #ffdf72;
+  border-color: #bd8500;
+  color: #503600;
+  box-shadow: inset 0 0 0 1px rgb(255 255 255 / .55);
+}
+
 .transaction-rate-chip span {
   color: #52606d;
   font-size: 0.7rem;
@@ -2904,6 +2939,8 @@ tbody tr:hover td {
 
 .cash-change-entry span { background: var(--warning); font-weight: 800; padding: 6px; }
 .cash-change-entry input { border: 0; min-width: 0; padding: 6px; text-align: right; width: 100%; }
+.cash-change-values { display: grid; gap: 2px; min-width: 0; }
+.cash-change-values > small { color: var(--muted); font-size: .7rem; font-variant-numeric: tabular-nums; padding-right: 4px; text-align: right; }
 .cash-count-status { color: var(--muted); margin: 0; padding: 8px 16px; }
 
 .shift-notification-backdrop { align-items: flex-start; justify-content: flex-end; padding-top: 76px; }

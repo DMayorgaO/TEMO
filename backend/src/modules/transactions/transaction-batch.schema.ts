@@ -57,6 +57,7 @@ export const createTransactionBatchSchema = z
     shiftId: z.string().uuid().optional(),
     userId: z.string().uuid().optional(),
     rates: ratesSchema,
+    specialExchangeRate: z.literal(36.55).optional(),
     transactions: z
       .array(
         z
@@ -76,7 +77,16 @@ export const createTransactionBatchSchema = z
     pendingSettlementIds: z.array(z.string().uuid()).max(50).optional().default([]),
     settlement: settlementSchema,
   })
-  .strict();
+  .strict()
+  .superRefine((value, context) => {
+    if (value.specialExchangeRate && value.transactions.length < 2) {
+      context.addIssue({
+        code: 'custom',
+        message: 'La tasa especial sólo puede utilizarse en transacciones múltiples.',
+        path: ['specialExchangeRate'],
+      });
+    }
+  });
 
 export const payPendingSchema = z
   .object({
