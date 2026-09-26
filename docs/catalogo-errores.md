@@ -42,6 +42,8 @@ Cada error mostrado por TEMO incluye un código estable y, cuando corresponde, u
 
 ## Incidentes conocidos y corregidos
 
+El 25/09/2026 se verifico un doble conteo de C$180 en la liquidacion de PEN-000046 asociada a TRA-001092-01/02. La compensacion se agregaba al fondo esperado y tambien como si fuera un cobro fisico. La consulta ahora suma por separado las compensaciones y los movimientos efectivos de las liquidaciones, descontando su vuelto. Con el retiro de C$380, el deposito de C$200 y la compensacion de C$180, el efecto esperado en caja es cero. La verificacion de solo lectura del turno afectado produjo un sobrante de C$56.90 con los datos de ese momento.
+
 | Fecha | Pantalla | Síntoma | Causa | Corrección |
 | --- | --- | --- | --- | --- |
 | 2026-09-23 | Transferencias | `Internal server error` al registrar sin descripción | La notificación enviaba `NULL` a un campo obligatorio | Se almacena texto vacío y la notificación omite visualmente la descripción. |

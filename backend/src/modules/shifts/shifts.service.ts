@@ -1146,18 +1146,14 @@ export class ShiftsService {
            and ap.id_moneda = m.id_moneda
            and ap.observaciones = 'Compensación con saldo a favor de una transacción en curso'
        ) pending_compensation on true
-       /* Las liquidaciones en efectivo se agregan cuando el pendiente deja de estar abierto. */
+       /* Las compensaciones ya se sumaron arriba; aqui solo entra el efectivo fisico neto del vuelto. */
        left join lateral (
-         select sum(case pp.tipo when 'POR_COBRAR' then ap.monto else -ap.monto end) as amount
-         from temo.abonos_pendientes ap
-         join temo.pagos_pendientes pp on pp.id_pendiente = ap.id_pendiente
-         where ap.id_turno_aplicacion = t.id_turno
-           and ap.id_moneda = m.id_moneda
-           and not exists (
-             select 1 from temo.transacciones_montos payment_tm
-             where payment_tm.id_transaccion = ap.id_transaccion
-               and payment_tm.medio = 'CUENTA_BANCARIA'
-           )
+         select sum(case me.direccion when 'ENTRA' then me.monto else -me.monto end) as amount
+         from temo.movimientos_efectivo me
+         where me.id_turno = t.id_turno
+           and me.id_moneda = m.id_moneda
+           and me.id_abono_pendiente is not null
+           and me.es_reverso = false
        ) paid_pending_cash on true
        /* Solo las transferencias activas de efectivo modifican el fondo general. */
        left join lateral (
