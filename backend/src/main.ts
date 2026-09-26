@@ -19,6 +19,11 @@ async function bootstrap() {
   const server = app.getHttpAdapter().getInstance() as { set: (key: string, value: unknown) => void };
   server.set('trust proxy', 1);
   app.use(helmet({ contentSecurityPolicy: false }));
+  // Incluso los rechazos tempranos deben ser legibles desde el frontend.
+  app.enableCors({
+    origin: configuredOrigins.length ? configuredOrigins : true,
+    credentials: true,
+  });
   app.use(json({ limit: '256kb' }));
   app.use(urlencoded({ extended: false, limit: '64kb' }));
   app.use('/api/auth/login', rateLimit({
@@ -39,14 +44,20 @@ async function bootstrap() {
   app.use('/api', rateLimit({
     windowMs: 15 * 60 * 1000,
     limit: 1200,
+    skip: (req) => req.method === 'GET' || req.method === 'HEAD',
     standardHeaders: 'draft-7',
     legacyHeaders: false,
+    message: { statusCode: 429, message: 'Se alcanzo el limite temporal de operaciones de esta conexion. Espere antes de volver a guardar. No cierre el formulario.' },
   }));
-
-  app.enableCors({
-    origin: configuredOrigins.length ? configuredOrigins : true,
-    credentials: true,
-  });
+  // Las consultas periodicas de varios cajeros comparten la IP de la sucursal.
+  app.use('/api', rateLimit({
+    windowMs: 15 * 60 * 1000,
+    limit: 12000,
+    skip: (req) => req.method !== 'GET' && req.method !== 'HEAD',
+    standardHeaders: 'draft-7',
+    legacyHeaders: false,
+    message: { statusCode: 429, message: 'Se alcanzo el limite temporal de consultas de esta conexion. Espere unos minutos; sus datos ingresados no deben descartarse.' },
+  }));
   app.setGlobalPrefix('api', {
     exclude: [{ path: '', method: RequestMethod.GET }],
   });

@@ -401,6 +401,11 @@ async function apiRequest<T>(path: string, init?: RequestInit): Promise<T> {
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
       ...init?.headers,
     },
+  }).catch(() => {
+    const isRead = !init?.method || ['GET', 'HEAD'].includes(init.method.toUpperCase());
+    throw new Error(isRead
+      ? 'No se pudo conectar con el servidor. Compruebe su conexion y espere unos momentos. No cierre el formulario. Codigo: RED-CON-001.'
+      : 'Se perdio la comunicacion con el servidor y no se pudo confirmar el resultado. No cierre el formulario. Antes de repetir el guardado, compruebe en otra ventana si la operacion ya aparece registrada para evitar duplicados. Codigo: RED-CON-002.');
   });
   const payload = (await response.json().catch(() => null)) as
     | { code?: string; message?: string | string[]; requestId?: string }
