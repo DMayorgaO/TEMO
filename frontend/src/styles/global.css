@@ -2202,13 +2202,17 @@ td {
   align-self: center;
 }
 
-.transaction-rate-actions {
+.transaction-cash-count-heading .transaction-rate-actions {
   align-items: stretch;
   display: flex;
   gap: 6px;
+  flex-direction: row;
+  flex-wrap: nowrap;
 }
 
 .transaction-special-rate-button {
+  order: -1;
+  flex: 0 0 38px;
   align-items: center;
   background: #f5f7f7;
   border: 1px solid #bdcac8;

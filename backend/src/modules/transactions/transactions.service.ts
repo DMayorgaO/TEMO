@@ -7,6 +7,7 @@ import {
 import { PoolClient, QueryResultRow } from 'pg';
 import { AuthenticatedUser } from '../auth/auth.service';
 import { DatabaseService } from '../database/database.service';
+import { preferentialGroupMarker } from '../../common/preferential-cash';
 import {
   CreateTransactionBatchInput,
   PayPendingBatchInput,
@@ -147,7 +148,7 @@ export class TransactionsService {
           rateId,
           input.settlement.changeRateKind,
           this.rateValue(input, input.settlement.changeRateKind),
-          input.specialExchangeRate ? 'Tasa especial D C$ 36.55 aplicada al grupo.' : null,
+          input.specialExchangeRate ? preferentialGroupMarker : null,
           userId,
         ],
       );

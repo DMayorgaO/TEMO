@@ -7,6 +7,7 @@ import {
 import { PoolClient, QueryResult, QueryResultRow } from 'pg';
 import { AuthenticatedUser } from '../auth/auth.service';
 import { DatabaseService } from '../database/database.service';
+import { preferentialCashAdjustment, preferentialGroupMarker, PreferentialCashRow } from '../../common/preferential-cash';
 import {
   CashCountsInput,
   CloseShiftInput,
@@ -1192,7 +1193,32 @@ export class ShiftsService {
       return summary;
     }, { expectedCash: { NIO: 0, USD: 0 }, pendingCash: { NIO: 0, USD: 0 } });
     const buyRate = Number(rateResult.rows[0]?.buy_rate || 36.4);
-    const expectedGeneralNio = summary.expectedCash.NIO + summary.expectedCash.USD * buyRate;
+    const preferentialRows = await this.db.query<PreferentialCashRow & QueryResultRow>(
+      `select tr.id_grupo_transacciones as group_id, m.codigo as currency,
+         tm.direccion as direction, tm.monto as amount,
+         tr.tasa_compra_usada as buy_rate, tr.tasa_venta_usada as sell_rate,
+         coalesce(c.primary_nio, 0) as primary_nio, coalesce(c.primary_usd, 0) as primary_usd,
+         coalesce(c.change_nio, 0) as change_nio, coalesce(c.change_usd, 0) as change_usd
+       from temo.transacciones tr
+       join temo.grupos_transacciones g using (id_grupo_transacciones)
+       join temo.transacciones_montos tm using (id_transaccion)
+       join temo.monedas m on m.id_moneda = tm.id_moneda
+       left join lateral (
+         select
+           sum(a.monto_total) filter (where am.codigo = 'NIO' and a.tipo in ('TRANSACCION_RECIBIDO', 'TRANSACCION_ENTREGADO')) as primary_nio,
+           sum(a.monto_total) filter (where am.codigo = 'USD' and a.tipo in ('TRANSACCION_RECIBIDO', 'TRANSACCION_ENTREGADO')) as primary_usd,
+           sum(a.monto_total) filter (where am.codigo = 'NIO' and a.tipo = 'TRANSACCION_VUELTO') as change_nio,
+           sum(a.monto_total) filter (where am.codigo = 'USD' and a.tipo = 'TRANSACCION_VUELTO') as change_usd
+         from temo.arqueos a join temo.monedas am using (id_moneda)
+         where a.id_transaccion = tr.id_transaccion and a.id_abono_pendiente is null
+       ) c on true
+       where tr.id_turno = $1 and tr.estado <> 'ANULADA' and tm.medio = 'EFECTIVO'
+         and g.observaciones = $2 and tr.tasa_compra_usada = 36.55
+       order by tr.id_grupo_transacciones, tr.orden_grupo`,
+      [shiftId, preferentialGroupMarker],
+    );
+    const expectedGeneralNio = summary.expectedCash.NIO + summary.expectedCash.USD * buyRate
+      + preferentialCashAdjustment(preferentialRows.rows, buyRate);
 
     // Expone una sola base contable en NIO; USD es únicamente su equivalente informativo.
     return {
