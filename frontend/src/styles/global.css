@@ -2162,6 +2162,19 @@ td {
   opacity: 0;
 }
 
+.group-detail-panel { overflow-y: auto; }
+.group-detail-step { padding: 16px 20px; border-bottom: 1px solid #d5e3e2; min-width: 0; }
+.group-detail-step header, .group-detail-movement { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; }
+.group-detail-step p { margin: 8px 0; font-size: .85rem; }
+.group-cash-summary { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; margin-top: 12px; }
+.group-cash-summary > div { display: grid; align-content: start; gap: 6px; min-width: 0; }
+.group-cash-summary table { width: 100%; min-width: 0; table-layout: fixed; font-size: .8rem; }
+.group-cash-summary th, .group-cash-summary td { padding: 5px; text-align: right; white-space: normal; overflow-wrap: anywhere; }
+.group-cash-summary summary { cursor: pointer; }
+@media (max-width: 600px) {
+  .group-cash-summary { grid-template-columns: minmax(0, 1fr); }
+}
+
 .transaction-cash-count-heading {
   align-items: end;
   display: flex;

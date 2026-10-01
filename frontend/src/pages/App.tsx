@@ -295,6 +295,8 @@ type TransactionDetailApi = {
   transaction: TransactionApiRow;
   rates: { buy: number; sell: number };
   settlement: {
+    shared?: boolean;
+    primaryDirection?: 'ENTRA' | 'SALE';
     primaryRateKind: 'COMPRA' | 'VENTA';
     changeRateKind: 'COMPRA' | 'VENTA';
     expectedChange: Record<CashCurrency, number>;
@@ -302,6 +304,27 @@ type TransactionDetailApi = {
     changeCounts: Record<CashCurrency, TransactionCashCountApiLine[]>;
   };
 };
+
+type TransactionGroupDetailApi = {
+  details: TransactionDetailApi[];
+  compensations: Array<{ codigo_pendiente: string; monto: string; moneda: CashCurrency }>;
+};
+
+function touchRowDetail(open: () => void) {
+  let start: { x: number; y: number; id: number } | null = null;
+  return {
+    onPointerDown: (event: ReactPointerEvent<HTMLTableRowElement>) => {
+      start = event.pointerType === 'touch' && !(event.target as HTMLElement).closest('button,input,a,select,textarea,label')
+        ? { x: event.clientX, y: event.clientY, id: event.pointerId } : null;
+    },
+    onPointerCancel: () => { start = null; },
+    onPointerUp: (event: ReactPointerEvent<HTMLTableRowElement>) => {
+      const tap = start;
+      start = null;
+      if (tap && tap.id === event.pointerId && Math.hypot(event.clientX - tap.x, event.clientY - tap.y) < 10) open();
+    },
+  };
+}
 
 type PendingApiRow = {
   database_id: string;
@@ -5069,7 +5092,7 @@ function TransfersScreen({ currentUser }: { currentUser: AuthUser }) {
       </div>
       {error && <p className="pending-screen-message transfer-error" role="alert">{error}</p>}
       <div className="table-wrap"><table className="transfer-table"><thead><tr><th className="number-column"><div className="th-stack"><span>N°</span></div></th>{transferHeader('id','ID')}{isBoss && transferHeader('fecha','FECHA')}{transferHeader('tipo','TIPO')}{transferHeader('banco','BANCO / CUENTA')}{transferHeader('monto','MONTO')}{isBoss && transferHeader('operador','CAJERO / SUCURSAL')}<th><div className="th-stack"><span>ACCIONES</span></div></th></tr></thead>
-        <tbody>{pageRows.map((row,index)=><tr key={row.database_id} className={`${row.estado !== 'ACTIVO' ? 'inactive-row' : ''} ${selected === row.database_id ? 'selected-row' : ''}`} onClick={()=>setSelected(row.database_id)} onDoubleClick={()=>void openDetail(row,'view')}>
+        <tbody>{pageRows.map((row,index)=><tr key={row.database_id} className={`${row.estado !== 'ACTIVO' ? 'inactive-row' : ''} ${selected === row.database_id ? 'selected-row' : ''}`} onClick={()=>setSelected(row.database_id)} onDoubleClick={()=>void openDetail(row,'view')} {...touchRowDetail(()=>void openDetail(row,'view'))}>
           <td>{filtered.length - ((page-1)*pageSize+index)}</td><td>{row.id}</td>{isBoss && <td className="multi-line-cell">{formatTransferDate(row.fecha_transferencia)}</td>}
           <td><strong>{row.tipo === 'EFECTIVO' ? 'Efectivo' : 'Digital'}</strong><small>{row.direccion === 'ENTRA' ? 'Ingreso' : 'Egreso'}</small></td>
           <td className="multi-line-cell">{row.tipo === 'CUENTA_BANCARIA' ? <><strong>{row.entidad || 'Sin banco'}</strong><small>{row.cuenta || 'Sin cuenta'}</small></> : <span className="muted-copy">—</span>}</td>
@@ -5337,7 +5360,7 @@ function DirectoryScreen({ currentUser }: { currentUser: AuthUser }) {
     <div className="table-toolbar"><label className="search-box"><Search size={17}/><input name="directory-search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Buscar nombre, numero, cedula o referencia"/></label><div className="table-toolbar-controls"><label className="switch-control switch-control--small"><input name="directory-show-inactive" type="checkbox" checked={showInactive} onChange={(event) => setShowInactive(event.target.checked)}/><span/>Mostrar inactivos</label></div></div>
     {error && <p className="transaction-save-error" role="alert">{error}</p>}
     <div className="table-wrap"><table className="directory-table"><thead><tr><th className="number-column"><div className="th-stack"><span>N°</span></div></th>{header('id','ID')}{header('name','NOMBRE')}{header('type','TIPO')}{header('number','NUMERO')}{header('currency','MONEDA')}{header('identity','CEDULA')}{header('reference','REFERENCIA')}<th><div className="th-stack"><span>ACCIONES</span></div></th></tr></thead><tbody>
-      {pageRows.map((row,index)=><tr key={row.database_id} className={`${row.status === 'INACTIVO' ? 'inactive-row' : ''} ${selected === row.database_id ? 'selected-row' : ''}`} onClick={()=>setSelected(row.database_id)} onDoubleClick={()=>void openDetail(row,'view')}>
+      {pageRows.map((row,index)=><tr key={row.database_id} className={`${row.status === 'INACTIVO' ? 'inactive-row' : ''} ${selected === row.database_id ? 'selected-row' : ''}`} onClick={()=>setSelected(row.database_id)} onDoubleClick={()=>void openDetail(row,'view')} {...touchRowDetail(()=>void openDetail(row,'view'))}>
         <td>{processed.length - ((page-1)*pageSize+index)}</td><td>{row.id}</td><td><strong>{row.name}</strong>{row.observations && <small>{row.observations}</small>}</td>
         <td className="directory-identifiers-cell" colSpan={3}><div className="directory-identifier-list">{row.identifiers.length ? row.identifiers.map((item,index)=><div className="directory-identifier-row" key={`${item.type}-${item.number}-${index}`}><span>{item.institution ? `${item.institution} · ` : ''}{item.type}</span><span className="directory-number">{item.number}</span><span>{item.currency ?? '---'}</span></div>) : <span>---</span>}</div></td>
         <td className="directory-lines">{row.identities.length ? row.identities.map((item,index)=><span key={`${item.number}-${index}`}>{item.number}{item.holder ? <small>{item.holder}</small> : null}</span>) : '---'}</td>
@@ -5908,6 +5931,7 @@ function PendingScreen({ currentUser }: { currentUser: AuthUser }) {
                   className={`${row.estado === 'PAGADO' ? 'inactive-row' : ''} ${selectedId === row.database_id ? 'selected-row' : ''}`}
                   onClick={() => setSelectedId(row.database_id)}
                   onDoubleClick={() => void openPendingDetail(row)}
+                  {...touchRowDetail(() => void openPendingDetail(row))}
                 >
                   <td className="selection-column" onClick={(event) => event.stopPropagation()}>
                     <input
@@ -7277,6 +7301,7 @@ function ShiftTable({
                   className={selectedRowId === row.id ? 'selected-row' : undefined}
                   onClick={() => setSelectedRowId(row.id)}
                   onDoubleClick={() => void openShiftViewModal(row)}
+                  {...touchRowDetail(() => void openShiftViewModal(row))}
                 >
                   <td className="number-column">{processedRows.length - ((page - 1) * pageSize + index)}</td>
                   {columns.map((column) => (
@@ -8118,6 +8143,8 @@ function TransactionTable({ config, currentUser }: { config: CrudConfig; current
   const [selectedRowId, setSelectedRowId] = useState<string | null>(null);
   const [markerMode, setMarkerMode] = useState(false);
   const [markedTransactionIds, setMarkedTransactionIds] = useState<Set<string>>(() => new Set());
+  const [groupDetail, setGroupDetail] = useState<TransactionGroupDetailApi | null>(null);
+  const detailRequestRef = useRef(0);
   const [modal, setModal] = useState<{ mode: ModalMode | 'view' | 'pay'; row: CrudRow } | null>(null);
   const [showExchangeCalculator, setShowExchangeCalculator] = useState(false);
   const [showDigitalCalculator, setShowDigitalCalculator] = useState(false);
@@ -8297,9 +8324,16 @@ function TransactionTable({ config, currentUser }: { config: CrudConfig; current
   }, [currentShift?.database_id]);
 
   async function openTransactionModal(row: CrudRow, mode: 'edit' | 'view') {
+    const request = ++detailRequestRef.current;
     setTransactionSaveError('');
     try {
+      if (mode === 'view') {
+        const group = await apiRequest<TransactionGroupDetailApi>(`/transactions/${row.databaseId}/group-detail`);
+        if (request === detailRequestRef.current) setGroupDetail(group);
+        return;
+      }
       const detail = await apiRequest<TransactionDetailApi>(`/transactions/${row.databaseId}/detail`);
+      if (request !== detailRequestRef.current) return;
       setModal({ mode, row: mapApiTransactionDetail(detail) });
     } catch (error) {
       setTransactionSaveError(
@@ -8616,6 +8650,7 @@ function TransactionTable({ config, currentUser }: { config: CrudConfig; current
                   className={`${row.status === 'Anulada' ? 'inactive-row' : ''} ${selectedRowId === row.id ? 'selected-row' : ''} ${markedTransactionIds.has(row.id) ? 'transaction-row--marked' : ''}`}
                   onClick={() => setSelectedRowId(row.id)}
                   onDoubleClick={() => void openTransactionModal(row, 'view')}
+                  {...touchRowDetail(() => { if (!markerMode) void openTransactionModal(row, 'view'); })}
                 >
                   {markerMode && <td className="marker-column"><input aria-label={`Marcar ${row.id} como revisada`} type="checkbox" checked={markedTransactionIds.has(row.id)} onClick={(event)=>event.stopPropagation()} onChange={()=>toggleMarkedTransaction(row.id)}/></td>}
                   <td className="number-column">{processedRows.length - ((page - 1) * pageSize + index)}</td>
@@ -8696,6 +8731,7 @@ function TransactionTable({ config, currentUser }: { config: CrudConfig; current
         </div>
       </article>
 
+      {groupDetail && <TransactionGroupView detail={groupDetail} onClose={() => setGroupDetail(null)} onEdit={(row) => { setGroupDetail(null); void openTransactionModal(row, 'edit'); }} />}
       {modal && (
         <TransactionModal
           key={`transaction-${modal.mode}-${modal.row.databaseId || modal.row.id}`}
@@ -8739,6 +8775,55 @@ function TransactionTable({ config, currentUser }: { config: CrudConfig; current
 
     </section>
   );
+}
+
+function TransactionGroupView({ detail, onClose, onEdit }: { detail: TransactionGroupDetailApi; onClose: () => void; onEdit: (row: CrudRow) => void }) {
+  const closeRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    const previous = document.activeElement as HTMLElement | null;
+    closeRef.current?.focus();
+    const escape = (event: globalThis.KeyboardEvent) => { if (event.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', escape);
+    return () => { window.removeEventListener('keydown', escape); previous?.focus(); };
+  }, [onClose]);
+  const total = (lines: TransactionCashCountApiLine[]) => lines.reduce((sum, line) => sum + (line.piles25 * 25 + line.loose) * Number(line.denomination), 0);
+  const cash = (settlement: TransactionDetailApi['settlement'], direction: string) => (
+    <div className="group-cash-summary">
+      {(['NIO', 'USD'] as const).map(currency => <div key={currency}>
+        <strong>{currency === 'NIO' ? 'Córdobas' : 'Dólares'}</strong>
+        <span>{direction === 'SALE' ? 'Efectivo entregado' : 'Efectivo recibido'}: <b>{formatCashCountMoney(total(settlement.primaryCounts[currency]), currency)}</b></span>
+        <span>Vuelto entregado: <b>{formatCashCountMoney(total(settlement.changeCounts[currency]), currency)}</b></span>
+        <details><summary>Denominaciones</summary>
+          <table><thead><tr><th>Denominación</th><th>{direction === 'SALE' ? 'Entregado' : 'Recibido'}</th><th>Vuelto</th></tr></thead>
+            <tbody>{[...new Set([...settlement.primaryCounts[currency], ...settlement.changeCounts[currency]].map(line => Number(line.denomination)))].sort((a,b) => b-a).map(value => {
+              const primary = settlement.primaryCounts[currency].find(line => Number(line.denomination) === value);
+              const change = settlement.changeCounts[currency].find(line => Number(line.denomination) === value);
+              return <tr key={value}><td>{formatCashCountMoney(value,currency)}</td><td>{primary ? primary.piles25 * 25 + primary.loose : 0}</td><td>{change ? change.piles25 * 25 + change.loose : 0}</td></tr>;
+            })}</tbody></table>
+        </details>
+      </div>)}
+    </div>
+  );
+  return <div className="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="group-detail-title">
+    <section className="modal-panel transaction-modal-panel group-detail-panel">
+      <div className="modal-header"><div><p>{detail.details.length} transacciones · {detail.details[0]?.transaction.id.replace(/-\d+$/, '')}</p><h2 id="group-detail-title">Detalle de operación múltiple</h2></div>
+        <button ref={closeRef} type="button" className="icon-button close-button" aria-label="Cerrar" onClick={onClose}><X size={18}/></button>
+      </div>
+      {detail.details.map((item, index) => <section className="group-detail-step" key={item.transaction.database_id}>
+        <header><strong>{index + 1}. {item.transaction.id} · {item.transaction.entidad}</strong><span>{item.transaction.estado}</span>{item.transaction.estado !== 'ANULADA' && <button className="icon-action" type="button" title="Editar transacción" aria-label={`Editar ${item.transaction.id}`} onClick={() => onEdit(mapApiTransactionDetail(item))}><Edit3 size={16}/></button>}</header>
+        <div className="group-detail-movement"><span>{item.transaction.movimiento}</span><strong className={`transaction-amount transaction-amount--${item.transaction.direccion === 'SALE' ? 'out' : 'in'}`}>
+          {item.transaction.direccion === 'SALE' ? <ArrowUpRight size={16}/> : <ArrowDownLeft size={16}/>}{formatCashCountMoney(Number(item.transaction.monto), item.transaction.moneda)}
+        </strong></div>
+        <p>Compra C$ {Number(item.rates.buy).toFixed(2)} · Venta C$ {Number(item.rates.sell).toFixed(2)}</p>
+        {item.transaction.pendiente && <p>Pendiente: {item.transaction.pendiente}</p>}
+        {item.transaction.descripcion && <p>{item.transaction.descripcion}</p>}
+        {!item.settlement.shared && cash(item.settlement, item.transaction.direccion)}
+        {!item.settlement.shared && item.transaction.estado !== 'ANULADA' && (item.settlement.expectedChange.NIO > 0 || item.settlement.expectedChange.USD > 0) && <p>Saldo a favor calculado antes del vuelto: {formatCashCountMoney(item.settlement.expectedChange.NIO, 'NIO')} / {formatCashCountMoney(item.settlement.expectedChange.USD, 'USD')} (equivalentes)</p>}
+      </section>)}
+      {detail.details.some(item => item.settlement.shared) && <section className="group-detail-step"><h3>Arqueo compartido del grupo</h3>{cash(detail.details.find(item => item.settlement.shared)!.settlement, detail.details.find(item => item.settlement.shared)!.settlement.primaryDirection ?? 'ENTRA')}</section>}
+      {detail.compensations.length > 0 && <section className="group-detail-step"><h3>Pendientes liquidados con saldo del grupo</h3>{detail.compensations.map((payment,index) => <p key={index}>PEN-{String(payment.codigo_pendiente).padStart(6,'0')} · {formatCashCountMoney(Number(payment.monto),payment.moneda)}</p>)}</section>}
+    </section>
+  </div>;
 }
 
 function TransactionModal({
@@ -10453,6 +10538,7 @@ function CrudTable({
                     onRowClick?.(row);
                   }}
                   onDoubleClick={() => openViewModal(row)}
+                  {...touchRowDetail(() => openViewModal(row))}
                 >
                   <td className="number-column">{processedRows.length - ((page - 1) * pageSize + index)}</td>
                   {visibleColumns.map((column) => {

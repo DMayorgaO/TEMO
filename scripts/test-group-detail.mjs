@@ -1,0 +1,37 @@
+import assert from 'node:assert/strict';
+import { createRequire } from 'node:module';
+import { readFileSync } from 'node:fs';
+import vm from 'node:vm';
+const require = createRequire(import.meta.url);
+const { TransactionsService } = require('../backend/dist/modules/transactions/transactions.service.js');
+const checked = [];
+const service = new TransactionsService({ query: async (sql) => {
+  assert.ok(sql.includes('order by'));
+  return { rows: sql.includes('select id_transaccion') ? [{id_transaccion:'first'}, {id_transaccion:'second'}] : [] };
+} });
+service.detail = async (id) => {
+  checked.push(id);
+  return { transaction: { database_id: id, id_grupo_transacciones: 'group' } };
+};
+const result = await service.groupDetail('second', {});
+assert.deepEqual(result.details.map(x => x.transaction.database_id), ['first', 'second']);
+assert.deepEqual(checked, ['second', 'first']);
+service.detail = async () => { throw new Error('denied'); };
+await assert.rejects(service.groupDetail('second', {}), /denied/);
+const source = readFileSync(new URL('../frontend/src/pages/App.tsx', import.meta.url), 'utf8');
+const fn = source.slice(source.indexOf('function touchRowDetail('), source.indexOf('\ntype PendingApiRow'));
+const ts = require('typescript');
+const context = { Math };
+vm.createContext(context);
+vm.runInContext(ts.transpileModule(fn, {}).outputText, context);
+let opened = 0;
+const handlers = context.touchRowDetail(() => opened++);
+const event = (x=0, type='touch', interactive=false) => ({pointerType:type, pointerId:1,clientX:x,clientY:0,target:{closest:()=>interactive}});
+handlers.onPointerDown(event()); handlers.onPointerUp(event());
+assert.equal(opened,1);
+handlers.onPointerDown(event()); handlers.onPointerUp(event(30));
+handlers.onPointerDown(event(0,'mouse')); handlers.onPointerUp(event());
+handlers.onPointerDown(event(0,'touch',true)); handlers.onPointerUp(event());
+handlers.onPointerDown(event()); handlers.onPointerCancel(); handlers.onPointerUp(event());
+assert.equal(opened,1);
+console.log('PASS: group order, authorization and touch tap/scroll/control/cancel behavior');

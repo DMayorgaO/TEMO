@@ -671,6 +671,7 @@ export class TransactionsService {
       // Recupera primero el arqueo propio de la transaccion y conserva compatibilidad con grupos antiguos.
       const cashRows = await client.query<{
         tipo: string;
+        shared: boolean;
         moneda: CurrencyCode;
         monto_esperado: string;
         tipo_tasa: RateKind | null;
@@ -681,6 +682,7 @@ export class TransactionsService {
       } & QueryResultRow>(
         `select
            a.tipo,
+           (a.id_transaccion is null) as shared,
            m.codigo as moneda,
            a.monto_esperado,
            a.tipo_tasa,
@@ -734,6 +736,8 @@ export class TransactionsService {
           sell: Number(transaction.tasa_venta_usada),
         },
         settlement: {
+          shared: cashRows.rows.some((cashRow) => cashRow.shared),
+          primaryDirection: cashRows.rows.some((cashRow) => cashRow.tipo === 'TRANSACCION_ENTREGADO') ? 'SALE' : 'ENTRA',
           primaryRateKind,
           changeRateKind,
           expectedChange,
@@ -742,6 +746,32 @@ export class TransactionsService {
         },
       };
     });
+  }
+
+  async groupDetail(transactionId: string, user: AuthenticatedUser) {
+    const selected = await this.detail(transactionId, user);
+    const members = await this.db.query<{ id_transaccion: string } & QueryResultRow>(
+      `select id_transaccion from temo.transacciones
+       where id_grupo_transacciones = $1 order by orden_grupo, id_transaccion`,
+      [selected.transaction.id_grupo_transacciones],
+    );
+    const details = [];
+    // Authorize every member; never infer group membership from client-side filters.
+    for (const member of members.rows) {
+      details.push(member.id_transaccion === transactionId ? selected : await this.detail(member.id_transaccion, user));
+    }
+    const compensations = await this.db.query(
+      `select pp.codigo_pendiente, ap.monto, m.codigo as moneda
+       from temo.abonos_pendientes ap
+       join temo.pagos_pendientes pp using (id_pendiente)
+       join temo.monedas m on m.id_moneda = ap.id_moneda
+       join temo.transacciones t on t.id_transaccion = ap.id_transaccion
+       where t.id_grupo_transacciones = $1
+         and ap.observaciones = 'Compensación con saldo a favor de una transacción en curso'
+       order by pp.codigo_pendiente`,
+      [selected.transaction.id_grupo_transacciones],
+    );
+    return { details, compensations: compensations.rows };
   }
 
   update(

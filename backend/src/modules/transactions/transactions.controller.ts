@@ -174,6 +174,11 @@ export class TransactionsController {
     return this.transactions.detail(id, request.user);
   }
 
+  @Get(':id/group-detail')
+  groupDetail(@Param('id') id: string, @Req() request: { user: AuthenticatedUser }) {
+    return this.transactions.groupDetail(id, request.user);
+  }
+
   @Get('pending')
   pending(@Req() request: { user: AuthenticatedUser }) {
     return this.transactions.listPending(request.user);
