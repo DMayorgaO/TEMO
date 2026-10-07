@@ -104,6 +104,11 @@ try {
 const backend = launch(['backend/dist/main.js'], 'backend', {
   DATABASE_URL: databaseUrl, DATABASE_SSL: 'false', DATABASE_SSL_CA_PATH: '', DATABASE_SSL_CA_BASE64: '',
   PORT: '4187', BACKEND_PORT: '4187', AUTH_SECRET: randomBytes(48).toString('hex'),
+  MFA_ENCRYPTION_KEY: (() => {
+    const keyPath = path.join(runtime, 'mfa-key');
+    if (!existsSync(keyPath)) writeFileSync(keyPath, randomBytes(32).toString('base64'), { mode: 0o600, flag: 'wx' });
+    return readFileSync(keyPath, 'utf8').trim();
+  })(),
   CORS_ORIGINS: 'http://localhost:3187,http://127.0.0.1:3187', APP_ENV: 'development',
 });
 let frontend;

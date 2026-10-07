@@ -1,6 +1,6 @@
 # Validacion del primer paquete de seguridad
 
-Fecha: 2026-10-06. Solo desarrollo, sin despliegue.
+Fecha: 2026-10-06. Validado en desarrollo y desplegado a produccion con autorizacion del usuario.
 
 ## Cambios candidatos
 
@@ -8,6 +8,14 @@ Fecha: 2026-10-06. Solo desarrollo, sin despliegue.
 - Lecturas de usuarios, roles y comisiones solo Administrador; catalogo operativo de cuentas limitado para Cajero.
 - Cache operativa por sesion; limpieza al salir y proteccion contra respuestas tardias de catalogos.
 - Respuestas API no-store; CORS sin configuracion no acepta origenes arbitrarios.
+
+## Despliegue verificado
+
+- Commit f2ae403fa535299f9dcad45fed66623e7cd33cca publicado en origin/main y origin/develop; Render sirve la nueva web y API.
+- Web https://temo-web-7k9m.onrender.com/: bundle index-CQti_Vs9.js con marcador de cache de sesion nuevo.
+- API: salud 200; consulta anonima de cuentas 401 con Cache-Control: no-store. CORS autoriza el origen exacto de la web y no autoriza el origen externo probado.
+- Sin migraciones ni modificaciones de registros financieros de produccion. Las pruebas autenticadas por rol se realizaron en preview; no se afirma una comprobacion autenticada en produccion.
+- Version anterior de codigo: be4e978. Una eventual reversion debe conservar los registros nuevos de la base.
 
 ## Regresion financiera automatizada
 

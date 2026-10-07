@@ -3,6 +3,7 @@ import { BadRequestException, HttpException, HttpStatus, Injectable, Logger, Una
 import { ConfigService } from '@nestjs/config';
 import { QueryResultRow } from 'pg';
 import { DatabaseService } from '../database/database.service';
+import { MfaService } from './mfa.service';
 
 type AuthUserRow = QueryResultRow & {
   id: string; role_id: string; role_code: string; role_name: string;
@@ -10,7 +11,7 @@ type AuthUserRow = QueryResultRow & {
   session_version: number; profile_photo?: string | null;
   password_valid?: boolean; blocked_until?: Date | null;
 };
-type AccessTokenPayload = { sub: string; username: string; version: number; iat: number; exp: number };
+type AccessTokenPayload = { sub: string; username: string; version: number; iat: number; exp: number; mfa?: boolean };
 export type AuthenticatedUser = {
   id: string; fullName: string; username: string; roleId: string; roleCode: string;
   roleName: string; permissions: string[]; mustChangePassword: boolean; sessionVersion: number;
@@ -28,7 +29,7 @@ export class AuthService {
   private readonly resendApiKey: string;
   private readonly passwordResetEmailFrom: string;
 
-  constructor(private readonly db: DatabaseService, config: ConfigService) {
+  constructor(private readonly db: DatabaseService, config: ConfigService, private readonly mfa: MfaService) {
     this.secret = config.get<string>('AUTH_SECRET')?.trim() ?? '';
     if (this.secret.length < 32) throw new Error('AUTH_SECRET debe contener al menos 32 caracteres.');
     const configuredHours = Number(config.get<string>('AUTH_TOKEN_HOURS', '8'));
@@ -173,6 +174,23 @@ export class AuthService {
     }
 
     const user = await this.buildAuthenticatedUser(userRow);
+    if (user.roleCode === 'JEFA') {
+      return this.mfa.begin(user);
+    }
+    return this.completeLogin(user, safeIp, safeAgent);
+  }
+
+  async verifyMfa(challenge: string, code: string, recoveryCode: string, ip: string, agent: string) {
+    const verified = await this.mfa.verify(challenge, code, recoveryCode, ip, agent);
+    const identity = (await this.db.query<{ username: string } & QueryResultRow>(
+      `select usuario as username from temo.usuarios where id_usuario=$1`, [verified.userId])).rows[0];
+    if (!identity) throw new UnauthorizedException('La sesion no es valida.');
+    const user = await this.loadUser(verified.userId, identity.username);
+    if (user.roleCode !== 'JEFA' || user.sessionVersion !== verified.sessionVersion) throw new UnauthorizedException('La sesion no es valida.');
+    return { ...await this.completeLogin(user, this.normalizeIp(ip), agent.slice(0, 1000)), recoveryCodes: verified.recoveryCodes };
+  }
+
+  private async completeLogin(user: AuthenticatedUser, safeIp: string, safeAgent: string) {
     const token = this.issueToken(user);
     await this.db.transaction(async (client) => {
       await client.query(
@@ -183,7 +201,7 @@ export class AuthService {
         `insert into temo.intentos_inicio_sesion
            (usuario_normalizado, direccion_ip, exitoso, agente_usuario)
          values ($1, nullif($2, '')::inet, true, nullif($3, ''))`,
-        [normalizedUsername, safeIp, safeAgent],
+        [user.username.toLowerCase(), safeIp, safeAgent],
       );
       await client.query(
         `insert into temo.bitacora
@@ -270,6 +288,11 @@ export class AuthService {
     const payload = this.verifyToken(token);
     const user = await this.loadUser(payload.sub, payload.username);
     if (user.sessionVersion !== payload.version) throw new UnauthorizedException('La sesion ya no es valida. Inicie sesion nuevamente.');
+    if (user.roleCode === 'JEFA') {
+      if (payload.mfa !== true) throw new UnauthorizedException('Complete la verificacion en dos pasos.');
+      const enabled = await this.db.query(`select 1 from temo.usuario_mfa where id_usuario=$1`, [user.id]);
+      if (!enabled.rowCount) throw new UnauthorizedException('Complete la verificacion en dos pasos.');
+    }
     return user;
   }
 
@@ -305,7 +328,7 @@ export class AuthService {
   private issueToken(user: AuthenticatedUser) {
     const now = Math.floor(Date.now() / 1000);
     return this.signToken({ sub: user.id, username: user.username, version: user.sessionVersion,
-      iat: now, exp: now + this.tokenLifetimeSeconds });
+      iat: now, exp: now + this.tokenLifetimeSeconds, ...(user.roleCode === 'JEFA' ? { mfa: true } : {}) });
   }
 
   private validateNewPassword(password: string) {
@@ -362,14 +385,25 @@ export class AuthService {
     return `${header}.${body}.${this.createSignature(`${header}.${body}`)}`;
   }
   private verifyToken(token: string): AccessTokenPayload {
+    if (token.length > 4096 || !/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(token)) {
+      throw new UnauthorizedException('La sesion no es valida.');
+    }
     const [header, body, signature] = token.split('.');
     if (!header || !body || !signature) throw new UnauthorizedException('La sesion no es valida.');
     const expected = Buffer.from(this.createSignature(`${header}.${body}`));
     const received = Buffer.from(signature);
     if (expected.length !== received.length || !timingSafeEqual(expected, received)) throw new UnauthorizedException('La sesion no es valida.');
     try {
+      const decodedHeader = JSON.parse(Buffer.from(header, 'base64url').toString('utf8'));
+      if (decodedHeader.alg !== 'HS256' || decodedHeader.typ !== 'JWT') throw new Error();
       const payload = JSON.parse(Buffer.from(body, 'base64url').toString('utf8')) as AccessTokenPayload;
-      if (!payload.sub || !payload.username || !Number.isInteger(payload.version) || payload.exp <= Math.floor(Date.now() / 1000)) throw new Error();
+      const now = Math.floor(Date.now() / 1000);
+      if (typeof payload.sub !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(payload.sub)
+        || typeof payload.username !== 'string' || !payload.username.trim() || payload.username.length > 256
+        || !Number.isSafeInteger(payload.version) || payload.version < 0
+        || !Number.isSafeInteger(payload.iat) || !Number.isSafeInteger(payload.exp)
+        || payload.iat < 0 || payload.iat > now + 30 || payload.exp <= now
+        || payload.exp <= payload.iat || payload.exp - payload.iat > 24 * 60 * 60) throw new Error();
       return payload;
     } catch { throw new UnauthorizedException('La sesion vencio o no es valida.'); }
   }

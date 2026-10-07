@@ -51,7 +51,7 @@ export class TransfersService {
        order by t.fecha_apertura desc`,
       [canManageAnyShift, user.id],
     );
-    const accounts = await this.db.query(
+    const accounts = canManageAnyShift ? await this.db.query(
       `select cb.id_cuenta as id, cb.alias, m.codigo as currency, e.nombre_corto as entity, cs.id_sucursal as branch_id
        from temo.cuentas_bancarias cb
        join temo.monedas m on m.id_moneda = cb.id_moneda
@@ -59,7 +59,7 @@ export class TransfersService {
        left join temo.cuentas_sucursales cs on cs.id_cuenta = cb.id_cuenta
        where cb.estado = 'ACTIVO'
        order by e.nombre_corto, m.codigo, cb.consecutivo`,
-    );
+    ) : { rows: [] };
     return { shifts: shifts.rows, accounts: accounts.rows };
   }
 

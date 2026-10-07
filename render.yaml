@@ -24,6 +24,8 @@ services:
         value: "5"
       - key: AUTH_SECRET
         generateValue: true
+      - key: MFA_ENCRYPTION_KEY
+        sync: false
       - key: CORS_ORIGINS
         sync: false
 
@@ -44,6 +46,12 @@ services:
       - key: VITE_SESSION_IDLE_MINUTES
         value: "30"
     headers:
+      - path: /*
+        name: Content-Security-Policy
+        value: "default-src 'none'; base-uri 'none'; object-src 'none'; frame-src 'none'; form-action 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self' https://temo-api.onrender.com; frame-ancestors 'none'"
+      - path: /*
+        name: X-Frame-Options
+        value: DENY
       - path: /*
         name: X-Content-Type-Options
         value: nosniff

@@ -2,6 +2,13 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 const { CatalogsController } = require('../dist/modules/catalogs/catalogs.controller');
 
+test('branches: rejects unsupported roles before querying', async () => {
+  let queries = 0;
+  const controller = new CatalogsController({ query: async () => { queries++; return { rows: [] }; } }, {});
+  await assert.rejects(controller.sucursales({ user: { id: 'unknown', roleCode: 'OTHER' } }), error => error.getStatus() === 403);
+  assert.equal(queries, 0);
+});
+
 for (const method of ['roles', 'usuarios', 'reglasComisiones']) {
   test(`${method}: denies cashier and unknown roles before querying`, async () => {
     let queries = 0;
@@ -52,6 +59,14 @@ test('preview database: scoped accounts match independently authorized accounts'
               union select id_sucursal from temo.turnos where id_cajero=$1 and estado in ('ABIERTO','PENDIENTE_APROBACION'))))`, [user.id]);
       assert.deepEqual(accounts.map((row) => row.id).sort(), allowed.rows.map((row) => row.id).sort());
       assert.ok(accounts.every((row) => row.numero_cuenta === ''));
+      const branches = await controller.sucursales({ user: { id: user.id, roleCode: 'CAJERO' } });
+      const authorizedBranches = await client.query(`select s.id_sucursal as id from temo.sucursales s
+        where s.estado='ACTIVO' and (exists(select 1 from temo.usuarios_sucursales a where a.id_sucursal=s.id_sucursal and a.id_usuario=$1)
+          or exists(select 1 from temo.turnos t where t.id_sucursal=s.id_sucursal and t.id_cajero=$1 and t.estado in ('ABIERTO','PENDIENTE_APROBACION')))`, [user.id]);
+      assert.deepEqual(branches.map(row=>row.id).sort(), authorizedBranches.rows.map(row=>row.id).sort());
+      assert.ok(branches.every(row=>['cajeros','cajero_ids','cuentas','cuenta_ids'].every(field=>row[field]==='')));
+      const branchIds = new Set(authorizedBranches.rows.map(row=>row.id));
+      assert.ok(accounts.every(row=>row.sucursal_ids.split(', ').filter(Boolean).every(id=>branchIds.has(id))));
     }
     const admin = await controller.cuentasBancarias({ user: { id: users.rows[0].id, roleCode: 'JEFA' } });
     const total = await client.query('select count(*)::int as total from temo.cuentas_bancarias');
@@ -67,6 +82,17 @@ test('preview database: scoped accounts match independently authorized accounts'
 });
 
 test('HTTP: anonymous is denied, cashier restricted, administrator allowed', { skip: !process.env.TEMO_TEST_PREVIEW }, async () => {
+  const { Client } = require('pg');
+  const { randomUUID, randomBytes, createHash } = require('node:crypto');
+  const { TOTP } = require('otpauth');
+  const { MfaSecretVault } = require('../dist/modules/auth/mfa-secret-vault');
+  const mfaKey = randomBytes(32).toString('base64');
+  const database = new Client({ connectionString: 'postgresql://temo_preview@127.0.0.1:55433/temo_preview' });
+  await database.connect();
+  const adminUsername = `mfa_http_${randomUUID().replaceAll('-', '')}`;
+  const adminId = (await database.query(`insert into temo.usuarios(id_rol,nombres,apellidos,usuario,contrasena_hash,debe_cambiar_contrasena)
+    select id_rol,'MFA','TEST',$1,crypt($2,gen_salt('bf',4)),false from temo.roles where codigo='JEFA' returning id_usuario`,
+  [adminUsername, 'TemoPruebas2026!'])).rows[0].id_usuario;
   const { spawn } = require('node:child_process');
   const { once } = require('node:events');
   const { createServer } = require('node:net');
@@ -80,6 +106,7 @@ test('HTTP: anonymous is denied, cashier restricted, administrator allowed', { s
       DATABASE_SSL: 'false', DATABASE_SSL_CA_PATH: '', DATABASE_SSL_CA_BASE64: '',
       PORT: String(port), BACKEND_PORT: String(port), APP_ENV: 'development',
       AUTH_SECRET: 'isolated-catalog-security-test-secret-2026', CORS_ORIGINS: 'http://127.0.0.1:3187',
+      MFA_ENCRYPTION_KEY: mfaKey,
     },
   });
   const exited = once(child, 'exit');
@@ -93,19 +120,46 @@ test('HTTP: anonymous is denied, cashier restricted, administrator allowed', { s
       await new Promise((resolve) => setTimeout(resolve, 250));
     }
     assert.ok(ready, 'isolated local API must start');
-    const routes = ['usuarios', 'roles', 'reglas-comisiones', 'cuentas-bancarias'];
+    const health = await fetch(`${base}/health`);
+    assert.ok(health.headers.get('content-security-policy').includes("frame-ancestors 'none'"));
+    assert.equal(health.headers.get('x-frame-options'), 'DENY');
+    assert.equal(health.headers.get('x-content-type-options'), 'nosniff');
+    const routes = ['usuarios', 'roles', 'reglas-comisiones', 'cuentas-bancarias', 'sucursales'];
     for (const route of routes) assert.equal((await fetch(`${base}/catalogs/${route}`)).status, 401);
-    for (const username of ['cajero.pruebas', 'admin.pruebas']) {
+    for (const username of ['cajero.pruebas', adminUsername]) {
       const login = await fetch(`${base}/auth/login`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ username, password: 'TemoPruebas2026!' }) });
       assert.ok(login.ok);
-      const session = await login.json();
+      let session = await login.json();
+      if (session.mfaRequired) {
+        assert.equal(session.token, undefined);
+        assert.equal((await fetch(`${base}/catalogs/usuarios`, { headers: { Authorization: `Bearer ${session.challenge}` } })).status, 401);
+        const row = (await database.query(`select secreto_cifrado from temo.desafios_mfa where token_hash=$1`,
+          [createHash('sha256').update(session.challenge).digest('hex')])).rows[0];
+        const secret = new MfaSecretVault(mfaKey).decrypt(adminId, row.secreto_cifrado);
+        const checked = await fetch(`${base}/auth/mfa/verify`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ challenge: session.challenge, code: new TOTP({ secret }).generate() }) });
+        assert.equal(checked.status, 201);
+        session = await checked.json();
+        assert.equal(session.recoveryCodes.length, 8);
+        const challenges = [];
+        for (let index = 0; index < 2; index++) {
+          const loginAgain = await fetch(`${base}/auth/login`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ username, password: 'TemoPruebas2026!' }) });
+          challenges.push((await loginAgain.json()).challenge);
+        }
+        const concurrent = await Promise.all(challenges.map(challenge => fetch(`${base}/auth/mfa/verify`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ challenge, recoveryCode: session.recoveryCodes[1] }),
+        })));
+        assert.deepEqual(concurrent.map(response => response.status).sort(), [201, 401]);
+      }
       const token = session.token ?? session.accessToken;
       assert.ok(token);
       const headers = { Authorization: `Bearer ${token}` };
       for (const route of routes) {
         const response = await fetch(`${base}/catalogs/${route}`, { headers });
-        assert.equal(response.status, username === 'cajero.pruebas' && route !== 'cuentas-bancarias' ? 403 : 200);
+        assert.equal(response.status, username === 'cajero.pruebas' && !['cuentas-bancarias','sucursales'].includes(route) ? 403 : 200);
         assert.equal(response.headers.get('cache-control'), 'no-store');
         if (username === 'cajero.pruebas' && route === 'cuentas-bancarias') {
           assert.ok((await response.json()).every((row) => row.numero_cuenta === ''));
@@ -119,5 +173,8 @@ test('HTTP: anonymous is denied, cashier restricted, administrator allowed', { s
   } finally {
     if (child.exitCode === null) child.kill();
     await exited;
+    await database.query(`delete from temo.bitacora where id_usuario=$1`, [adminId]);
+    await database.query(`delete from temo.usuarios where id_usuario=$1`, [adminId]);
+    await database.end();
   }
 });

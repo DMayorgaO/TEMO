@@ -61,6 +61,13 @@ export class AuthController {
     return { user: request.user };
   }
 
+  @Public()
+  @Post('mfa/verify')
+  verifyMfa(@Body() body: { challenge?: unknown; code?: unknown; recoveryCode?: unknown }, @Req() request: HttpRequest) {
+    return this.auth.verifyMfa(String(body.challenge ?? ''), String(body.code ?? ''), String(body.recoveryCode ?? ''),
+      request.ip ?? '', String(request.headers['user-agent'] ?? ''));
+  }
+
   @Post('change-password')
   changePassword(@Body() body: ChangePasswordRequest, @Req() request: HttpRequest) {
     return this.auth.changePassword(

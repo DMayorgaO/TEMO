@@ -19,7 +19,10 @@ async function bootstrap() {
 
   const server = app.getHttpAdapter().getInstance() as { set: (key: string, value: unknown) => void };
   server.set('trust proxy', 1);
-  app.use(helmet({ contentSecurityPolicy: false }));
+  app.use(helmet({ frameguard: { action: 'deny' }, contentSecurityPolicy: {
+    useDefaults: false,
+    directives: { defaultSrc: ["'none'"], baseUri: ["'none'"], frameAncestors: ["'none'"], formAction: ["'none'"] },
+  } }));
   // Incluso los rechazos tempranos deben ser legibles desde el frontend.
   app.enableCors({
     origin: configuredOrigins.length ? configuredOrigins : false,
@@ -40,6 +43,10 @@ async function bootstrap() {
     message: { statusCode: 429, message: 'Demasiados intentos. Intente nuevamente en 15 minutos.' },
   }));
   // Limita solicitudes y validaciones de recuperación para evitar abuso del correo y de códigos.
+  app.use('/api/auth/mfa', rateLimit({
+    windowMs: 15 * 60 * 1000, limit: 30, standardHeaders: 'draft-7', legacyHeaders: false,
+    message: { statusCode: 429, message: 'Demasiados intentos de verificacion. Espere 15 minutos.' },
+  }));
   app.use('/api/auth/password-recovery', rateLimit({
     windowMs: 15 * 60 * 1000,
     limit: 10,

@@ -92,6 +92,10 @@ test('financial regression in local preview with rollback', { skip: !process.env
     await t.test('Another cashier cannot read or void this transaction', async () => {
       const outsider = { id: admin.id, roleCode: 'CAJERO' };
       await assert.rejects(transactions.detail(deposit.transactions[0].id, outsider), (error) => [403, 404].includes(error.getStatus()));
+      await assert.rejects(shifts.detail(shiftId, outsider), (error) => [403,404].includes(error.getStatus()));
+      const context = await transfers.context(cashier);
+      assert.deepEqual(context.accounts, []);
+      assert.ok(context.shifts.every(row=>row.id===shiftId));
       await assert.rejects(transactions.void(deposit.transactions[0].id, outsider), (error) => [403, 404].includes(error.getStatus()));
     });
     await t.test('Multiple withdrawal and deposit net to cash delivered; void restores cash', async () => {

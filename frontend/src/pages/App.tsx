@@ -55,6 +55,8 @@ import {
   X,
 } from 'lucide-react';
 import { AdminDashboard } from '../components/AdminDashboard';
+import { MfaLogin } from '../components/MfaLogin';
+import type { MfaChallenge } from '../components/MfaLogin';
 
 type ScreenId =
   | 'login'
@@ -451,7 +453,7 @@ async function apiRequest<T>(path: string, init?: RequestInit): Promise<T> {
       payload && typeof payload === 'object' && 'message' in payload
         ? payload.message
         : null;
-    if (response.status === 401 && path !== '/auth/login') {
+    if (response.status === 401 && path !== '/auth/login' && path !== '/auth/mfa/verify') {
       window.dispatchEvent(new Event('temo:session-expired'));
     }
     const readableMessage = Array.isArray(message)
@@ -4203,6 +4205,7 @@ function LoginScreen({ onLogin }: { onLogin: (response: LoginResponse) => void }
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isRecoveryOpen, setIsRecoveryOpen] = useState(false);
   const [isApiReady, setIsApiReady] = useState(false);
+  const [mfaChallenge, setMfaChallenge] = useState<MfaChallenge | null>(null);
   const loginRef = useAutoFocusFirstField<HTMLFormElement>();
 
   useEffect(() => {
@@ -4225,10 +4228,15 @@ function LoginScreen({ onLogin }: { onLogin: (response: LoginResponse) => void }
     setSuccess('');
     setIsSubmitting(true);
     try {
-      const response = await apiRequest<LoginResponse>('/auth/login', {
+      const response = await apiRequest<LoginResponse | MfaChallenge>('/auth/login', {
         method: 'POST',
         body: JSON.stringify({ username: username.trim(), password }),
       });
+      setPassword('');
+      if ('mfaRequired' in response) {
+        setMfaChallenge(response);
+        return;
+      }
       if (rememberMe) {
         window.localStorage.setItem(rememberedUsernameStorageKey, response.user.username);
       } else {
@@ -4251,7 +4259,16 @@ function LoginScreen({ onLogin }: { onLogin: (response: LoginResponse) => void }
           <span>Transacciones Económicas Miscelánea Olivera</span>
         </div>
 
-        <div className="login-heading">
+        {mfaChallenge ? <MfaLogin<LoginResponse & { recoveryCodes?: string[] }>
+          challenge={mfaChallenge}
+          verify={(code, recoveryCode) => apiRequest('/auth/mfa/verify', { method: 'POST', body: JSON.stringify({ challenge: mfaChallenge.challenge, code, recoveryCode }) })}
+          complete={response => {
+            if (rememberMe) window.localStorage.setItem(rememberedUsernameStorageKey, response.user.username);
+            else window.localStorage.removeItem(rememberedUsernameStorageKey);
+            setMfaChallenge(null); onLogin(response);
+          }}
+          cancel={() => { setMfaChallenge(null); setError(''); }}
+        /> : <><div className="login-heading">
           <h1 id="login-title">Iniciar sesión</h1>
         </div>
 
@@ -4301,6 +4318,7 @@ function LoginScreen({ onLogin }: { onLogin: (response: LoginResponse) => void }
             {isSubmitting ? (isApiReady ? 'Ingresando...' : 'Iniciando sistema...') : 'Ingresar'}
           </button>
         </form>
+        </>}
       </section>
       {/* El diálogo conserva el diseño del sistema y devuelve al inicio al completar el cambio. */}
       {isRecoveryOpen && (

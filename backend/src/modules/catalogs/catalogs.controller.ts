@@ -150,7 +150,14 @@ export class CatalogsController {
        join temo.entidades_bancarias e on e.id_entidad = c.id_entidad
        join temo.monedas m on m.id_moneda = c.id_moneda
        left join temo.cuentas_sucursales cs on cs.id_cuenta = c.id_cuenta
-       left join temo.sucursales s on s.id_sucursal = cs.id_sucursal
+       left join temo.sucursales s on s.id_sucursal = cs.id_sucursal and (
+         $1::boolean or (s.estado = 'ACTIVO' and ($3::boolean
+         or exists (select 1 from temo.usuarios_sucursales assignment
+                    where assignment.id_sucursal = s.id_sucursal and assignment.id_usuario = $2::uuid)
+         or exists (select 1 from temo.turnos shift
+                    where shift.id_sucursal = s.id_sucursal and shift.id_cajero = $2::uuid
+                      and shift.estado in ('ABIERTO', 'PENDIENTE_APROBACION'))
+       )))
        where $1::boolean or (
          c.estado = 'ACTIVO' and e.estado = 'ACTIVO' and m.estado = 'ACTIVO'
          and (
@@ -178,24 +185,38 @@ export class CatalogsController {
   }
 
   @Get('sucursales')
-  async sucursales() {
+  async sucursales(@Req() request: { user: AuthenticatedUser }) {
+    const administrator = request.user.roleCode === 'JEFA';
+    const transferOperator = request.user.roleCode === 'TRANSFERISTA';
+    if (!administrator && !transferOperator && request.user.roleCode !== 'CAJERO') {
+      throw new ForbiddenException('El perfil no tiene acceso a este catalogo.');
+    }
     const result = await this.db.query(
        `select
          s.id_sucursal as id,
          s.codigo,
          s.nombre,
-         coalesce(string_agg(distinct u.nombre_completo, ', ') filter (where u.id_usuario is not null), '') as cajeros,
-         coalesce(string_agg(distinct u.id_usuario::text, ', ') filter (where u.id_usuario is not null), '') as cajero_ids,
-         coalesce(string_agg(distinct c.alias, ', ') filter (where c.id_cuenta is not null), '') as cuentas,
-         coalesce(string_agg(distinct c.id_cuenta::text, ', ') filter (where c.id_cuenta is not null), '') as cuenta_ids,
+         case when $1::boolean then coalesce(string_agg(distinct u.nombre_completo, ', ') filter (where u.id_usuario is not null), '') else '' end as cajeros,
+         case when $1::boolean then coalesce(string_agg(distinct u.id_usuario::text, ', ') filter (where u.id_usuario is not null), '') else '' end as cajero_ids,
+         case when $1::boolean then coalesce(string_agg(distinct c.alias, ', ') filter (where c.id_cuenta is not null), '') else '' end as cuentas,
+         case when $1::boolean then coalesce(string_agg(distinct c.id_cuenta::text, ', ') filter (where c.id_cuenta is not null), '') else '' end as cuenta_ids,
          s.estado
        from temo.sucursales s
        left join temo.usuarios_sucursales us on us.id_sucursal = s.id_sucursal
        left join temo.usuarios u on u.id_usuario = us.id_usuario and u.estado = 'ACTIVO'
        left join temo.cuentas_sucursales cs on cs.id_sucursal = s.id_sucursal
        left join temo.cuentas_bancarias c on c.id_cuenta = cs.id_cuenta
+       where $1::boolean or (s.estado = 'ACTIVO' and (
+         $3::boolean
+         or exists (select 1 from temo.usuarios_sucursales assignment
+                    where assignment.id_sucursal = s.id_sucursal and assignment.id_usuario = $2::uuid)
+         or exists (select 1 from temo.turnos shift
+                    where shift.id_sucursal = s.id_sucursal and shift.id_cajero = $2::uuid
+                      and shift.estado in ('ABIERTO', 'PENDIENTE_APROBACION'))
+       ))
        group by s.id_sucursal, s.codigo, s.nombre, s.estado
        order by s.nombre`,
+      [administrator, request.user.id, transferOperator],
     );
 
     return result.rows;

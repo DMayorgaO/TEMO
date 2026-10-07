@@ -2,6 +2,8 @@
 
 Fecha: 2026-10-07. Despliegue autorizado por el usuario.
 
+Desplegado y verificado: d45772cc145695580ad3be0ca73ee7630a82c957 en main/develop. API /api/health devuelve esta revision y estado200; web sirve index-B3I8GfnX.js con el nuevo formulario. Consulta anonima /api/dollar-purchases rechazada con401 y Cache-Control:no-store. No se realizaron escrituras financieras ni inicio de sesion en produccion durante la verificacion.
+
 ## Causas y correcciones
 
 - Compra de dolares solo reconstruia transacciones ordinarias. Ahora incluye abonos efectivos de pendientes USD por turno de aplicacion y fecha del abono. Distribuye la cobertura USD una sola vez por lote; excluye porciones digitales y compensaciones sin efectivo.

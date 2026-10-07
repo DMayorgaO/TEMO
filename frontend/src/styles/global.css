@@ -1207,6 +1207,22 @@ textarea:disabled {
   text-align: center;
 }
 
+.login-panel:has(.mfa-content) { padding: 24px; }
+.login-panel:has(.mfa-content) .login-brand { padding-bottom: 12px; gap: 6px; }
+.login-panel:has(.mfa-content) .login-brand img { height: 64px; width: 80px; }
+.mfa-content { display: grid; gap: 10px; text-align: center; justify-items: center; width: 100%; padding-top: 14px; }
+.mfa-content h1 { margin: 0; font-size: 24px; }
+.mfa-content .login-form { width: 100%; }
+.mfa-content .muted-copy { margin: 0; line-height: 1.5; }
+.mfa-shield { color: #137f75; }
+.mfa-qr { width: 208px; height: 208px; max-width: 100%; object-fit: contain; }
+.mfa-content .form-field { text-align: center; }
+.mfa-otp-input { text-align: center; font-size: 26px; font-variant-numeric: tabular-nums; }
+.mfa-recovery-input { text-align: center; font-family: monospace; font-size: 14px; }
+.mfa-recovery-codes { display: grid; gap: 6px; width: 100%; padding: 12px; background: #e7f4f0; border-radius: 6px; }
+.mfa-recovery-codes code { font-size: 13px; overflow-wrap: anywhere; }
+.mfa-content .remember-control { justify-content: center; }
+.preview-banner + .login-page { min-height: calc(100dvh - 54px); }
 .login-page {
   align-items: center;
   background: #edf3f1;
@@ -4619,6 +4635,7 @@ tbody tr:hover td {
 }
 
 @media (max-width: 640px) {
+  .login-panel:has(.mfa-content) { margin-top: 16px; }
   .login-page {
     align-items: start;
     padding: 14px;
