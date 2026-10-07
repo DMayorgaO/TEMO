@@ -1713,14 +1713,14 @@ export class TransactionsService {
     await this.detail(source.rows[0].id_transaccion, user);
     const payments = await this.db.query(`select ap.id_abono,ap.id_lote_liquidacion,ap.id_pendiente as pending_database_id,ap.monto,m.codigo as moneda,
       pp.codigo_pendiente,cp.nombre as contraparte,ap.observaciones,ap.id_transaccion,
-      pp.id_transaccion as original_transaction_id,ap.fecha_abono
+      pp.id_transaccion as original_transaction_id,ap.fecha_abono,ap.tasa_compra_usada,ap.tasa_venta_usada
       from temo.abonos_pendientes ap join temo.pagos_pendientes pp using(id_pendiente)
       join temo.contrapartes cp using(id_contraparte) join temo.monedas m on m.id_moneda=ap.id_moneda
-      where ap.id_lote_liquidacion in(select id_lote_liquidacion from temo.abonos_pendientes where id_pendiente=$1)
+      where ap.id_pendiente=$1 or ap.id_lote_liquidacion in(select id_lote_liquidacion from temo.abonos_pendientes where id_pendiente=$1)
       order by ap.fecha_abono,pp.codigo_pendiente,ap.id_abono`, [pendingId]);
     const details = [];
-    for (const id of new Set(payments.rows.map(row => row.original_transaction_id))) details.push(await this.detail(id, user));
-    const cash = await this.db.query(`select ap.id_lote_liquidacion,a.tipo,m.codigo as moneda,
+    for (const id of new Set(payments.rows.flatMap(row => [row.original_transaction_id, row.id_transaccion]))) details.push(await this.detail(id, user));
+    const cash = await this.db.query(`select coalesce(ap.id_lote_liquidacion,ap.id_abono) as id_lote_liquidacion,a.tipo,m.codigo as moneda,
       d.valor as denomination,ad.montones_25 as piles25,ad.sueltos as loose
       from temo.arqueos a join temo.abonos_pendientes ap on ap.id_abono=a.id_abono_pendiente
       join temo.monedas m on m.id_moneda=a.id_moneda join temo.arqueos_denominaciones ad using(id_arqueo)
@@ -1736,7 +1736,7 @@ export class TransactionsService {
         s.estado as shift_state,s.id_cajero from temo.abonos_pendientes ap
         join temo.pagos_pendientes pp using(id_pendiente)
         join temo.turnos s on s.id_turno=ap.id_turno_aplicacion
-        where ap.id_lote_liquidacion in(select id_lote_liquidacion from temo.abonos_pendientes where id_pendiente=$1)
+        where ap.id_pendiente=$1 or ap.id_lote_liquidacion in(select id_lote_liquidacion from temo.abonos_pendientes where id_pendiente=$1)
         order by ap.id_abono for update of s,pp,ap`, [pendingId]);
       const ids = payments.rows.map(row => row.id_abono);
       if (new Set(expectedIds).size !== expectedIds.length || ids.length !== expectedIds.length || ids.some(id => !expectedIds.includes(id))) {

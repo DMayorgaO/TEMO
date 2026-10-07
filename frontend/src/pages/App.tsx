@@ -315,7 +315,8 @@ type TransactionGroupDetailApi = {
   compensations: Array<{ codigo_pendiente: string; monto: string; moneda: CashCurrency; contraparte?: string; observaciones?: string; id_transaccion?: string; id_abono?: string; pending_database_id?: string }>;
 };
 
-type PendingPaymentDetailApi = TransactionGroupDetailApi & {
+type PendingPaymentDetailApi = Omit<TransactionGroupDetailApi, 'compensations'> & {
+  compensations: Array<TransactionGroupDetailApi['compensations'][number] & { original_transaction_id: string; id_lote_liquidacion: string | null; fecha_abono: string; tasa_compra_usada: string; tasa_venta_usada: string }>;
   cash: Array<{ id_lote_liquidacion: string; tipo: string; moneda: CashCurrency; denomination: string; piles25: number; loose: number }>;
 };
 
@@ -3809,21 +3810,29 @@ export function App() {
 function NotificationSummary({title,items,onAccept,onReview}:{title:string;items:ShiftNotification[];onAccept:()=>Promise<void>;onReview:(item:ShiftNotification)=>Promise<void>}) {
   const [busy,setBusy]=useState(false);
   const [error,setError]=useState('');
-  const grouped = new Map<string,{label:string;currency:CashCurrency;amount:number;count:number;out:boolean}>();
+  const grouped = new Map<string,{label:string;currency:CashCurrency;amount:number;count:number;out:boolean;branches:Set<string>;cashiers:Set<string>}>();
   for (const item of items.filter(item=>item.kind==='TRANSFER_RECORDED')) {
-    const label=[item.branch,item.cashier,item.transfer_entity,item.transfer_direction==='SALE'?'Egreso':'Ingreso'].filter(Boolean).join(' · ');
+    const label=item.transfer_direction==='SALE'?'Egreso':'Ingreso';
     const currency=item.currency ?? 'NIO';
     const key=JSON.stringify([label,currency]);
-    const group=grouped.get(key) ?? {label,currency,amount:0,count:0,out:item.transfer_direction==='SALE'};
-    group.amount+=Number(item.amount || 0); group.count++; grouped.set(key,group);
+    const group=grouped.get(key) ?? {label,currency,amount:0,count:0,out:item.transfer_direction==='SALE',branches:new Set<string>(),cashiers:new Set<string>()};
+    group.amount+=Number(item.amount || 0); group.count++;
+    if(item.branch) group.branches.add(item.branch);
+    if(item.cashier) group.cashiers.add(item.cashier);
+    grouped.set(key,group);
+  }
+  const otherGroups = new Map<string, ShiftNotification[]>();
+  for (const item of items.filter(item=>item.kind!=='TRANSFER_RECORDED')) {
+    const group = otherGroups.get(item.kind) ?? [];
+    group.push(item); otherGroups.set(item.kind, group);
   }
   const run=async(action:()=>Promise<void>)=>{setBusy(true);setError('');try{await action();}catch(e){setError(e instanceof Error?e.message:'No se pudo confirmar el resumen.');}finally{setBusy(false);}};
   return <div className="modal-backdrop shift-notification-backdrop" role="dialog" aria-modal="true" aria-label={title}>
     <section className="shift-notification-modal notification-summary">
       <h2>{title}</h2><p>{items.length} notificaciones</p>
       <div className="notification-summary-list">
-        {[...grouped].map(([key,group])=><div key={key}><strong>{group.label}</strong><span>{group.count} transferencias</span><b className={`transaction-amount transaction-amount--${group.out?'out':'in'}`}>{group.out?<ArrowUpRight size={16}/>:<ArrowDownLeft size={16}/>} {formatCashCountMoney(group.amount,group.currency)}</b></div>)}
-        {items.filter(item=>item.kind!=='TRANSFER_RECORDED').map(item=><div key={item.id}><strong>{item.cashier} · {item.branch}</strong><span>{item.kind==='CLOSE_REQUEST'?'Solicitud de cierre':item.kind==='PENDING_PAID'?'Pendiente pagado':'Cierre de turno'}</span>{item.kind==='CLOSE_REQUEST'&&<button type="button" className="secondary-button" disabled={busy} onClick={()=>void run(()=>onReview(item))}>Revisar cierre</button>}</div>)}
+        {[...grouped].map(([key,group])=><div key={key}><strong>{group.label}</strong><span>{group.count} transferencias · {group.branches.size} sucursales · {group.cashiers.size} cajeros</span><b className={`transaction-amount transaction-amount--${group.out?'out':'in'}`}>{group.out?<ArrowUpRight size={16}/>:<ArrowDownLeft size={16}/>} {formatCashCountMoney(group.amount,group.currency)}</b></div>)}
+        {[...otherGroups].map(([kind,group])=><div key={kind}><strong>{kind==='CLOSE_REQUEST'?'Solicitudes de cierre':kind==='PENDING_PAID'?'Pendientes pagados':'Cierres de turno'}</strong><span>{group.length} registros</span>{kind==='CLOSE_REQUEST'&&<button type="button" className="secondary-button" disabled={busy} onClick={()=>void run(()=>onReview(group[0]))}>Revisar cierre</button>}</div>)}
       </div>
       {error&&<p role="alert" className="login-error">{error}</p>}
       <button type="button" className="primary-button" disabled={busy} onClick={()=>void run(onAccept)}>{busy?'Procesando...':'Aceptar resumen'}</button>
@@ -5668,7 +5677,27 @@ function PendingScreen({ currentUser }: { currentUser: AuthUser }) {
     setError('');
     try {
       const payments = await apiRequest<PendingPaymentDetailApi>(`/transactions/pending/${row.database_id}/payments`);
-      const groupRows = payments.details.map(mapApiTransactionDetail);
+      const sourceRows = payments.details.map(mapApiTransactionDetail);
+      const usedLots = new Set<string>();
+      const cashPayments = payments.compensations.filter(payment => payment.id_transaccion === payment.original_transaction_id);
+      const groupRows = cashPayments.length ? cashPayments.map(payment => {
+        const source = sourceRows.find(item => item.databaseId === payment.original_transaction_id)!;
+        const lot = payment.id_lote_liquidacion ?? payment.id_abono!;
+        const lines = usedLots.has(lot) ? [] : payments.cash.filter(line => line.id_lote_liquidacion === lot);
+        usedLots.add(lot);
+        const counts = (currency: CashCurrency, change: boolean) => cashCountApiLinesToDraft(lines
+          .filter(line => line.moneda === currency && (line.tipo === 'PENDIENTE_VUELTO') === change)
+          .map(line => ({denomination: Number(line.denomination), piles25: Number(line.piles25), loose: Number(line.loose)})), currency);
+        return normalizeTransactionRow({...source,
+          amountValue: payment.monto, currency: payment.moneda, pendingName: payment.contraparte ?? '',
+          exchangeRateBuy: payment.tasa_compra_usada, exchangeRateSell: payment.tasa_venta_usada,
+          cashCountNio: counts('NIO', false), cashCountUsd: counts('USD', false),
+          changeCashCountNio: counts('NIO', true), changeCashCountUsd: counts('USD', true),
+          sharedLegacy: '', digitalSettlement: '',
+          cashSettlement: '1',
+          liquidationPaymentId: payment.id_abono ?? '',
+        });
+      }).concat(sourceRows.filter(source => !cashPayments.some(payment => payment.original_transaction_id === source.databaseId))) : sourceRows;
       setDetail({ pending: row,
         row: groupRows.find(item => item.databaseId === row.transaction_database_id) ?? await loadPendingPaymentRow(row),
         ...(groupRows.length ? { groupRows, payments } : {}),
@@ -6097,7 +6126,6 @@ function PendingScreen({ currentUser }: { currentUser: AuthUser }) {
           row={detail.row}
           groupRows={detail.groupRows}
           linkedPayments={detail.payments?.compensations}
-          liquidationCash={detail.payments?.cash}
           isSaving={false}
           saveError={error}
           onCancel={() => setDetail(null)}
@@ -8974,7 +9002,6 @@ function TransactionModal({
   row,
   groupRows,
   linkedPayments = [],
-  liquidationCash,
   availableAccounts = [],
   availableMovements = [],
   accountBalances = [],
@@ -8992,7 +9019,6 @@ function TransactionModal({
   row: CrudRow;
   groupRows?: CrudRow[];
   linkedPayments?: TransactionGroupDetailApi['compensations'];
-  liquidationCash?: PendingPaymentDetailApi['cash'];
   availableAccounts?: ShiftDetail['availableAccounts'];
   availableMovements?: ShiftDetail['availableMovements'];
   accountBalances?: ShiftDetail['balances'];
@@ -9148,7 +9174,7 @@ function TransactionModal({
   // Al liquidar, el nombre identifica el pendiente pero el monto sí debe participar en el balance físico.
   const balanceDrafts = isPayment
     ? drafts.map((transactionDraft) => ({ ...transactionDraft, pendingName: '' }))
-    : drafts.map(item => item.status === 'Anulada' || item.digitalSettlement === '1' ? {...item,pendingName:'SIN EFECTIVO',amountValue:'0',cashCountNio:'{}',cashCountUsd:'{}',changeCashCountNio:'{}',changeCashCountUsd:'{}'} : item);
+    : drafts.map(item => item.status === 'Anulada' || item.digitalSettlement === '1' ? {...item,pendingName:'SIN EFECTIVO',amountValue:'0',cashCountNio:'{}',cashCountUsd:'{}',changeCashCountNio:'{}',changeCashCountUsd:'{}'} : item.cashSettlement === '1' ? {...item,pendingName:''} : item);
   const recordedCompensation = linkedPayments.reduce<Partial<Record<CashCurrency, number>>>((totals, payment) => {
     if (payment.observaciones === 'Compensación con saldo a favor de una transacción en curso') {
       totals[payment.moneda] = (totals[payment.moneda] || 0) + Number(payment.monto);
@@ -9585,7 +9611,7 @@ function TransactionModal({
                   ? 'transaction-tab--incomplete'
                   : ''
               }`}
-              key={transactionDraft.id}
+              key={transactionDraft.liquidationPaymentId || transactionDraft.id}
             >
               <button
                 type="button"
@@ -9630,15 +9656,6 @@ function TransactionModal({
         {draft.sharedLegacy === '1' && <p role="status">Arqueo original compartido: el efectivo se muestra una sola vez, en la primera operacion de su direccion; el vuelto, en la ultima. La distribucion original por pestana no fue registrada.</p>}
         {draft.digitalSettlement === '1' && <p role="status">Liquidacion digital: no registra efectivo. Al cambiar el monto se recalcula el saldo del pendiente vinculado.</p>}
         {linkedPayments.length > 0 && <section className="group-detail-step"><strong>Pendientes liquidados en este grupo</strong>{linkedPayments.map((payment,index)=><p key={index}>PEN-{String(payment.codigo_pendiente).padStart(6,'0')} · {payment.contraparte} · {formatCashCountMoney(Number(payment.monto),payment.moneda)}</p>)}</section>}
-        {liquidationCash && <section className="group-detail-step"><h3>Efectivo de la liquidacion</h3>
-          {liquidationCash.length ? <div className="table-scroll"><table><thead><tr><th>Lote</th><th>Movimiento</th><th>Denominacion</th><th>X25</th><th>Sueltos</th><th>Monto</th></tr></thead>
-            <tbody>{liquidationCash.map((line,index) => <tr key={index}>
-              <td>{[...new Set(liquidationCash.map(item => item.id_lote_liquidacion))].indexOf(line.id_lote_liquidacion)+1}</td>
-              <td>{line.tipo === 'PENDIENTE_VUELTO' ? 'Vuelto' : line.tipo === 'PENDIENTE_ENTREGADO' ? 'Entregado' : 'Recibido'}</td>
-              <td>{formatCashCountMoney(Number(line.denomination),line.moneda)}</td><td>{line.piles25}</td><td>{line.loose}</td>
-              <td>{formatCashCountMoney(Number(line.denomination)*(Number(line.piles25)*25+Number(line.loose)),line.moneda)}</td>
-            </tr>)}</tbody></table></div> : <p>Sin movimiento fisico de efectivo.</p>}
-        </section>}
         <div className="form-grid transaction-form-grid">
           <label className="form-field transaction-form-id">
             ID
@@ -9806,7 +9823,7 @@ function TransactionModal({
               {pendingCompensation && <p>Se aplicarán {formatCashCountMoney(pendingCompensation.amount, pendingCompensation.currency)} del saldo a favor, sin registrar efectivo ni movimiento digital adicional.</p>}
             </fieldset>
           )}
-          {!liquidationCash && draft.digitalSettlement !== '1' && <div className="transaction-cash-count-section">
+          {draft.digitalSettlement !== '1' && <div className="transaction-cash-count-section">
             <div
               className={`transaction-group-change-summary transaction-group-change-summary--${customerBalanceTone}`}
               aria-label={customerBalanceLabel}

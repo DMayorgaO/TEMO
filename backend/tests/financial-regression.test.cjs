@@ -6,6 +6,7 @@ const { ShiftsService } = require('../dist/modules/shifts/shifts.service');
 const { TransactionsService } = require('../dist/modules/transactions/transactions.service');
 const { TransfersService } = require('../dist/modules/transfers/transfers.service');
 const { CatalogsController } = require('../dist/modules/catalogs/catalogs.controller');
+const { DollarPurchasesService } = require('../dist/modules/dollar-purchases/dollar-purchases.service');
 const { createTransactionBatchSchema, payPendingBatchSchema } = require('../dist/modules/transactions/transaction-batch.schema');
 const { openShiftSchema } = require('../dist/modules/shifts/shifts.schema');
 
@@ -40,6 +41,7 @@ test('financial regression in local preview with rollback', { skip: !process.env
     const transactions = new TransactionsService(db);
     const transfers = new TransfersService(db);
     const catalogs = new CatalogsController(db, {});
+    const purchases = new DollarPurchasesService(db);
     const adminRow = (await client.query("select u.id_usuario as id from temo.usuarios u join temo.roles r using(id_rol) where r.codigo='JEFA' and u.estado='ACTIVO' limit 1")).rows[0];
     assert.ok(adminRow);
     const admin = { id: adminRow.id, roleCode: 'JEFA' };
@@ -127,6 +129,76 @@ test('financial regression in local preview with rollback', { skip: !process.env
       const rows = (await client.query('select estado,saldo_pendiente from temo.pagos_pendientes where id_pendiente=any($1::uuid[])', [pendingIds])).rows;
       assert.equal(rows.length, 3);
       assert.ok(rows.every((row) => row.estado === 'PAGADO' && Number(row.saldo_pendiente) === 0));
+    });
+    await t.test('USD pending paid with NIO exposes spread once; detail and reversal preserve cash', async () => {
+      const group = await transactions.createBatch(batch([{ amount: 84, currencyCode: 'USD', pendingName: 'USD REGRESSION' }], settlement()), {});
+      const pending = (await client.query('select id_pendiente as id from temo.pagos_pendientes where id_transaccion=$1', [group.transactions[0].id])).rows[0];
+      const before = await summary();
+      const cash = settlement();
+      cash.primaryRateKind = 'VENTA';
+      cash.primaryCounts.NIO = [{denomination:500,piles25:0,loose:6},{denomination:100,piles25:0,loose:1},{denomination:5,piles25:0,loose:1},{denomination:1,piles25:0,loose:3}];
+      await transactions.payPendingBatch(payPendingBatchSchema.parse({pendingIds:[pending.id],method:'EFECTIVO',rates,settlement:cash}), cashier);
+      near((await summary()).expectedCash.NIO, before.expectedCash.NIO + 3057.6);
+      const payment = (await client.query('select id_abono from temo.abonos_pendientes where id_pendiente=$1',[pending.id])).rows[0];
+      const purchase = (await purchases.list(cashier)).find(row => row.database_id === payment.id_abono);
+      assert.ok(purchase); near(purchase.monto_comprado_usd,84); near(purchase.diferencia_nio,50.4);
+      const detail = await transactions.pendingPaymentDetail(pending.id, cashier);
+      near(detail.compensations[0].tasa_venta_usada,37);
+      assert.equal(detail.cash.length,4);
+      await assert.rejects(purchases.list({id:cashier.id,roleCode:'TRANSFERISTA'}), error=>error.getStatus()===403);
+      await transactions.reopenPaymentBatch(pending.id,detail.compensations.map(row=>row.id_abono),cashier);
+      near((await summary()).expectedCash.NIO,before.expectedCash.NIO);
+      assert.ok(!(await purchases.list(cashier)).some(row=>row.database_id===payment.id_abono));
+    });
+    await t.test('Shared USD cash payment allocates USD coverage once across two pendings', async () => {
+      const ids=[];
+      for (const amount of [84,16]) {
+        const g=await transactions.createBatch(batch([{amount,currencyCode:'USD',pendingName:'USD SHARED'}],settlement()),{});
+        ids.push((await client.query('select id_pendiente as id from temo.pagos_pendientes where id_transaccion=$1',[g.transactions[0].id])).rows[0].id);
+      }
+      const before=await summary();
+      const cash=settlement(); cash.primaryRateKind='VENTA';
+      cash.primaryCounts={NIO:[{denomination:500,piles25:0,loose:3},{denomination:100,piles25:0,loose:3},{denomination:50,piles25:0,loose:1}],USD:[{denomination:50,piles25:0,loose:1}]};
+      await transactions.payPendingBatch(payPendingBatchSchema.parse({pendingIds:ids,method:'EFECTIVO',rates,settlement:cash}),cashier);
+      near((await summary()).expectedCash.NIO,before.expectedCash.NIO+3640);
+      const detail=await transactions.pendingPaymentDetail(ids[0],cashier);
+      const paymentIds=new Set(detail.compensations.map(row=>row.id_abono));
+      const rows=(await purchases.list(cashier)).filter(row=>paymentIds.has(row.database_id));
+      near(rows.reduce((sum,row)=>sum+Number(row.monto_comprado_usd),0),50);
+      near(rows.reduce((sum,row)=>sum+Number(row.diferencia_nio),0),30);
+      await transactions.reopenPaymentBatch(ids[0],[...paymentIds],cashier);
+      near((await summary()).expectedCash.NIO,before.expectedCash.NIO);
+    });
+    await t.test('Legacy single USD payment with USD cash is not a dollar purchase', async () => {
+      const g=await transactions.createBatch(batch([{amount:84,currencyCode:'USD',pendingName:'USD LEGACY'}],settlement()),{});
+      const id=(await client.query('select id_pendiente as id from temo.pagos_pendientes where id_transaccion=$1',[g.transactions[0].id])).rows[0].id;
+      const before=await summary();
+      const cash=settlement();
+      cash.primaryCounts.USD=[{denomination:50,piles25:0,loose:1},{denomination:20,piles25:0,loose:1},{denomination:10,piles25:0,loose:1},{denomination:1,piles25:0,loose:4}];
+      await transactions.payPending(id,{rates,settlement:cash},cashier);
+      near((await summary()).expectedCash.NIO,before.expectedCash.NIO+3057.6);
+      const detail=await transactions.pendingPaymentDetail(id,cashier);
+      assert.equal(detail.compensations.length,1); assert.equal(detail.cash.length,4);
+      assert.ok(!(await purchases.list(cashier)).some(row=>row.database_id===detail.compensations[0].id_abono));
+      await transactions.reopenPaymentBatch(id,detail.compensations.map(row=>row.id_abono),cashier);
+      near((await summary()).expectedCash.NIO,before.expectedCash.NIO);
+    });
+    await t.test('Mixed pending payment excludes its digital portion from cash and purchases', async () => {
+      const g=await transactions.createBatch(batch([{amount:100,currencyCode:'USD',pendingName:'USD MIXED'}],settlement()),{});
+      const id=(await client.query('select id_pendiente as id from temo.pagos_pendientes where id_transaccion=$1',[g.transactions[0].id])).rows[0].id;
+      const before=await summary();
+      const cash=settlement();cash.primaryRateKind='VENTA';
+      cash.primaryCounts.NIO=[{denomination:500,piles25:0,loose:3},{denomination:100,piles25:0,loose:3},{denomination:50,piles25:0,loose:1}];
+      await transactions.payPendingBatch(payPendingBatchSchema.parse({pendingIds:[id],method:'MIXTO',rates,settlement:cash,digital:{entityCode:'BAC',movementCode:'RE',amount:50}}),cashier);
+      near((await summary()).expectedCash.NIO,before.expectedCash.NIO+1820);
+      const detail=await transactions.pendingPaymentDetail(id,cashier);
+      assert.equal(detail.details.length,2);
+      const ids=new Set(detail.compensations.map(row=>row.id_abono));
+      const purchasesForPayment=(await purchases.list(cashier)).filter(row=>ids.has(row.database_id)||detail.compensations.some(payment=>payment.id_transaccion===row.database_id));
+      assert.equal(purchasesForPayment.length,1);
+      near(purchasesForPayment[0].monto_comprado_usd,50); near(purchasesForPayment[0].diferencia_nio,30);
+      await transactions.reopenPaymentBatch(id,[...ids],cashier);
+      near((await summary()).expectedCash.NIO,before.expectedCash.NIO);
     });
     await t.test('USD cash deposit uses normal buy rate in consolidated cash', async () => {
       const before = await summary();

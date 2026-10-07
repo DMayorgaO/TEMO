@@ -31,6 +31,7 @@ export class DollarPurchasesService {
         join temo.monedas m on m.id_moneda = tm.id_moneda
         left join temo.pagos_pendientes pp on pp.id_transaccion = t.id_transaccion
         where t.estado <> 'ANULADA'
+          and tm.medio = 'EFECTIVO'
           and pp.id_pendiente is null
           and (
             $1 = 'JEFA'
@@ -92,6 +93,39 @@ export class DollarPurchasesService {
           ) as purchased_usd
         from usd_income ui
       )
+      , cash_payments as (
+        select ap.*, pp.tipo, t.id_grupo_transacciones, t.orden_grupo,
+          t.id_sucursal, s.id_cajero,
+          coalesce(ap.id_lote_liquidacion, ap.id_abono) as lot
+        from temo.abonos_pendientes ap
+        join temo.pagos_pendientes pp using (id_pendiente)
+        join temo.transacciones t on t.id_transaccion = pp.id_transaccion
+        join temo.turnos s on s.id_turno = ap.id_turno_aplicacion
+        join temo.monedas m on m.id_moneda = ap.id_moneda
+        where pp.tipo = 'POR_COBRAR' and m.codigo = 'USD'
+          and ap.id_transaccion = pp.id_transaccion
+          and ($1 = 'JEFA' or (s.id_cajero = $2 and s.estado in ('ABIERTO', 'PENDIENTE_APROBACION')))
+          and exists (
+            select 1 from temo.abonos_pendientes owner
+            join temo.arqueos a on a.id_abono_pendiente = owner.id_abono
+            where coalesce(owner.id_lote_liquidacion, owner.id_abono) = coalesce(ap.id_lote_liquidacion, ap.id_abono)
+              and a.tipo = 'PENDIENTE_RECIBIDO'
+          )
+      ), pending_purchases as (
+        select cp.*,
+          greatest(cp.monto - greatest(coalesce((
+            select sum(case me.direccion when 'ENTRA' then me.monto else -me.monto end)
+            from temo.movimientos_efectivo me
+            join temo.abonos_pendientes owner on owner.id_abono = me.id_abono_pendiente
+            join temo.monedas m on m.id_moneda = me.id_moneda
+            where coalesce(owner.id_lote_liquidacion, owner.id_abono) = cp.lot
+              and m.codigo = 'USD' and me.es_reverso = false
+          ), 0) - coalesce(sum(cp.monto) over (
+            partition by cp.lot order by cp.fecha_abono, cp.id_abono
+            rows between unbounded preceding and 1 preceding
+          ), 0), 0), 0) as purchased_usd
+        from cash_payments cp
+      )
       select
         c.id_transaccion as database_id,
         concat('TRA-', lpad(g.codigo_operacion::text, 6, '0'), '-', lpad(c.orden_grupo::text, 2, '0')) as id,
@@ -107,7 +141,19 @@ export class DollarPurchasesService {
       join temo.usuarios u on u.id_usuario = c.id_cajero
       join temo.sucursales s on s.id_sucursal = c.id_sucursal
       where c.purchased_usd > 0
-      order by c.fecha_transaccion desc, c.orden_grupo desc
+      union all
+      select p.id_abono as database_id,
+        concat('TRA-', lpad(g.codigo_operacion::text, 6, '0'), '-', lpad(p.orden_grupo::text, 2, '0')) as id,
+        p.fecha_abono as fecha_transaccion,
+        round(p.purchased_usd, 4) as monto_comprado_usd,
+        round(p.purchased_usd * greatest(coalesce(p.tasa_venta_usada, 0) - coalesce(p.tasa_compra_usada, 0), 0), 4) as diferencia_nio,
+        p.tasa_compra_usada, p.tasa_venta_usada, u.nombre_completo as cajero, s.nombre as sucursal
+      from pending_purchases p
+      join temo.grupos_transacciones g using (id_grupo_transacciones)
+      join temo.usuarios u on u.id_usuario = p.id_cajero
+      join temo.sucursales s on s.id_sucursal = p.id_sucursal
+      where p.purchased_usd > 0
+      order by fecha_transaccion desc, id desc
     `, [user.roleCode, user.id]);
     return result.rows;
   }

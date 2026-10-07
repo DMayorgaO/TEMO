@@ -14,6 +14,7 @@ export class HealthController {
     return {
       status: 'ok',
       database: 'ok',
+      revision: process.env.RENDER_GIT_COMMIT ?? null,
       serverTime: result.rows[0]?.now,
     };
   }

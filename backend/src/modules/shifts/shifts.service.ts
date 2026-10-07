@@ -1247,14 +1247,19 @@ export class ShiftsService {
            and ap.id_moneda = m.id_moneda
            and ap.observaciones = 'Compensación con saldo a favor de una transacción en curso'
        ) pending_compensation on true
-       /* Las compensaciones ya se sumaron arriba; aqui solo entra el efectivo fisico neto del vuelto. */
+       /* El esperado usa la deuda nominal, no el conteo: conserva diferencias de cambio y de efectivo. */
        left join lateral (
-         select sum(case me.direccion when 'ENTRA' then me.monto else -me.monto end) as amount
-         from temo.movimientos_efectivo me
-         where me.id_turno = t.id_turno
-           and me.id_moneda = m.id_moneda
-           and me.id_abono_pendiente is not null
-           and me.es_reverso = false
+         select sum(case pp.tipo when 'POR_COBRAR' then ap.monto else -ap.monto end) as amount
+         from temo.abonos_pendientes ap
+         join temo.pagos_pendientes pp using (id_pendiente)
+         where ap.id_turno_aplicacion = t.id_turno and ap.id_moneda = m.id_moneda
+           and ap.id_transaccion = pp.id_transaccion
+           and exists (
+             select 1 from temo.abonos_pendientes owner
+             join temo.arqueos a on a.id_abono_pendiente = owner.id_abono
+             where coalesce(owner.id_lote_liquidacion, owner.id_abono) = coalesce(ap.id_lote_liquidacion, ap.id_abono)
+               and a.tipo in ('PENDIENTE_RECIBIDO', 'PENDIENTE_ENTREGADO')
+           )
        ) paid_pending_cash on true
        /* Solo las transferencias activas de efectivo modifican el fondo general. */
        left join lateral (
