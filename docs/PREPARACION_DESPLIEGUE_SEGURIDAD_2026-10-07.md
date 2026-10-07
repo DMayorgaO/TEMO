@@ -26,3 +26,13 @@ Fecha: 2026-10-07. Usuario autoriza MFA y el paquete restante de seguridad.
 No se publico el nuevo codigo mientras falte el secreto de Render. La autorizacion de despliegue sigue vigente; queda pendiente acceso al panel. La migracion es aditiva y compatible con la API anterior.
 No se desactivo MFA ni se derivo su clave de AUTH_SECRET para evitar la configuracion pendiente.
 No restaurar el respaldo sobre movimientos nuevos para revertir codigo. La reversion de codigo posterior a la activacion de MFA necesita revisar la exigencia de segundo factor, porque una version anterior no la implementa.
+
+## Despliegue confirmado
+
+- Usuario confirma MFA_ENCRYPTION_KEY guardada en temo-api. No se solicito ni se copio el secreto.
+- Publicado b06b201d69120182068cad054a3baaea340c006e en main y develop sin force push.
+- 2026-10-07 23:24 UTC: health de produccion responde 200, database ok y revision b06b201d69120182068cad054a3baaea340c006e.
+- Web responde 200; asset index-Rw5p1BLi.js incluye /auth/mfa/verify.
+- Web y API devuelven Content-Security-Policy y X-Frame-Options DENY efectivos.
+- /api/auth/me sin autenticacion responde 401 y Cache-Control no-store. CORS permite el origen web de TEMO y no devuelve autorizacion para https://untrusted.example.
+- Pendiente: enrolamiento y acceso real de cada Administrador en produccion, realizados por sus titulares; no se usaron cuentas de prueba ni se registraron operaciones financieras para comprobar el despliegue.

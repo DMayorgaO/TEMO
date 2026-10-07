@@ -105,6 +105,11 @@ TOTP aumenta seguridad, pero no evita por completo phishing ni abuso de una sesi
 
 ## Bloque 7: validacion continua
 
+### Despliegue del 2026-10-07
+
+- [x] MFA y paquete de seguridad publicados en produccion: b06b201; API y base saludables, web con flujo MFA, CSP/anti-framing, CORS y no-store verificados. Ver PREPARACION_DESPLIEGUE_SEGURIDAD_2026-10-07.md.
+- [ ] Confirmar enrolamiento y acceso de Administradores reales con VIP Access en produccion, sin compartir semillas ni codigos de recuperacion.
+
 ### Evidencia adicional del 2026-10-07 (solo desarrollo)
 
 - [x] Usuario confirma PDF y PNG sin inconvenientes con Administrador de prueba y las protecciones actuales. No acredita foto de perfil ni cabeceras de produccion.
