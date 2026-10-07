@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Post, Put, Req } from '@nestjs/common';
+import { Body, Controller, ForbiddenException, Get, Param, Post, Put, Req } from '@nestjs/common';
 import { AuthenticatedUser } from '../auth/auth.service';
 import { DatabaseService } from '../database/database.service';
 import { CatalogsService } from './catalogs.service';
@@ -46,7 +46,8 @@ export class CatalogsController {
   }
 
   @Get('roles')
-  async roles() {
+  async roles(@Req() request: { user: AuthenticatedUser }) {
+    this.requireAdministrator(request.user);
     const result = await this.db.query(
       `select
          id_rol as id,
@@ -62,7 +63,8 @@ export class CatalogsController {
   }
 
   @Get('usuarios')
-  async usuarios() {
+  async usuarios(@Req() request: { user: AuthenticatedUser }) {
+    this.requireAdministrator(request.user);
     const result = await this.db.query(
       `select
          u.id_usuario as id,
@@ -127,7 +129,12 @@ export class CatalogsController {
   }
 
   @Get('cuentas-bancarias')
-  async cuentasBancarias() {
+  async cuentasBancarias(@Req() request: { user: AuthenticatedUser }) {
+    const administrator = request.user.roleCode === 'JEFA';
+    const transferOperator = request.user.roleCode === 'TRANSFERISTA';
+    if (!administrator && !transferOperator && request.user.roleCode !== 'CAJERO') {
+      throw new ForbiddenException('El perfil no tiene acceso a este catalogo.');
+    }
     const result = await this.db.query(
       `select
          c.id_cuenta as id,
@@ -136,7 +143,7 @@ export class CatalogsController {
          m.codigo as moneda,
          coalesce(string_agg(s.nombre, ', ' order by s.nombre) filter (where s.id_sucursal is not null), 'Global') as alcance,
          coalesce(string_agg(s.id_sucursal::text, ', ' order by s.nombre) filter (where s.id_sucursal is not null), '') as sucursal_ids,
-         coalesce(c.numero_cuenta, '') as numero_cuenta,
+         case when $1::boolean then coalesce(c.numero_cuenta, '') else '' end as numero_cuenta,
          c.estado,
          c.fecha_creacion
        from temo.cuentas_bancarias c
@@ -144,8 +151,27 @@ export class CatalogsController {
        join temo.monedas m on m.id_moneda = c.id_moneda
        left join temo.cuentas_sucursales cs on cs.id_cuenta = c.id_cuenta
        left join temo.sucursales s on s.id_sucursal = cs.id_sucursal
+       where $1::boolean or (
+         c.estado = 'ACTIVO' and e.estado = 'ACTIVO' and m.estado = 'ACTIVO'
+         and (
+           $3::boolean
+           or not exists (select 1 from temo.cuentas_sucursales scope where scope.id_cuenta = c.id_cuenta)
+           or exists (
+             select 1 from temo.cuentas_sucursales scope
+             join temo.sucursales branch on branch.id_sucursal = scope.id_sucursal and branch.estado = 'ACTIVO'
+             where scope.id_cuenta = c.id_cuenta and (
+               exists (select 1 from temo.usuarios_sucursales assignment
+                       where assignment.id_sucursal = scope.id_sucursal and assignment.id_usuario = $2::uuid)
+               or exists (select 1 from temo.turnos shift
+                          where shift.id_sucursal = scope.id_sucursal and shift.id_cajero = $2::uuid
+                            and shift.estado in ('ABIERTO', 'PENDIENTE_APROBACION'))
+             )
+           )
+         )
+       )
        group by c.id_cuenta, c.alias, e.codigo, m.codigo, c.numero_cuenta, c.estado, c.consecutivo, c.fecha_creacion
        order by e.codigo, m.codigo, c.consecutivo`,
+      [administrator, request.user.id, transferOperator],
     );
 
     return result.rows;
@@ -205,7 +231,8 @@ export class CatalogsController {
   }
 
   @Get('reglas-comisiones')
-  async reglasComisiones() {
+  async reglasComisiones(@Req() request: { user: AuthenticatedUser }) {
+    this.requireAdministrator(request.user);
     const result = await this.db.query(
       `select
          rc.id_comision as id,
@@ -228,5 +255,11 @@ export class CatalogsController {
     );
 
     return result.rows;
+  }
+
+  private requireAdministrator(user: AuthenticatedUser) {
+    if (user.roleCode !== 'JEFA') {
+      throw new ForbiddenException('Esta operacion requiere el perfil Administrador.');
+    }
   }
 }

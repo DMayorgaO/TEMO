@@ -2,6 +2,11 @@
 
 Sistema Web de Transacciones Economicas de Miscelanea Olivera.
 
+## Seguridad en curso
+
+Contexto, dependencias de compras y avances: [checklist de seguridad](docs/CHECKLIST_SEGURIDAD_TEMO.md).
+Revisarlo al trabajar en seguridad, autenticacion, dominio o app movil. Los cambios se prueban en desarrollo antes de autorizar produccion.
+
 ## Etapa 1
 
 Arquitectura local en red:

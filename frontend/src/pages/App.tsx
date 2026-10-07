@@ -1,4 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { buildSafeExportTable, escapeExportHtml } from '../utils/export-html';
+import { removeLegacyOperationalCache, SessionCache } from '../utils/session-cache';
 import type { ChangeEvent, ClipboardEvent, FormEvent, InputHTMLAttributes, KeyboardEvent, PointerEvent as ReactPointerEvent } from 'react';
 import type { LucideIcon } from 'lucide-react';
 import {
@@ -419,6 +421,8 @@ const apiBaseUrl =
   `${window.location.protocol}//${window.location.hostname}:4000/api`;
 
 const authTokenStorageKey = 'temo:auth-token';
+const operationalCache = new SessionCache(window.sessionStorage, () => window.sessionStorage.getItem(authTokenStorageKey));
+removeLegacyOperationalCache(window.localStorage);
 const authUserStorageKey = 'temo:auth-user';
 const rememberedUsernameStorageKey = 'temo:remembered-username';
 
@@ -1283,15 +1287,17 @@ function mapCatalogApiRows(storageKey: string, apiRows: CatalogApiRow[], config:
 }
 
 async function loadCatalogRows(storageKey: string, config: CrudConfig) {
+  const requestToken = window.sessionStorage.getItem(authTokenStorageKey);
   const endpoint = catalogEndpointByStorageKey[storageKey];
   if (!endpoint) return config.rows;
   const apiRows = await apiRequest<CatalogApiRow[]>(endpoint);
   const rows = mapCatalogApiRows(storageKey, apiRows, config);
-  window.localStorage.setItem(`temo:${storageKey}`, JSON.stringify(rows));
+  operationalCache.setItem(`temo:${storageKey}`, JSON.stringify(rows), requestToken);
   return rows;
 }
 
 async function hydrateRelationalCatalogs(includeAdministrativeCatalogs: boolean) {
+  const requestToken = window.sessionStorage.getItem(authTokenStorageKey);
   await Promise.all(
     Object.entries(catalogEndpointByStorageKey)
       .filter(([storageKey]) => includeAdministrativeCatalogs || !['commissions', 'users', 'roles'].includes(storageKey))
@@ -1304,7 +1310,7 @@ async function hydrateRelationalCatalogs(includeAdministrativeCatalogs: boolean)
       }),
   );
   const currencies = await apiRequest<CatalogApiRow[]>('/catalogs/monedas');
-  window.localStorage.setItem('temo:currencies', JSON.stringify(currencies));
+  operationalCache.setItem('temo:currencies', JSON.stringify(currencies), requestToken);
 }
 
 // Formularios operativos que aun no representan una tabla administrativa.
@@ -1494,7 +1500,7 @@ function mergeInitialCatalogRows(storageKey: string, rows: CrudRow[], fallbackRo
 }
 
 function readStoredRows(storageKey: string, fallbackRows: CrudRow[]) {
-  const stored = window.localStorage.getItem(`temo:${storageKey}`);
+  const stored = operationalCache.getItem(`temo:${storageKey}`);
   if (!stored) {
     return catalogEndpointByStorageKey[storageKey] ? [] : fallbackRows;
   }
@@ -1505,7 +1511,7 @@ function readStoredRows(storageKey: string, fallbackRows: CrudRow[]) {
       delete sanitizedRow.temporaryPassword;
       return sanitizedRow;
     });
-    window.localStorage.setItem(`temo:${storageKey}`, JSON.stringify(parsedRows));
+    operationalCache.setItem(`temo:${storageKey}`, JSON.stringify(parsedRows));
   }
   if (storageKey === 'movements') {
     parsedRows = normalizeMovementCurrencyRules(parsedRows);
@@ -1709,7 +1715,7 @@ function syncAccountsFromBranch(previousBranch: CrudRow | undefined, branch: Cru
       branchIds: branchIds.join(', '),
     };
   });
-  window.localStorage.setItem(`temo:${accountConfig.storageKey}`, JSON.stringify(nextAccounts));
+  operationalCache.setItem(`temo:${accountConfig.storageKey}`, JSON.stringify(nextAccounts));
 }
 
 function syncBranchesFromAccount(previousAccount: CrudRow | undefined, account: CrudRow) {
@@ -1747,7 +1753,7 @@ function syncBranchesFromAccount(previousAccount: CrudRow | undefined, account: 
       accountIds: accountIds.join(', '),
     };
   });
-  window.localStorage.setItem(`temo:${branchConfig.storageKey}`, JSON.stringify(nextBranches));
+  operationalCache.setItem(`temo:${branchConfig.storageKey}`, JSON.stringify(nextBranches));
 }
 
 function normalizeLookupValue(value?: string) {
@@ -2532,7 +2538,7 @@ function getActiveEntities() {
 
 function getAvailableCurrencyCodes(currentValue?: string) {
   try {
-    const rows = JSON.parse(window.localStorage.getItem('temo:currencies') ?? '[]') as CatalogApiRow[];
+    const rows = JSON.parse(operationalCache.getItem('temo:currencies') ?? '[]') as CatalogApiRow[];
     const currencies = rows
       .filter((row) => String(row.estado ?? '').toUpperCase() === 'ACTIVO')
       .map((row) => String(row.codigo ?? '').toUpperCase())
@@ -2981,10 +2987,11 @@ function getVisibleColumns(config: CrudConfig): TableColumn[] {
   ].filter(Boolean) as TableColumn[];
 }
 
-// Lee datos persistidos en localStorage y cae a datos iniciales cuando no existen.
+// Conserva snapshots solo durante la sesion autenticada de esta pestana.
 function usePersistentRows(storageKey: string, initialRows: CrudRow[]) {
+  const sessionToken = window.sessionStorage.getItem(authTokenStorageKey);
   const [rows, setRows] = useState<CrudRow[]>(() => {
-    const stored = window.localStorage.getItem(`temo:${storageKey}`);
+    const stored = operationalCache.getItem(`temo:${storageKey}`);
     const storedRows = stored ? (JSON.parse(stored) as CrudRow[]) : initialRows;
     let parsedRows = mergeInitialCatalogRows(storageKey, storedRows, initialRows);
     if (storageKey === 'movements' && (parsedRows.length < 20 || !parsedRows.every((row) => row.direction))) {
@@ -3003,8 +3010,8 @@ function usePersistentRows(storageKey: string, initialRows: CrudRow[]) {
   });
 
   useEffect(() => {
-    window.localStorage.setItem(`temo:${storageKey}`, JSON.stringify(rows));
-  }, [rows, storageKey]);
+    operationalCache.setItem(`temo:${storageKey}`, JSON.stringify(rows), sessionToken);
+  }, [rows, storageKey, sessionToken]);
 
   useEffect(() => {
     const endpoint = catalogEndpointByStorageKey[storageKey];
@@ -3323,6 +3330,7 @@ export function App() {
       .catch(() => {
         window.sessionStorage.removeItem(authTokenStorageKey);
         window.sessionStorage.removeItem(authUserStorageKey);
+        operationalCache.clear();
         setCurrentUser(null);
         window.location.hash = '/login';
       });
@@ -3368,6 +3376,7 @@ export function App() {
     const handleExpiredSession = () => {
       window.sessionStorage.removeItem(authTokenStorageKey);
       window.sessionStorage.removeItem(authUserStorageKey);
+      operationalCache.clear();
       setCurrentUser(null);
       setActiveScreen('login');
       window.location.hash = '/login';
@@ -3486,6 +3495,8 @@ export function App() {
     void apiRequest('/auth/logout', { method: 'POST' }).catch(() => undefined);
     window.sessionStorage.removeItem(authTokenStorageKey);
     window.sessionStorage.removeItem(authUserStorageKey);
+    operationalCache.clear();
+    removeLegacyOperationalCache(window.localStorage);
     setCurrentUser(null);
     setActiveScreen('login');
     window.location.hash = '/login';
@@ -11145,7 +11156,7 @@ function RolePermissionsScreen() {
   };
 
   const [permissionRows, setPermissionRows] = useState<CrudRow[]>(() => {
-    const stored = window.localStorage.getItem(`temo:${permissionConfig.storageKey}`);
+    const stored = operationalCache.getItem(`temo:${permissionConfig.storageKey}`);
     return stored ? (JSON.parse(stored) as CrudRow[]) : permissionConfig.rows;
   });
   const [selectedRole, setSelectedRole] = useState<CrudRow | null>(null);
@@ -11306,10 +11317,12 @@ function exportPdf(title: string, columns: TableColumn[], rows: CrudRow[]) {
   if (!printable) {
     return;
   }
+  printable.opener = null;
   printable.document.write(`
     <html>
       <head>
-        <title>${title}</title>
+        <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'">
+        <title>${escapeExportHtml(title)}</title>
         <style>
           body { font-family: Arial, sans-serif; padding: 24px; color: #17212b; }
           table { border-collapse: collapse; width: 100%; }
@@ -11326,9 +11339,6 @@ function exportPdf(title: string, columns: TableColumn[], rows: CrudRow[]) {
 
 // Construye una tabla HTML reutilizada por las exportaciones a Excel y PDF.
 function buildExportTable(title: string, columns: TableColumn[], rows: CrudRow[]) {
-  const headers = columns.map((column) => `<th>${column.label}</th>`).join('');
-  const body = rows
-    .map((row) => `<tr>${columns.map((column) => `<td>${getCellValue(row, column)}</td>`).join('')}</tr>`)
-    .join('');
-  return `<h1>${title}</h1><table><thead><tr>${headers}</tr></thead><tbody>${body}</tbody></table>`;
+  return buildSafeExportTable(title, columns.map((column) => column.label),
+    rows.map((row) => columns.map((column) => getCellValue(row, column))));
 }

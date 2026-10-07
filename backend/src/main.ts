@@ -2,6 +2,7 @@ import { ConfigService } from '@nestjs/config';
 import { RequestMethod } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { json, urlencoded } from 'express';
+import type { NextFunction, Request, Response } from 'express';
 import { rateLimit } from 'express-rate-limit';
 import helmet from 'helmet';
 import { AppModule } from './app.module';
@@ -21,8 +22,13 @@ async function bootstrap() {
   app.use(helmet({ contentSecurityPolicy: false }));
   // Incluso los rechazos tempranos deben ser legibles desde el frontend.
   app.enableCors({
-    origin: configuredOrigins.length ? configuredOrigins : true,
+    origin: configuredOrigins.length ? configuredOrigins : false,
     credentials: true,
+  });
+  app.use('/api', (_request: Request, response: Response, next: NextFunction) => {
+    response.setHeader('Cache-Control', 'no-store');
+    response.setHeader('Pragma', 'no-cache');
+    next();
   });
   app.use(json({ limit: '256kb' }));
   app.use(urlencoded({ extended: false, limit: '64kb' }));
