@@ -10,7 +10,7 @@ export class CatalogsController {
     private readonly catalogs: CatalogsService,
   ) {}
 
-  // Permite a la Jefa asignar una clave temporal exclusivamente a un cajero.
+  // Permite al Administrador asignar una clave temporal exclusivamente a un cajero.
   @Post('usuarios/:id/reset-password')
   resetUserPassword(
     @Param('id') id: string,

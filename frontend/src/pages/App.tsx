@@ -52,7 +52,7 @@ import {
   Trash2,
   X,
 } from 'lucide-react';
-import { MetricCard } from '../components/MetricCard';
+import { AdminDashboard } from '../components/AdminDashboard';
 
 type ScreenId =
   | 'login'
@@ -262,6 +262,9 @@ type ShiftNotification = {
 };
 
 type TransactionApiRow = {
+  historicalCorrection?: boolean;
+  closedShift?: boolean;
+  digitalsettlement?: boolean;
   database_id: string;
   id: string;
   id_grupo_transacciones: string;
@@ -307,7 +310,11 @@ type TransactionDetailApi = {
 
 type TransactionGroupDetailApi = {
   details: TransactionDetailApi[];
-  compensations: Array<{ codigo_pendiente: string; monto: string; moneda: CashCurrency }>;
+  compensations: Array<{ codigo_pendiente: string; monto: string; moneda: CashCurrency; contraparte?: string; observaciones?: string; id_transaccion?: string; id_abono?: string; pending_database_id?: string }>;
+};
+
+type PendingPaymentDetailApi = TransactionGroupDetailApi & {
+  cash: Array<{ id_lote_liquidacion: string; tipo: string; moneda: CashCurrency; denomination: string; piles25: number; loose: number }>;
 };
 
 function touchRowDetail(open: () => void) {
@@ -568,7 +575,7 @@ const screenHeaders: Record<ScreenId, ScreenHeader> = {
   'exchange-rate': { eyebrow: 'Configuracion', title: 'Tasa de Cambio' },
   'reports-hub': { eyebrow: 'Consultas', title: 'Reportes' },
   reports: { eyebrow: 'Consultas', title: 'Reportes operativos' },
-  'commission-reports': { eyebrow: 'Jefa', title: 'Reporte de comisiones' },
+  'commission-reports': { eyebrow: 'Administrador', title: 'Reporte de comisiones' },
   'general-consolidation': { eyebrow: 'Conciliacion', title: 'Saldos' },
   pending: { eyebrow: 'Cobros y pagos', title: 'Pendientes' },
   imports: { eyebrow: 'Historicos', title: 'Importacion desde Excel' },
@@ -623,7 +630,7 @@ const crudConfigs: Record<ScreenId, CrudConfig[]> = {
     {
       storageKey: 'dashboard-alerts',
       title: 'Alertas del dia',
-      description: 'Indicadores que la jefa debe revisar durante la jornada.',
+      description: 'Indicadores que la administrador debe revisar durante la jornada.',
       idPrefix: 'ALT',
       columns: [
         { key: 'id', label: 'Id', readOnly: true },
@@ -666,7 +673,7 @@ const crudConfigs: Record<ScreenId, CrudConfig[]> = {
           id: 'TUR-001',
           branch: 'Tienda principal',
           register: 'Caja 1',
-          cashier: 'Jefa',
+          cashier: 'Administrador',
           openedAt: '16/06/2026\n06:30 am',
           closedAt: '16/06/2026\n08:00 am',
           openingNio: '12000.00',
@@ -802,7 +809,7 @@ const crudConfigs: Record<ScreenId, CrudConfig[]> = {
     {
       storageKey: 'banks',
       title: 'Bancos',
-      description: 'Entidades bancarias y servicios que la jefa visualiza como bancos.',
+      description: 'Entidades bancarias y servicios que la administrador visualiza como bancos.',
       idPrefix: 'BAN',
       columns: [
         { key: 'id', label: 'ID', readOnly: true },
@@ -830,7 +837,7 @@ const crudConfigs: Record<ScreenId, CrudConfig[]> = {
       columns: [
         { key: 'id', label: 'ID', readOnly: true },
         { key: 'name', label: 'NOMBRE' },
-        { key: 'cashiers', label: 'Cajeros asociados', inputKind: 'multiselect', options: ['Jefa', 'Cajera 1', 'Cajera 2', 'Cajero 3'], hiddenInTable: true },
+        { key: 'cashiers', label: 'Cajeros asociados', inputKind: 'multiselect', options: ['Administrador', 'Cajera 1', 'Cajera 2', 'Cajero 3'], hiddenInTable: true },
         { key: 'accounts', label: 'Cuentas asociadas', inputKind: 'multiselect', options: ['BAC NIO 01', 'BAC USD 01', 'BANPRO NIO 01', 'BANPRO USD 01', 'LAFISE NIO 01', 'LAFISE USD 01', 'PEX NIO 01', 'TELEDOLAR USD 01'], hiddenInTable: true },
         { key: 'status', label: 'Estado', inputKind: 'select', options: ['Activo', 'Inactivo'], hiddenInTable: true },
       ],
@@ -1066,7 +1073,7 @@ const crudConfigs: Record<ScreenId, CrudConfig[]> = {
         { key: 'status', label: 'Estado', inputKind: 'select', options: ['Activo', 'Inactivo'] },
       ],
       rows: [
-        { id: 'AUD-001', date: 'Hoy 08:00', user: 'Jefa', action: 'Iniciar sesion', entity: 'auth', status: 'Activo' },
+        { id: 'AUD-001', date: 'Hoy 08:00', user: 'Administrador', action: 'Iniciar sesion', entity: 'auth', status: 'Activo' },
         { id: 'AUD-002', date: 'Hoy 09:25', user: 'Cajero 1', action: 'Crear', entity: 'transacciones', status: 'Activo' },
       ],
     },
@@ -1305,7 +1312,7 @@ const processForms: Partial<Record<ScreenId, { title: string; fields: ProcessFie
   login: {
     title: 'Credenciales',
     fields: [
-      { label: 'Usuario', placeholder: 'jefa' },
+      { label: 'Usuario', placeholder: 'administrador' },
       { label: 'Contrasena', kind: 'password', placeholder: '********' },
     ],
   },
@@ -1548,7 +1555,7 @@ function normalizeBranchRow(row: CrudRow): CrudRow {
   const selectedUserIds = new Set(parseMultiValue(row.cashierIds));
   const selectedCashierNames = parseMultiValue(row.cashiers);
   const legacyUsers: Record<string, string> = {
-    jefa: 'jefa',
+    administrador: 'administrador',
     'cajera 1': 'cajero1',
     'cajera 2': 'cajero2',
     'cajero 3': 'cajero3',
@@ -2079,6 +2086,9 @@ function mapApiTransactionDetail(detail: TransactionDetailApi): CrudRow {
   const row = mapApiTransactionRow(detail.transaction);
   return normalizeTransactionRow({
     ...row,
+    historicalCorrection: detail.transaction.historicalCorrection ? '1' : '',
+    closedShift: detail.transaction.closedShift ? '1' : '',
+    digitalSettlement: detail.transaction.digitalsettlement ? '1' : '',
     cashCountNio: cashCountApiLinesToDraft(detail.settlement.primaryCounts.NIO, 'NIO'),
     cashCountUsd: cashCountApiLinesToDraft(detail.settlement.primaryCounts.USD, 'USD'),
     changeCashCountNio: cashCountApiLinesToDraft(detail.settlement.changeCounts.NIO, 'NIO'),
@@ -2136,6 +2146,7 @@ function calculateTransactionCustomerBalanceSteps(
   rows: CrudRow[],
   rate: ExchangeRate,
   pendingCompensation?: { currency: CashCurrency; amount: number },
+  recordedCompensation: Partial<Record<CashCurrency, number>> = {},
 ) {
   let balanceNio = 0;
   let balanceUsd = 0;
@@ -2196,6 +2207,10 @@ function calculateTransactionCustomerBalanceSteps(
     if (index === lastEffectiveIndex && pendingCompensation?.amount) {
       if (pendingCompensation.currency === 'USD') balanceUsd -= pendingCompensation.amount;
       else balanceNio -= pendingCompensation.amount;
+    }
+    if (index === lastEffectiveIndex) {
+      balanceNio -= recordedCompensation.NIO || 0;
+      balanceUsd -= recordedCompensation.USD || 0;
     }
     offsetCurrencyBalances();
     const changeRateKind = getCustomerBalanceRateKind(balanceNio, balanceUsd, rateKind);
@@ -2693,6 +2708,11 @@ function shiftDetailToEditableRow(shift: ShiftDetail): CrudRow {
   }
   return {
     ...baseRow,
+    expectedNio: String(shift.expectedCash.NIO),
+    expectedUsd: String(shift.expectedCash.USD),
+    expectedRate: String(shift.expectedGeneralRate ?? 36.4),
+    closingNio: baseRow.closingNio || String(calculateCashPileTotal(cashDenominations.NIO, closingDraft)),
+    closingUsd: baseRow.closingUsd || String(calculateCashPileTotal(cashDenominations.USD, closingDraft)),
     openingCashCountNio: serializeTransactionCashCount(openingDraft),
     openingCashCountUsd: serializeTransactionCashCount(openingDraft),
     closingCashCountNio: serializeTransactionCashCount(closingDraft),
@@ -2713,7 +2733,7 @@ function normalizeShiftRow(row: CrudRow): CrudRow {
     ...row,
     branch: row.branch || 'Tienda principal',
     register: row.register || 'Caja 1',
-    cashier: row.cashier || 'Jefa',
+    cashier: row.cashier || 'Administrador',
     openedAt: row.openedAt || row.date || '',
     closedAt: row.closedAt || '',
     openingNio,
@@ -2779,7 +2799,7 @@ function readShiftCashCount(row: CrudRow, currency: CashCurrency, phase: 'openin
 function getShiftCashierIdentity(name: string) {
   const normalizedName = normalizeLookupValue(name);
   const legacyUsernames: Record<string, string> = {
-    jefa: 'jefa',
+    administrador: 'administrador',
     'cajera 1': 'cajero1',
     'cajera 2': 'cajero2',
     'cajero 3': 'cajero3',
@@ -3502,6 +3522,10 @@ export function App() {
   }
 
   const visibleNotification = notifications.find((item) => !dismissedNotifications.includes(item.id));
+  const notificationCategory = (item: ShiftNotification) => item.kind === 'TRANSFER_RECORDED'
+    ? item.transfer_type === 'EFECTIVO' ? 'Efectivo' : 'Digital' : 'Cierres y otros avisos';
+  const adminBatch = currentUser?.roleCode === 'JEFA' && visibleNotification
+    ? notifications.filter(item => !dismissedNotifications.includes(item.id) && notificationCategory(item) === notificationCategory(visibleNotification)) : [];
   const visibleNotificationObservation = cleanNotificationObservation(visibleNotification?.observations);
 
   async function openShiftClosure(shiftId: string) {
@@ -3656,7 +3680,7 @@ export function App() {
               </span>
               <span className="session-user">
                 <strong>{currentUser.fullName}</strong>
-                <span>{currentUser.roleName}</span>
+                <span>{currentUser.roleCode === 'JEFA' ? 'Administrador' : currentUser.roleName}</span>
               </span>
               <ChevronDown size={16} className={isProfileMenuOpen ? 'profile-menu-chevron--open' : ''} />
             </button>
@@ -3690,7 +3714,20 @@ export function App() {
         </div>
       </section>
     </main>
-    {visibleNotification && (
+    {adminBatch.length > 0 && <NotificationSummary
+      key={notificationCategory(adminBatch[0])}
+      title={notificationCategory(adminBatch[0])}
+      items={adminBatch}
+      onAccept={async () => {
+        for (const notification of adminBatch) if (notification.kind !== 'CLOSE_REQUEST') await acknowledgeNotification(notification);
+        setDismissedNotifications(current=>[...current,...adminBatch.map(item=>item.id)]);
+      }}
+      onReview={async (notification) => {
+        setDismissedNotifications(current=>[...current,...adminBatch.map(item=>item.id)]);
+        await acceptCloseRequest(notification);
+      }}
+    />}
+    {visibleNotification && adminBatch.length === 0 && (
       <div className="modal-backdrop shift-notification-backdrop" role="dialog" aria-modal="true">
         <section className={`shift-notification-modal ${visibleNotification.kind === 'TRANSFER_RECORDED' ? `shift-notification-modal--${visibleNotification.transfer_direction === 'SALE' ? 'out' : 'in'}` : ''}`}>
           <div className="shift-notification-icon">
@@ -3756,6 +3793,31 @@ export function App() {
     )}
     </>
   );
+}
+
+function NotificationSummary({title,items,onAccept,onReview}:{title:string;items:ShiftNotification[];onAccept:()=>Promise<void>;onReview:(item:ShiftNotification)=>Promise<void>}) {
+  const [busy,setBusy]=useState(false);
+  const [error,setError]=useState('');
+  const grouped = new Map<string,{label:string;currency:CashCurrency;amount:number;count:number;out:boolean}>();
+  for (const item of items.filter(item=>item.kind==='TRANSFER_RECORDED')) {
+    const label=[item.branch,item.cashier,item.transfer_entity,item.transfer_direction==='SALE'?'Egreso':'Ingreso'].filter(Boolean).join(' · ');
+    const currency=item.currency ?? 'NIO';
+    const key=JSON.stringify([label,currency]);
+    const group=grouped.get(key) ?? {label,currency,amount:0,count:0,out:item.transfer_direction==='SALE'};
+    group.amount+=Number(item.amount || 0); group.count++; grouped.set(key,group);
+  }
+  const run=async(action:()=>Promise<void>)=>{setBusy(true);setError('');try{await action();}catch(e){setError(e instanceof Error?e.message:'No se pudo confirmar el resumen.');}finally{setBusy(false);}};
+  return <div className="modal-backdrop shift-notification-backdrop" role="dialog" aria-modal="true" aria-label={title}>
+    <section className="shift-notification-modal notification-summary">
+      <h2>{title}</h2><p>{items.length} notificaciones</p>
+      <div className="notification-summary-list">
+        {[...grouped].map(([key,group])=><div key={key}><strong>{group.label}</strong><span>{group.count} transferencias</span><b className={`transaction-amount transaction-amount--${group.out?'out':'in'}`}>{group.out?<ArrowUpRight size={16}/>:<ArrowDownLeft size={16}/>} {formatCashCountMoney(group.amount,group.currency)}</b></div>)}
+        {items.filter(item=>item.kind!=='TRANSFER_RECORDED').map(item=><div key={item.id}><strong>{item.cashier} · {item.branch}</strong><span>{item.kind==='CLOSE_REQUEST'?'Solicitud de cierre':item.kind==='PENDING_PAID'?'Pendiente pagado':'Cierre de turno'}</span>{item.kind==='CLOSE_REQUEST'&&<button type="button" className="secondary-button" disabled={busy} onClick={()=>void run(()=>onReview(item))}>Revisar cierre</button>}</div>)}
+      </div>
+      {error&&<p role="alert" className="login-error">{error}</p>}
+      <button type="button" className="primary-button" disabled={busy} onClick={()=>void run(onAccept)}>{busy?'Procesando...':'Aceptar resumen'}</button>
+    </section>
+  </div>;
 }
 
 function ShiftClosureModal({
@@ -3902,7 +3964,7 @@ function ShiftClosureModal({
                 <label>
                   <strong>Diferencia registrada</strong>
                   <span className="cash-change-entry"><span>C$</span><input value={changeNio} inputMode="decimal" onChange={(event) => setChangeNio(normalizeSignedAccountingMoneyRaw(event.target.value))} /></span>
-                  <button type="button" className="secondary-button" onClick={() => setChangeNio(formatAccountingMoneyRaw(parseMoneyValue(changeNio) + differenceNio))}>Registrar diferencia</button>
+                  <button type="button" className="secondary-button" onClick={() => setChangeNio(formatAccountingMoneyRaw(parseMoneyValue(changeNio) + differenceNio))}>Agregar cambio</button>
                 </label>
               </div>
             </div>
@@ -4205,7 +4267,7 @@ function LoginScreen({ onLogin }: { onLogin: (response: LoginResponse) => void }
             <span>Recordarme</span>
           </label>
 
-          {/* Acceso al flujo seguro de recuperación para cuentas con rol Jefa. */}
+          {/* Acceso al flujo seguro de recuperación para cuentas con rol Administrador. */}
           <button type="button" className="login-recovery-link" onClick={() => { setError(''); setSuccess(''); setIsRecoveryOpen(true); }}>
             <KeyRound size={16} />Olvidé mi contraseña
           </button>
@@ -4307,7 +4369,7 @@ function PasswordRecoveryDialog({
         {step === 'request' ? (
           <form className="profile-password-form" onSubmit={requestCode}>
             {/* La cuenta se localiza por usuario o por su correo previamente registrado. */}
-            <p className="muted-copy">Disponible para usuarios con rol Jefa y correo registrado.</p>
+            <p className="muted-copy">Disponible para usuarios con rol Administrador y correo registrado.</p>
             <label className="form-field">Usuario o correo<input autoComplete="username" value={identifier} onChange={(event) => setIdentifier(event.target.value)} required /></label>
             {error && <p className="login-error" role="alert">{error}</p>}
             <footer className="modal-actions">
@@ -4348,7 +4410,7 @@ function ScreenContent({
   const processForm = processForms[screen];
 
   if (screen === 'dashboard') {
-    return <DashboardScreen configs={configs} />;
+    return <AdminDashboard request={apiRequest} />;
   }
 
   if (screen === 'role-permissions') {
@@ -4445,25 +4507,6 @@ function ReportsHubScreen() {
           </button>
         );
       })}
-    </section>
-  );
-}
-
-function DashboardScreen({ configs }: { configs: CrudConfig[] }) {
-  return (
-    <section className="screen-stack">
-      {/* Indicadores de alto nivel para la vista de la jefa. */}
-      <section className="metrics-grid" aria-label="Resumen del dia">
-        <MetricCard label="Efectivo NIO" value="C$ 0.00" helper="Pendiente de conexion a turnos" icon={<Coins size={22} />} />
-        <MetricCard label="Efectivo USD" value="$ 0.00" helper="Conteo por denominaciones" icon={<Banknote size={22} />} />
-        <MetricCard label="Entidades" value="6" helper="BAC, BANPRO, LAFISE, BDF, PEX, TELEDOLAR" icon={<Building2 size={22} />} />
-        <MetricCard label="Comisiones" value="Restringido" helper="Visible solo para jefa" icon={<LockKeyhole size={22} />} />
-      </section>
-
-      {/* Las alertas tambien usan el CRUD reutilizable para mantener controles uniformes. */}
-      {configs.map((config) => (
-        <CrudTable key={config.storageKey} config={config} />
-      ))}
     </section>
   );
 }
@@ -4571,8 +4614,16 @@ function CashCountScreen({ currentUser }: { currentUser: AuthUser }) {
   const [isLoaded, setIsLoaded] = useState(false);
   const [message, setMessage] = useState('');
   const [activeShifts, setActiveShifts] = useState<ShiftDetail[]>([]);
+  const [closedShifts, setClosedShifts] = useState<ShiftDetail[]>([]);
+  const [historyBranch, setHistoryBranch] = useState('');
+  const [historyCashier, setHistoryCashier] = useState('');
+  const [historyDate, setHistoryDate] = useState('');
   const [selectedShiftId, setSelectedShiftId] = useState('');
   const isBoss = currentUser.roleCode === 'JEFA';
+  const historicalMatches = closedShifts.filter(item =>
+    (!historyBranch || item.sucursal === historyBranch) &&
+    (!historyCashier || item.cajero === historyCashier) &&
+    (!historyDate || (item.fecha_apertura && new Date(item.fecha_apertura).toLocaleDateString('en-CA', { timeZone: 'America/Managua' }) === historyDate)));
 
   const totals = useMemo(
     () => ({
@@ -4601,6 +4652,7 @@ function CashCountScreen({ currentUser }: { currentUser: AuthUser }) {
       ? apiRequest<ShiftDetail[]>('/shifts').then((shifts) => {
           const openShifts = shifts.filter((item) => ['ABIERTO', 'PENDIENTE_APROBACION'].includes(item.estado));
           setActiveShifts(openShifts);
+          setClosedShifts(shifts.filter(item => item.estado === 'CERRADO'));
           const targetId = selectedShiftId || openShifts[0]?.database_id || '';
           setSelectedShiftId(targetId);
           return targetId ? apiRequest<ShiftDetail>(`/shifts/${targetId}`) : null;
@@ -4612,7 +4664,7 @@ function CashCountScreen({ currentUser }: { currentUser: AuthUser }) {
         }
         setShift(currentShift);
         setChangeNio(currentShift ? formatAccountingMoneyRaw(currentShift.cambio_nio) : '0.00');
-        setPileDrafts(currentShift ? cashDraftFromShiftCounts(currentShift.cashCounts.ACTUAL) : {});
+        setPileDrafts(currentShift ? cashDraftFromShiftCounts(currentShift.estado === 'CERRADO' ? currentShift.cashCounts.CIERRE_CONTADO ?? currentShift.cashCounts.ACTUAL : currentShift.cashCounts.ACTUAL) : {});
         setIsLoaded(true);
       })
       .catch((error) => setMessage(error instanceof Error ? error.message : 'No fue posible cargar el arqueo.'));
@@ -4623,15 +4675,18 @@ function CashCountScreen({ currentUser }: { currentUser: AuthUser }) {
 
   useEffect(() => {
     if (!isBoss || !selectedShiftId) return;
+    let cancelled = false;
     setIsLoaded(false);
     apiRequest<ShiftDetail>(`/shifts/${selectedShiftId}`)
       .then((selectedShift) => {
+        if (cancelled) return;
         setShift(selectedShift);
         setChangeNio(formatAccountingMoneyRaw(selectedShift.cambio_nio));
-        setPileDrafts(cashDraftFromShiftCounts(selectedShift.cashCounts.ACTUAL));
+        setPileDrafts(cashDraftFromShiftCounts(selectedShift.estado === 'CERRADO' ? selectedShift.cashCounts.CIERRE_CONTADO ?? selectedShift.cashCounts.ACTUAL : selectedShift.cashCounts.ACTUAL));
         setIsLoaded(true);
       })
-      .catch((error) => setMessage(error instanceof Error ? error.message : 'No fue posible cargar el arqueo seleccionado.'));
+      .catch((error) => { if (!cancelled) setMessage(error instanceof Error ? error.message : 'No fue posible cargar el arqueo seleccionado.'); });
+    return () => { cancelled = true; };
   }, [isBoss, selectedShiftId]);
 
   useOperationalRefresh(async () => {
@@ -4643,7 +4698,7 @@ function CashCountScreen({ currentUser }: { currentUser: AuthUser }) {
     const editingCash = document.activeElement instanceof HTMLElement
       && Boolean(document.activeElement.closest('[data-cash-scope="general-cash-count"]'));
     if (!editingCash) setPileDrafts(cashDraftFromShiftCounts(latestShift.cashCounts.ACTUAL));
-  }, Boolean((isBoss && selectedShiftId) || (!isBoss && shift)), 3000);
+  }, Boolean((isBoss && selectedShiftId && shift?.estado !== 'CERRADO') || (!isBoss && shift)), 3000);
 
   useEffect(() => {
     if (isBoss || !isLoaded || !shift || shift.estado === 'CERRADO') {
@@ -4680,13 +4735,13 @@ function CashCountScreen({ currentUser }: { currentUser: AuthUser }) {
   }
 
   async function requestClose() {
-    if (!shift || !await requestSystemConfirm('La Jefa recibira una solicitud para revisar y cerrar esta caja.', { title:'Solicitar cierre de caja', confirmLabel:'Enviar solicitud' })) {
+    if (!shift || !await requestSystemConfirm('El Administrador recibira una solicitud para revisar y cerrar esta caja.', { title:'Solicitar cierre de caja', confirmLabel:'Enviar solicitud' })) {
       return;
     }
     await apiRequest(`/shifts/${shift.database_id}/close-request`, { method: 'POST' });
     announceOperationalDataChange();
     setShift((current) => current ? { ...current, estado: 'PENDIENTE_APROBACION', solicitud_estado: 'PENDIENTE' } : current);
-    setMessage('Solicitud enviada a la Jefa.');
+    setMessage('Solicitud enviada al Administrador.');
   }
 
   function openNewTransaction() {
@@ -4730,7 +4785,8 @@ function CashCountScreen({ currentUser }: { currentUser: AuthUser }) {
           <div className="action-row">
             {isBoss && (
               <label className="cash-shift-selector">Turno activo
-                <select value={selectedShiftId} onChange={(event) => setSelectedShiftId(event.target.value)}>
+                <select value={activeShifts.some(item => item.database_id === selectedShiftId) ? selectedShiftId : ''} onChange={(event) => setSelectedShiftId(event.target.value)}>
+                  <option value="">Seleccionar turno activo</option>
                   {activeShifts.map((item) => <option key={item.database_id} value={item.database_id}>{item.cajero} - {item.caja}</option>)}
                 </select>
               </label>
@@ -4750,6 +4806,23 @@ function CashCountScreen({ currentUser }: { currentUser: AuthUser }) {
           </div>
         </div>
 
+        {isBoss && <fieldset className="consolidation-history-filters">
+          <legend>Arqueos históricos</legend>
+          <select aria-label="Sucursal histórica" value={historyBranch} onChange={event => { setHistoryBranch(event.target.value); setHistoryCashier(''); }}>
+            <option value="">Sucursal</option>
+            {[...new Set(closedShifts.map(item => item.sucursal))].sort().map(branch => <option key={branch}>{branch}</option>)}
+          </select>
+          <select aria-label="Cajero histórico" value={historyCashier} onChange={event => setHistoryCashier(event.target.value)}>
+            <option value="">Cajero</option>
+            {[...new Set(closedShifts.filter(item => !historyBranch || item.sucursal === historyBranch).map(item => item.cajero))].sort().map(cashier => <option key={cashier}>{cashier}</option>)}
+          </select>
+          <input aria-label="Día histórico" type="date" value={historyDate} onChange={event => setHistoryDate(event.target.value)} />
+          <select aria-label="Arqueo histórico" value={historicalMatches.some(item => item.database_id === selectedShiftId) ? selectedShiftId : ''} onChange={event => setSelectedShiftId(event.target.value)}>
+            <option value="">{historicalMatches.length ? 'Seleccionar turno' : 'Sin coincidencias'}</option>
+            {historicalMatches.map(item => <option key={item.database_id} value={item.database_id}>{item.id} · {item.cajero} · {item.fecha_apertura ? new Date(item.fecha_apertura).toLocaleString('es-NI', { timeZone: 'America/Managua' }) : ''}</option>)}
+          </select>
+        </fieldset>}
+        {isBoss && shift?.estado === 'CERRADO' && <p className="cash-count-status">{shift.id} · {shift.cajero} · {shift.sucursal} · Cerrado · Solo lectura</p>}
         {!shift && isLoaded && <p className="cash-count-status">No tiene un turno abierto. El arqueo se habilitará al abrir su siguiente turno.</p>}
         {message && <p className="cash-count-status" role="status">{message}</p>}
 
@@ -5423,7 +5496,7 @@ function PendingScreen({ currentUser }: { currentUser: AuthUser }) {
   const [sortKey, setSortKey] = useState<keyof PendingApiRow>('fecha_creacion');
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('desc');
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [detail, setDetail] = useState<{ pending: PendingApiRow; row: CrudRow } | null>(null);
+  const [detail, setDetail] = useState<{ pending: PendingApiRow; row: CrudRow; groupRows?: CrudRow[]; payments?: PendingPaymentDetailApi } | null>(null);
   const [payingId, setPayingId] = useState<string | null>(null);
   const [paymentModal, setPaymentModal] = useState<{
     pending: PendingApiRow;
@@ -5583,7 +5656,12 @@ function PendingScreen({ currentUser }: { currentUser: AuthUser }) {
   async function openPendingDetail(row: PendingApiRow) {
     setError('');
     try {
-      setDetail({ pending: row, row: await loadPendingPaymentRow(row) });
+      const payments = await apiRequest<PendingPaymentDetailApi>(`/transactions/pending/${row.database_id}/payments`);
+      const groupRows = payments.details.map(mapApiTransactionDetail);
+      setDetail({ pending: row,
+        row: groupRows.find(item => item.databaseId === row.transaction_database_id) ?? await loadPendingPaymentRow(row),
+        ...(groupRows.length ? { groupRows, payments } : {}),
+      });
     } catch (detailError) {
       setError(detailError instanceof Error ? detailError.message : 'No fue posible abrir el pendiente.');
     }
@@ -5614,23 +5692,23 @@ function PendingScreen({ currentUser }: { currentUser: AuthUser }) {
 
   async function correctPayment(row: PendingApiRow) {
     if (payingId || row.estado !== 'PAGADO') return;
-    const confirmed = await requestSystemConfirm(
-      `La liquidación de ${row.contraparte} será revertida. El pendiente volverá a estar disponible para capturarlo correctamente.`,
-      { title: 'Corregir liquidación', confirmLabel: 'Revertir', tone: 'danger' },
-    );
-    if (!confirmed) return;
     setPayingId(row.database_id);
     setError('');
     setMessage('');
     try {
-      await apiRequest(`/transactions/pending/${row.database_id}/reopen`, { method: 'POST' });
-      setRows((current) => current.map((item) => item.database_id === row.database_id ? {
-        ...item,
-        estado: 'PENDIENTE',
-        saldo_pendiente: item.monto_original,
-        fecha_modificacion: new Date().toISOString(),
-      } : item));
-      setSelectedPendingIds([row.database_id]);
+      const history = await apiRequest<PendingPaymentDetailApi>(`/transactions/pending/${row.database_id}/payments`);
+      const names = [...new Set(history.compensations.map(payment => `PEN-${String(payment.codigo_pendiente).padStart(6,'0')} ${payment.contraparte || ''}`))];
+      if (!names.length) throw new Error('No se encontro una liquidacion para corregir.');
+      const confirmed = await requestSystemConfirm(
+        `Se revertira la liquidacion completa de ${names.length} pendiente(s): ${names.join(', ')}. Se revertiran sus movimientos de efectivo y digitales para registrarlos nuevamente.`,
+        { title: 'Corregir liquidacion completa', confirmLabel: 'Revertir liquidacion', tone: 'danger' },
+      );
+      if (!confirmed) return;
+      const result = await apiRequest<{ids:string[]}>(`/transactions/pending/${row.database_id}/reopen-batch`, {
+        method:'POST',body:JSON.stringify({paymentIds:history.compensations.map(payment=>payment.id_abono)}),
+      });
+      setRows(await apiRequest<PendingApiRow[]>('/transactions/pending'));
+      setSelectedPendingIds(result.ids);
       setMessage('La liquidación fue revertida. Seleccione Efectivo, Combinado o Digital para registrarla nuevamente.');
       announceOperationalDataChange();
     } catch (correctionError) {
@@ -6006,6 +6084,9 @@ function PendingScreen({ currentUser }: { currentUser: AuthUser }) {
           key={`pending-detail-${detail.pending.database_id}`}
           mode="view"
           row={detail.row}
+          groupRows={detail.groupRows}
+          linkedPayments={detail.payments?.compensations}
+          liquidationCash={detail.payments?.cash}
           isSaving={false}
           saveError={error}
           onCancel={() => setDetail(null)}
@@ -6184,7 +6265,7 @@ function GeneralConsolidationScreen() {
 
   useEffect(() => {
     if (isCashier) return;
-    // La Jefa consulta los turnos abiertos de la API y no datos antiguos del navegador.
+    // El Administrador consulta los turnos abiertos de la API y no datos antiguos del navegador.
     void apiRequest<ShiftDetail[]>('/shifts')
       .then((details) => {
         const rows = details.map(shiftDetailToCrudRow);
@@ -6559,14 +6640,24 @@ function ConsolidationTable({
                       <label>Pagos
                         <span className="consolidation-input-wrap"><span>{getCurrencySymbol(currency)}</span><input
                           className="consolidation-input" inputMode="decimal"
-                          value={formatConsolidationInput(rowBalance.systemIncome)} readOnly
+                          value={formatConsolidationInput(rowBalance.systemIncome)} readOnly={readOnly}
+                          onChange={(event) => onBalanceChange(currency, entity, 'systemIncome', event.target.value)}
+                          onKeyDown={(event) => onMoneyInputKeyDown(event, currency, entity, 'systemIncome', rowBalance.systemIncome)}
+                          onPaste={(event) => onMoneyInputPaste(event, currency, entity, 'systemIncome')}
+                          onFocus={(event) => event.currentTarget.select()}
+                          aria-label={`Saldo sistema Pagos ${entity} ${currency}`}
                           placeholder="0.00"
                         /></span>
                       </label>
                       <label>Envíos
                         <span className="consolidation-input-wrap"><span>{getCurrencySymbol(currency)}</span><input
                           className="consolidation-input" inputMode="decimal"
-                          value={formatConsolidationInput(rowBalance.systemExpense)} readOnly
+                          value={formatConsolidationInput(rowBalance.systemExpense)} readOnly={readOnly}
+                          onChange={(event) => onBalanceChange(currency, entity, 'systemExpense', event.target.value)}
+                          onKeyDown={(event) => onMoneyInputKeyDown(event, currency, entity, 'systemExpense', rowBalance.systemExpense)}
+                          onPaste={(event) => onMoneyInputPaste(event, currency, entity, 'systemExpense')}
+                          onFocus={(event) => event.currentTarget.select()}
+                          aria-label={`Saldo sistema Envíos ${entity} ${currency}`}
                           placeholder="0.00"
                         /></span>
                       </label>
@@ -7218,13 +7309,11 @@ function ShiftTable({
             <h2>{config.title}</h2>
           </div>
           <div className="action-row">
-            <button type="button" className="secondary-button export-button export-button--excel" onClick={() => exportExcel(config.title, columns, processedRows)}>
+            <button type="button" className="secondary-button export-button export-button--excel" title="Exportar Excel" aria-label="Exportar Excel" onClick={() => exportExcel(config.title, columns, processedRows)}>
               <FileSpreadsheet size={17} />
-              Excel
             </button>
-            <button type="button" className="secondary-button export-button export-button--pdf" onClick={() => exportPdf(config.title, columns, processedRows)}>
+            <button type="button" className="secondary-button export-button export-button--pdf" title="Exportar PDF" aria-label="Exportar PDF" onClick={() => exportPdf(config.title, columns, processedRows)}>
               <FileText size={17} />
-              PDF
             </button>
             {isBoss && (
               <button type="button" className="primary-button" onClick={openCreateModal}>
@@ -7454,6 +7543,11 @@ function ShiftModal({
   const isClosedShift = draft.status === 'Cerrado';
   const showsClosedShiftCarousel = isClosedShift && (isReadOnly || mode === 'edit');
   const title = isCloseMode ? 'Cerrar turno' : isReadOnly ? 'Detalle de turno' : mode === 'edit' ? 'Editar turno' : 'Apertura de turno';
+  const closingDifference = calculateShiftCashDifference({
+    actual:{NIO:parseMoneyValue(draft.closingNio),USD:parseMoneyValue(draft.closingUsd)},
+    expected:{NIO:parseMoneyValue(draft.expectedNio),USD:parseMoneyValue(draft.expectedUsd)},
+    registeredDifferenceNio:parseMoneyValue(draft.changeNio),buyRate:parseMoneyValue(draft.expectedRate)||36.4,
+  });
   const openingTotals = {
     NIO: calculateCashPileTotal(cashDenominations.NIO, openingCashCounts.NIO),
     USD: calculateCashPileTotal(cashDenominations.USD, openingCashCounts.USD),
@@ -7889,6 +7983,12 @@ function ShiftModal({
               </label>
             </>
           )}
+          {isCloseMode && <div className="cash-count-adjustments">
+            <div><strong>Diferencia NIO</strong>{renderDifference(closingDifference.differenceNio,'NIO',{positiveLabel:''})}</div>
+            <div><strong>Diferencia USD</strong>{renderDifference(closingDifference.differenceUsd,'USD',{positiveLabel:''})}</div>
+            <label>Cambios registrados<input inputMode="decimal" value={draft.changeNio} onChange={event=>updateField('changeNio',normalizeSignedAccountingMoneyRaw(event.target.value))}/></label>
+            <button type="button" className="secondary-button" onClick={()=>updateField('changeNio',formatAccountingMoneyRaw(parseMoneyValue(draft.changeNio)+closingDifference.differenceNio))}>Agregar cambio</button>
+          </div>}
           {isCloseMode && (
             <section className="shift-bank-balance-section">
               <div>
@@ -8145,7 +8245,7 @@ function TransactionTable({ config, currentUser }: { config: CrudConfig; current
   const [markedTransactionIds, setMarkedTransactionIds] = useState<Set<string>>(() => new Set());
   const [groupDetail, setGroupDetail] = useState<TransactionGroupDetailApi | null>(null);
   const detailRequestRef = useRef(0);
-  const [modal, setModal] = useState<{ mode: ModalMode | 'view' | 'pay'; row: CrudRow } | null>(null);
+  const [modal, setModal] = useState<{ mode: ModalMode | 'view' | 'pay'; row: CrudRow; groupRows?: CrudRow[]; payments?: TransactionGroupDetailApi['compensations'] } | null>(null);
   const [showExchangeCalculator, setShowExchangeCalculator] = useState(false);
   const [showDigitalCalculator, setShowDigitalCalculator] = useState(false);
   const [showDirectoryLookup, setShowDirectoryLookup] = useState(false);
@@ -8327,9 +8427,24 @@ function TransactionTable({ config, currentUser }: { config: CrudConfig; current
     const request = ++detailRequestRef.current;
     setTransactionSaveError('');
     try {
-      if (mode === 'view') {
+      if (mode === 'view' || mode === 'edit') {
         const group = await apiRequest<TransactionGroupDetailApi>(`/transactions/${row.databaseId}/group-detail`);
-        if (request === detailRequestRef.current) setGroupDetail(group);
+        if (request === detailRequestRef.current) {
+          {
+            const details = group.details.filter(item => mode === 'view' || item.transaction.estado !== 'ANULADA');
+            const shared = details.find(item => item.settlement.shared)?.settlement;
+            const primaryIndex = shared ? details.findIndex(item => item.transaction.direccion === shared.primaryDirection && item.transaction.estado !== 'ANULADA') : -1;
+            const lastIndex = details.reduce((last,item,index) => item.transaction.estado !== 'ANULADA' ? index : last,-1);
+            const groupRows = details.map((item,index) => {
+              if (!shared) return mapApiTransactionDetail(item);
+              return { ...mapApiTransactionDetail({ ...item, settlement: { ...item.settlement,
+                primaryCounts: index === primaryIndex ? shared.primaryCounts : {NIO:[],USD:[]},
+                changeCounts: index === lastIndex ? shared.changeCounts : {NIO:[],USD:[]},
+              }}), sharedLegacy: '1' };
+            });
+            setModal({mode,row:groupRows.find(item => item.databaseId===row.databaseId) ?? groupRows[0],groupRows,payments:group.compensations});
+          }
+        }
         return;
       }
       const detail = await apiRequest<TransactionDetailApi>(`/transactions/${row.databaseId}/detail`);
@@ -8359,7 +8474,7 @@ function TransactionTable({ config, currentUser }: { config: CrudConfig; current
     }
   }
 
-  async function saveTransactions(transactionRows: CrudRow[]) {
+  async function saveTransactions(transactionRows: CrudRow[], voidIds: string[] = []) {
     const registeredAt = formatTransactionDateTime(new Date());
     const rowsToSave: CrudRow[] = transactionRows.map((row): CrudRow => {
       const normalizedRow = normalizeTransactionRow(row);
@@ -8373,6 +8488,23 @@ function TransactionTable({ config, currentUser }: { config: CrudConfig; current
       };
     });
 
+    if (modal?.mode === 'edit' && modal.groupRows) {
+      setIsSavingTransactions(true);
+      setTransactionSaveError('');
+      try {
+        const payload = {
+          updates: rowsToSave.map(row => ({ id: row.databaseId, data: {
+            entityCode:row.entity,movementCode:row.movementCode,currencyCode:row.currency,amount:parseMoneyValue(row.amountValue),
+            pendingName:row.pendingName,description:row.description,rates:{buy:parseMoneyValue(row.exchangeRateBuy),sell:parseMoneyValue(row.exchangeRateSell)},settlement:transactionSettlementPayload(row),
+          }})),
+          voidIds,preferential:rowsToSave.some(row=>row.specialExchangeRate==='36.55'),
+        };
+        await apiRequest(`/transactions/${modal.row.databaseId}/group`, {method:'PUT',body:JSON.stringify(payload)});
+        await reloadTransactions(); setModal(null); announceOperationalDataChange();
+      } catch (error) { setTransactionSaveError(error instanceof Error ? error.message : 'No se pudo guardar el grupo.'); }
+      finally { setIsSavingTransactions(false); }
+      return;
+    }
     if (modal?.mode === 'pay') {
       const paymentRow = rowsToSave[0];
       if (!paymentRow.pendingDatabaseId) {
@@ -8526,7 +8658,7 @@ function TransactionTable({ config, currentUser }: { config: CrudConfig; current
               </div>
             </div>
           )}
-          <div className="action-row">
+          <div className="action-row transaction-header-actions">
             <button type="button" className="secondary-button" onClick={() => setShowDigitalCalculator((current) => !current)}>
               <Calculator size={17} />
               Calculadora
@@ -8574,15 +8706,13 @@ function TransactionTable({ config, currentUser }: { config: CrudConfig; current
               <CheckCircle2 size={17} />
               Modo marcador{markerMode ? ` (${visibleMarkedCount})` : ''}
             </button>
-            <button type="button" className="secondary-button export-button export-button--excel" onClick={() => exportExcel(config.title, columns, processedRows)}>
+            <button type="button" className="secondary-button export-button export-button--excel transaction-export-icon" title="Exportar Excel" aria-label="Exportar Excel" onClick={() => exportExcel(config.title, columns, processedRows)}>
               <FileSpreadsheet size={17} />
-              Excel
             </button>
-            <button type="button" className="secondary-button export-button export-button--pdf" onClick={() => exportPdf(config.title, columns, processedRows)}>
+            <button type="button" className="secondary-button export-button export-button--pdf transaction-export-icon" title="Exportar PDF" aria-label="Exportar PDF" onClick={() => exportPdf(config.title, columns, processedRows)}>
               <FileText size={17} />
-              PDF
             </button>
-            <button type="button" className="primary-button" onClick={openCreateModal}>
+            <button type="button" className="primary-button transaction-add-button" onClick={openCreateModal}>
               <Plus size={17} />
               Agregar
             </button>
@@ -8737,6 +8867,8 @@ function TransactionTable({ config, currentUser }: { config: CrudConfig; current
           key={`transaction-${modal.mode}-${modal.row.databaseId || modal.row.id}`}
           mode={modal.mode}
           row={modal.row}
+          groupRows={modal.groupRows}
+          linkedPayments={modal.payments}
           availableAccounts={currentShift?.availableAccounts ?? []}
           availableMovements={currentShift?.availableMovements ?? []}
           accountBalances={currentShift?.balances ?? []}
@@ -8750,7 +8882,7 @@ function TransactionTable({ config, currentUser }: { config: CrudConfig; current
             }
           }}
           onSave={saveTransactions}
-          onEdit={modal.mode === 'view' ? () => setModal({ mode: 'edit', row: modal.row }) : undefined}
+          onEdit={modal.mode === 'view' ? (selected) => void openTransactionModal(selected, 'edit') : undefined}
           onPay={modal.mode === 'view' && isPayableTransaction(modal.row)
             ? () => void openPendingPayment(modal.row)
             : undefined}
@@ -8829,6 +8961,9 @@ function TransactionGroupView({ detail, onClose, onEdit }: { detail: Transaction
 function TransactionModal({
   mode,
   row,
+  groupRows,
+  linkedPayments = [],
+  liquidationCash,
   availableAccounts = [],
   availableMovements = [],
   accountBalances = [],
@@ -8844,6 +8979,9 @@ function TransactionModal({
 }: {
   mode: ModalMode | 'view' | 'pay';
   row: CrudRow;
+  groupRows?: CrudRow[];
+  linkedPayments?: TransactionGroupDetailApi['compensations'];
+  liquidationCash?: PendingPaymentDetailApi['cash'];
   availableAccounts?: ShiftDetail['availableAccounts'];
   availableMovements?: ShiftDetail['availableMovements'];
   accountBalances?: ShiftDetail['balances'];
@@ -8852,8 +8990,8 @@ function TransactionModal({
   isSaving: boolean;
   saveError: string;
   onCancel: () => void;
-  onSave: (rows: CrudRow[]) => Promise<void>;
-  onEdit?: () => void;
+  onSave: (rows: CrudRow[], voidIds?: string[]) => Promise<void>;
+  onEdit?: (row: CrudRow) => void;
   onPay?: () => void;
   navigation?: ModalRecordNavigation;
 }) {
@@ -8861,8 +8999,9 @@ function TransactionModal({
   const isPayment = mode === 'pay';
   const isTransactionLocked = isReadOnly || isPayment;
   const initialDraft = useMemo(() => normalizeTransactionRow(row), [row]);
-  const [drafts, setDrafts] = useState<CrudRow[]>(() => [initialDraft]);
-  const [activeTabIndex, setActiveTabIndex] = useState(0);
+  const [drafts, setDrafts] = useState<CrudRow[]>(() => groupRows?.map(normalizeTransactionRow) ?? [initialDraft]);
+  const [removedIds, setRemovedIds] = useState<string[]>([]);
+  const [activeTabIndex, setActiveTabIndex] = useState(() => Math.max(0, groupRows?.findIndex(item=>item.databaseId===row.databaseId) ?? 0));
   const draft = drafts[activeTabIndex] ?? drafts[0];
   const transactionGroupIdRef = useRef(
     row.transactionGroupId || `GRP-${Date.now().toString(36).toUpperCase()}`,
@@ -8885,7 +9024,7 @@ function TransactionModal({
   const [selectedSettlementPendingIds, setSelectedSettlementPendingIds] = useState<string[]>([]);
   const [showPendingSettlement, setShowPendingSettlement] = useState(false);
   const [pendingSettlementQuery, setPendingSettlementQuery] = useState('');
-  const [specialExchangeRateEnabled, setSpecialExchangeRateEnabled] = useState(false);
+  const [specialExchangeRateEnabled, setSpecialExchangeRateEnabled] = useState(() => mode !== 'create' && row.exchangeRateBuy === '36.55');
   const modalRef = useAutoFocusFirstField<HTMLElement>();
   useEffect(() => {
     if (mode !== 'create') return;
@@ -8961,7 +9100,7 @@ function TransactionModal({
   const [exchangeRate] = useState<ExchangeRate>(() => {
     const current = readExchangeRate();
     return {
-      buy: row.exchangeRateBuy || current.buy,
+      buy: row.exchangeRateBuy === '36.55' ? current.buy : row.exchangeRateBuy || current.buy,
       sell: row.exchangeRateSell || current.sell,
     };
   });
@@ -8998,8 +9137,14 @@ function TransactionModal({
   // Al liquidar, el nombre identifica el pendiente pero el monto sí debe participar en el balance físico.
   const balanceDrafts = isPayment
     ? drafts.map((transactionDraft) => ({ ...transactionDraft, pendingName: '' }))
-    : drafts;
-  const customerBalanceSteps = calculateTransactionCustomerBalanceSteps(balanceDrafts, transactionExchangeRate, pendingCompensation);
+    : drafts.map(item => item.status === 'Anulada' || item.digitalSettlement === '1' ? {...item,pendingName:'SIN EFECTIVO',amountValue:'0',cashCountNio:'{}',cashCountUsd:'{}',changeCashCountNio:'{}',changeCashCountUsd:'{}'} : item);
+  const recordedCompensation = linkedPayments.reduce<Partial<Record<CashCurrency, number>>>((totals, payment) => {
+    if (payment.observaciones === 'Compensación con saldo a favor de una transacción en curso') {
+      totals[payment.moneda] = (totals[payment.moneda] || 0) + Number(payment.monto);
+    }
+    return totals;
+  }, {});
+  const customerBalanceSteps = calculateTransactionCustomerBalanceSteps(balanceDrafts, transactionExchangeRate, pendingCompensation, recordedCompensation);
   const activeBalanceStep = customerBalanceSteps[activeTabIndex];
   const activeRate = activeBalanceStep?.changeRateValue || activeBalanceStep?.rateValue || 1;
   const activeBalanceBeforeChangeNio = activeBalanceStep?.balanceBeforeChangeNio || 0;
@@ -9098,7 +9243,13 @@ function TransactionModal({
     }, 0);
   }
 
-  function removeTransactionTab(indexToRemove: number) {
+  async function removeTransactionTab(indexToRemove: number) {
+    if (mode === 'edit' && groupRows) {
+      if (!await requestSystemConfirm(`Se anulara ${drafts[indexToRemove].id}. Sus efectos se revertiran al guardar el grupo.`, {title:'Anular transaccion',confirmLabel:'Anular',tone:'danger'})) return;
+      const ids = [...removedIds, drafts[indexToRemove].databaseId];
+      if (drafts.length === 1) { await onSave([], ids); return; }
+      setRemovedIds(ids);
+    }
     if (drafts.length === 1) {
       return;
     }
@@ -9116,8 +9267,8 @@ function TransactionModal({
   }
 
   useEffect(() => {
-    if (drafts.length < 2 && specialExchangeRateEnabled) setSpecialExchangeRateEnabled(false);
-  }, [drafts.length, specialExchangeRateEnabled]);
+    if (mode === 'create' && drafts.length < 2 && specialExchangeRateEnabled) setSpecialExchangeRateEnabled(false);
+  }, [mode, drafts.length, specialExchangeRateEnabled]);
 
   async function toggleSpecialExchangeRate() {
     if (specialExchangeRateEnabled) {
@@ -9313,7 +9464,7 @@ function TransactionModal({
       );
       return;
     }
-    const customerBalanceSteps = calculateTransactionCustomerBalanceSteps(balanceDrafts, transactionExchangeRate, pendingCompensation);
+    const customerBalanceSteps = calculateTransactionCustomerBalanceSteps(balanceDrafts, transactionExchangeRate, pendingCompensation, recordedCompensation);
     const finalBalanceStep = customerBalanceSteps[customerBalanceSteps.length - 1];
     const finalBalanceNio = (finalBalanceStep?.balanceNio || 0)
       + (finalBalanceStep?.balanceUsd || 0)
@@ -9341,6 +9492,8 @@ function TransactionModal({
           ...transactionDraft,
           settledPendingIds: JSON.stringify(selectedSettlementPendingIds),
           specialExchangeRate: specialExchangeRateEnabled ? '36.55' : '',
+          exchangeRateBuy: transactionExchangeRate.buy,
+          exchangeRateSell: transactionExchangeRate.sell,
           cashCountNio: transactionDraft.cashCountNio,
           cashCountUsd: transactionDraft.cashCountUsd,
           changeCashCountNio: transactionDraft.changeCashCountNio,
@@ -9365,6 +9518,7 @@ function TransactionModal({
           transactionGroupOrder: String(index + 1),
         };
       }),
+      removedIds,
     );
   }
 
@@ -9435,11 +9589,11 @@ function TransactionModal({
                 <span>Transaccion {index + 1}</span>
                 <small>{transactionDraft.movement || 'Sin movimiento'}{transactionDraft.movementCode ? ` · ${transactionDraft.movementCode}` : ''}</small>
               </button>
-              {mode === 'create' && drafts.length > 1 && (
+              {((mode === 'create' && drafts.length > 1) || (mode === 'edit' && groupRows)) && (
                 <button
                   type="button"
                   className="transaction-tab__close"
-                  onClick={() => removeTransactionTab(index)}
+                  onClick={() => void removeTransactionTab(index)}
                   aria-label={`Cerrar transaccion ${index + 1}`}
                   title="Quitar transaccion"
                 >
@@ -9461,6 +9615,19 @@ function TransactionModal({
           )}
         </div>
 
+        {draft.closedShift === '1' && <p role="status">Turno cerrado: esta correccion modifica el registro historico, sin cambiar saldos, arqueos ni pendientes del cierre.</p>}
+        {draft.sharedLegacy === '1' && <p role="status">Arqueo original compartido: el efectivo se muestra una sola vez, en la primera operacion de su direccion; el vuelto, en la ultima. La distribucion original por pestana no fue registrada.</p>}
+        {draft.digitalSettlement === '1' && <p role="status">Liquidacion digital: no registra efectivo. Al cambiar el monto se recalcula el saldo del pendiente vinculado.</p>}
+        {linkedPayments.length > 0 && <section className="group-detail-step"><strong>Pendientes liquidados en este grupo</strong>{linkedPayments.map((payment,index)=><p key={index}>PEN-{String(payment.codigo_pendiente).padStart(6,'0')} · {payment.contraparte} · {formatCashCountMoney(Number(payment.monto),payment.moneda)}</p>)}</section>}
+        {liquidationCash && <section className="group-detail-step"><h3>Efectivo de la liquidacion</h3>
+          {liquidationCash.length ? <div className="table-scroll"><table><thead><tr><th>Lote</th><th>Movimiento</th><th>Denominacion</th><th>X25</th><th>Sueltos</th><th>Monto</th></tr></thead>
+            <tbody>{liquidationCash.map((line,index) => <tr key={index}>
+              <td>{[...new Set(liquidationCash.map(item => item.id_lote_liquidacion))].indexOf(line.id_lote_liquidacion)+1}</td>
+              <td>{line.tipo === 'PENDIENTE_VUELTO' ? 'Vuelto' : line.tipo === 'PENDIENTE_ENTREGADO' ? 'Entregado' : 'Recibido'}</td>
+              <td>{formatCashCountMoney(Number(line.denomination),line.moneda)}</td><td>{line.piles25}</td><td>{line.loose}</td>
+              <td>{formatCashCountMoney(Number(line.denomination)*(Number(line.piles25)*25+Number(line.loose)),line.moneda)}</td>
+            </tr>)}</tbody></table></div> : <p>Sin movimiento fisico de efectivo.</p>}
+        </section>}
         <div className="form-grid transaction-form-grid">
           <label className="form-field transaction-form-id">
             ID
@@ -9628,7 +9795,7 @@ function TransactionModal({
               {pendingCompensation && <p>Se aplicarán {formatCashCountMoney(pendingCompensation.amount, pendingCompensation.currency)} del saldo a favor, sin registrar efectivo ni movimiento digital adicional.</p>}
             </fieldset>
           )}
-          <div className="transaction-cash-count-section">
+          {!liquidationCash && draft.digitalSettlement !== '1' && <div className="transaction-cash-count-section">
             <div
               className={`transaction-group-change-summary transaction-group-change-summary--${customerBalanceTone}`}
               aria-label={customerBalanceLabel}
@@ -9658,7 +9825,7 @@ function TransactionModal({
                         <span>Tasa de cambio utilizada</span>
                         <strong>{transactionDifference.rateKind} C$ {formatRateDisplay(String(transactionDifference.rateValue))}</strong>
                       </div>
-                      {mode === 'create' && drafts.length > 1 && (
+                      {(mode === 'create' || mode === 'edit') && drafts.length > 1 && (
                         <button
                           type="button"
                           className={`transaction-special-rate-button ${specialExchangeRateEnabled ? 'transaction-special-rate-button--active' : ''}`}
@@ -9782,7 +9949,7 @@ function TransactionModal({
                 </div>
               </div>
             </div>
-          </div>
+          </div>}
         </div>
 
         <div className="modal-actions">
@@ -9795,8 +9962,8 @@ function TransactionModal({
             <X size={17} />
             {isReadOnly ? 'Cerrar' : 'Cancelar'}
           </button>
-          {isReadOnly && onEdit && (
-            <button type="button" className="secondary-button" onClick={onEdit}>
+          {isReadOnly && onEdit && draft.status !== 'Anulada' && (
+            <button type="button" className="secondary-button" onClick={() => onEdit(draft)}>
               <Edit3 size={17} />
               Editar
             </button>
@@ -9807,6 +9974,10 @@ function TransactionModal({
               Pagar transaccion
             </button>
           )}
+          {mode === 'edit' && groupRows && <button type="button" className="secondary-button danger-button" disabled={isSaving} onClick={async () => {
+            if (await requestSystemConfirm(`Se anularan las ${groupRows.length} transacciones del grupo.`,{title:'Anular grupo completo',confirmLabel:'Anular grupo',tone:'danger'})) await onSave([],groupRows.map(item=>item.databaseId));
+          }}><Ban size={17}/>Anular {groupRows.length} transacciones</button>}
+          {removedIds.length > 0 && <span>Se anularan {removedIds.length} transacciones</span>}
           {!isReadOnly && (
             <button
               type="button"
@@ -10394,7 +10565,7 @@ function CrudTable({
     );
   }
 
-  // Envía la clave temporal elegida por la Jefa y actualiza el estado visible de la tabla.
+  // Envía la clave temporal elegida por el Administrador y actualiza el estado visible de la tabla.
   async function resetCashierPassword(temporaryPassword: string) {
     if (!passwordResetRow?.databaseId) return;
     setCatalogSaveError('');
@@ -10444,13 +10615,11 @@ function CrudTable({
           <h2>{config.title}</h2>
         </div>
         <div className="action-row">
-          <button type="button" className="secondary-button export-button export-button--excel" onClick={() => exportExcel(config.title, visibleColumns, processedRows)}>
+          <button type="button" className="secondary-button export-button export-button--excel" title="Exportar Excel" aria-label="Exportar Excel" onClick={() => exportExcel(config.title, visibleColumns, processedRows)}>
             <FileSpreadsheet size={17} />
-            Excel
           </button>
-          <button type="button" className="secondary-button export-button export-button--pdf" onClick={() => exportPdf(config.title, visibleColumns, processedRows)}>
+          <button type="button" className="secondary-button export-button export-button--pdf" title="Exportar PDF" aria-label="Exportar PDF" onClick={() => exportPdf(config.title, visibleColumns, processedRows)}>
             <FileText size={17} />
-            PDF
           </button>
           <button type="button" className="primary-button" onClick={openCreateModal}>
             <Plus size={17} />
@@ -10684,7 +10853,7 @@ function ResetCashierPasswordDialog({
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
 
-  // Confirma que la Jefa transcribió correctamente la clave antes de invalidar sesiones.
+  // Confirma que el Administrador transcribió correctamente la clave antes de invalidar sesiones.
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (saving) return;
@@ -10710,7 +10879,7 @@ function ResetCashierPasswordDialog({
           <div><p>{cashierName} · {username}</p><h2 id="reset-password-title">Restablecer contraseña</h2></div>
           <button type="button" className="icon-button danger-button" onClick={onCancel} aria-label="Cancelar"><X size={19} /></button>
         </header>
-        {/* La contraseña se muestra para que la Jefa pueda entregársela temporalmente al cajero. */}
+        {/* La contraseña se muestra para que el Administrador pueda entregársela temporalmente al cajero. */}
         <form className="profile-password-form" onSubmit={submit}>
           <p className="muted-copy">El cajero deberá cambiar esta contraseña inmediatamente después de ingresar.</p>
           <label className="form-field">Contraseña temporal<input value={temporaryPassword} onChange={(event) => setTemporaryPassword(event.target.value)} minLength={10} required /></label>

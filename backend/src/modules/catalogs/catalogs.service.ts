@@ -596,7 +596,7 @@ export class CatalogsService {
 
   private requireBoss(user: AuthenticatedUser) {
     if (user.roleCode !== 'JEFA') {
-      throw new ForbiddenException('Solo la Jefa puede modificar catalogos administrativos.');
+      throw new ForbiddenException('Solo el Administrador puede modificar catalogos administrativos.');
     }
   }
 

@@ -43,7 +43,7 @@ export class AuthController {
     );
   }
 
-  // Valida el código recibido y establece una nueva contraseña para la Jefa.
+  // Valida el código recibido y establece una nueva contraseña paral Administrador.
   @Public()
   @Post('password-recovery/confirm')
   confirmPasswordRecovery(@Body() body: ConfirmPasswordRecoveryRequest, @Req() request: HttpRequest) {

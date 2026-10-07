@@ -16,6 +16,8 @@ import {
   payPendingBatchSchema,
   payPendingSchema,
   updateTransactionSchema,
+  updateTransactionGroupSchema,
+  reopenPaymentsSchema,
 } from './transaction-batch.schema';
 import { TransactionsService } from './transactions.service';
 
@@ -108,7 +110,7 @@ export class TransactionsController {
        left join temo.monedas mm on mm.id_moneda = tm.id_moneda
        left join temo.pagos_pendientes pp
          on pp.id_transaccion = t.id_transaccion
-        and pp.estado in ('PENDIENTE', 'ABONADO', 'VENCIDO')
+        and pp.estado <> 'CANCELADO'
        left join temo.contrapartes cp on cp.id_contraparte = pp.id_contraparte
        left join lateral (
          select jsonb_object_agg(
@@ -139,7 +141,7 @@ export class TransactionsController {
       [safeLimit, safeOffset, request.user.roleCode, request.user.id],
     );
 
-    return result.rows;
+    return this.transactions.applyHistoricalRows(result.rows);
   }
 
   @Put(':id')
@@ -166,6 +168,13 @@ export class TransactionsController {
     return this.transactions.void(id, request.user);
   }
 
+  @Put(':id/group')
+  updateGroup(@Param('id') id: string, @Body() body: unknown, @Req() request: { user: AuthenticatedUser }) {
+    const parsed = updateTransactionGroupSchema.safeParse(body);
+    if (!parsed.success) throw new BadRequestException('Los cambios del grupo no son validos.');
+    return this.transactions.updateGroup(id, parsed.data, request.user);
+  }
+
   @Get(':id/detail')
   detail(
     @Param('id') id: string,
@@ -182,6 +191,18 @@ export class TransactionsController {
   @Get('pending')
   pending(@Req() request: { user: AuthenticatedUser }) {
     return this.transactions.listPending(request.user);
+  }
+
+  @Get('pending/:id/payments')
+  pendingPayments(@Param('id') id: string, @Req() request: { user: AuthenticatedUser }) {
+    return this.transactions.pendingPaymentDetail(id, request.user);
+  }
+
+  @Post('pending/:id/reopen-batch')
+  reopenPayments(@Param('id') id: string, @Body() body: unknown, @Req() request: { user: AuthenticatedUser }) {
+    const parsed = reopenPaymentsSchema.safeParse(body);
+    if (!parsed.success) throw new BadRequestException('Seleccione la liquidacion que desea corregir.');
+    return this.transactions.reopenPaymentBatch(id, parsed.data.paymentIds, request.user);
   }
 
   @Post('pending/:id/pay')

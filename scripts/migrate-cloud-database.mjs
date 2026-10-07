@@ -57,7 +57,9 @@ try {
       [file],
     );
     if (existing.rowCount) {
-      if (existing.rows[0].sha256 !== sha256) {
+      const lineEndingHashes = ['\n', '\r\n'].map(ending => createHash('sha256')
+        .update(sql.replace(/\r\n|\n/g, ending)).digest('hex'));
+      if (existing.rows[0].sha256 !== sha256 && !lineEndingHashes.includes(existing.rows[0].sha256)) {
         throw new Error(`La migracion ${file} cambio despues de haberse aplicado.`);
       }
       console.log(`OMITIDA  ${file}`);

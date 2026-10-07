@@ -342,6 +342,10 @@ button:disabled {
 }
 
 .export-button--excel {
+  width: 40px;
+  min-width: 40px;
+  padding-inline: 0;
+  justify-content: center;
   background: #217346;
   border-color: #217346;
   color: #fff;
@@ -353,6 +357,10 @@ button:disabled {
 }
 
 .export-button--pdf {
+  width: 40px;
+  min-width: 40px;
+  padding-inline: 0;
+  justify-content: center;
   background: #d92d20;
   border-color: #d92d20;
   color: #fff;
@@ -378,7 +386,7 @@ button:disabled {
 }
 
 .metrics-grid {
-  /* Cuadricula de metricas del panel de jefa. */
+  /* Cuadricula de metricas del panel de administrador. */
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 14px;
@@ -471,6 +479,8 @@ button:disabled {
 }
 
 .transaction-header-difference > span {
+  justify-self: center;
+  text-align: center;
   color: var(--muted);
   font-size: .68rem;
   font-weight: 850;
@@ -2162,6 +2172,9 @@ td {
   opacity: 0;
 }
 
+.notification-summary { display: block; max-height: 85vh; overflow-y: auto; }
+.notification-summary-list { display: grid; gap: 12px; margin: 12px 0; }
+.notification-summary-list > div { display: grid; gap: 4px; padding-bottom: 10px; border-bottom: 1px solid #d5e3e2; }
 .group-detail-panel { overflow-y: auto; }
 .group-detail-step { padding: 16px 20px; border-bottom: 1px solid #d5e3e2; min-width: 0; }
 .group-detail-step header, .group-detail-movement { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; }
@@ -4271,8 +4284,36 @@ tbody tr:hover td {
 
 .teledolar-differences .difference-badge {
   justify-content: center;
-  min-width: 0;
+  min-width: 104px;
+  width: auto;
+}
+
+.table-panel-header:has(> .transaction-header-actions) {
+  display: grid;
+  grid-template-columns: minmax(150px, 1fr) auto;
+  align-items: center;
+}
+.table-panel-header:has(> .transaction-header-actions) > .transaction-header-difference {
+  margin-inline: 0;
+}
+.transaction-header-actions {
+  grid-column: 1 / -1;
+  justify-content: flex-end;
   width: 100%;
+}
+.transaction-header-actions .transaction-add-button {
+  margin-left: auto;
+  flex-shrink: 0;
+}
+.transaction-header-actions .transaction-export-icon {
+  width: 40px;
+  min-width: 40px;
+  padding-inline: 0;
+  justify-content: center;
+}
+@media (max-width: 700px) {
+  .table-panel-header:has(> .transaction-header-actions) { grid-template-columns: minmax(0, 1fr); }
+  .table-panel-header:has(> .transaction-header-actions) > .transaction-header-difference { justify-self: center; }
 }
 
 .teledolar-opening-summary {

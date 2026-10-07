@@ -52,6 +52,14 @@ export const updateTransactionSchema = z
   })
   .strict();
 
+export const updateTransactionGroupSchema = z.object({
+  updates: z.array(z.object({ id: z.string().uuid(), data: updateTransactionSchema }).strict()).max(20),
+  voidIds: z.array(z.string().uuid()).max(20),
+  preferential: z.boolean(),
+}).strict().refine(value => value.updates.length + value.voidIds.length > 0, 'Seleccione transacciones.');
+export type UpdateTransactionGroupInput = z.infer<typeof updateTransactionGroupSchema>;
+export const reopenPaymentsSchema = z.object({ paymentIds: z.array(z.string().uuid()).min(1).max(100) }).strict();
+
 export const createTransactionBatchSchema = z
   .object({
     shiftId: z.string().uuid().optional(),

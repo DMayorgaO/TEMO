@@ -54,6 +54,79 @@ type ShiftRow = QueryResultRow & {
 export class ShiftsService {
   constructor(private readonly db: DatabaseService) {}
 
+  async dashboard(user: AuthenticatedUser, from?: string, to?: string, day?: string) {
+    this.requireBoss(user);
+    return this.db.transaction(async client => {
+      await client.query('set transaction isolation level repeatable read read only');
+      const clock = (await client.query(`select to_char(now() at time zone 'America/Managua','YYYY-MM-DD') as today,
+        to_char(date_trunc('week',now() at time zone 'America/Managua'),'YYYY-MM-DD') as monday,
+        to_char(date_trunc('week',now() at time zone 'America/Managua')+interval '5 days','YYYY-MM-DD') as saturday`)).rows[0];
+      const start = from || clock.monday, end = to || clock.saturday;
+      const tableDay = day || clock.today;
+      const counts = await client.query(`select to_char(t.fecha_transaccion at time zone 'America/Managua','YYYY-MM-DD') as day,
+        s.id_sucursal as branch_id,s.nombre as branch,u.id_usuario as cashier_id,u.nombre_completo as cashier,
+        e.codigo as entity,
+        count(*) filter(where m.codigo='NIO')::int as nio,count(*) filter(where m.codigo='USD')::int as usd,count(*)::int as total
+        from temo.transacciones t join temo.sucursales s using(id_sucursal)
+        join temo.usuarios u on u.id_usuario=t.id_cajero join temo.monedas m on m.id_moneda=t.id_moneda_original
+        join temo.cuentas_movimientos cm using(id_cuenta_movimiento)
+        join temo.cuentas_bancarias cb using(id_cuenta) join temo.entidades_bancarias e using(id_entidad)
+        where t.estado<>'ANULADA' and not exists(select 1 from temo.correcciones_transacciones_cerradas h where h.id_transaccion=t.id_transaccion and h.anulada)
+        and ((t.fecha_transaccion>=($1::date::timestamp at time zone 'America/Managua') and t.fecha_transaccion<(($2::date+1)::timestamp at time zone 'America/Managua'))
+          or (t.fecha_transaccion>=($3::date::timestamp at time zone 'America/Managua') and t.fecha_transaccion<(($3::date+1)::timestamp at time zone 'America/Managua')))
+        group by 1,s.id_sucursal,s.nombre,u.id_usuario,u.nombre_completo,e.codigo order by day,branch,cashier,e.codigo`,[start,end,tableDay]);
+      const accounts = await client.query(`select cb.id_cuenta as account_id,cb.alias as account,
+        e.codigo as entity,m.codigo as currency,s.id_sucursal as branch_id,s.nombre as branch
+        from temo.cuentas_bancarias cb join temo.entidades_bancarias e using(id_entidad)
+        join temo.monedas m using(id_moneda) cross join temo.sucursales s
+        where cb.estado='ACTIVO' and e.estado='ACTIVO' and m.estado='ACTIVO' and s.estado='ACTIVO'
+        and (not exists(select 1 from temo.cuentas_sucursales scope where scope.id_cuenta=cb.id_cuenta)
+          or exists(select 1 from temo.cuentas_sucursales scope where scope.id_cuenta=cb.id_cuenta and scope.id_sucursal=s.id_sucursal))
+        order by s.nombre,e.codigo,m.codigo,cb.alias`);
+      const available = new Set(accounts.rows.map(row=>`${row.branch_id}:${row.account_id}`));
+      const shifts = await client.query(`select t.id_turno from temo.turnos t
+        where t.estado in ('ABIERTO','PENDIENTE_APROBACION') or (t.estado='CERRADO'
+        and (t.fecha_cierre at time zone 'America/Managua')::date=$1::date)`,[clock.today]);
+      const balances = shifts.rows.length ? await this.loadBalances(shifts.rows.map(row=>row.id_turno),client) : [];
+      // An account is shared: choose its latest active reading, never sum successive shifts.
+      const shared = new Map<string, typeof balances[number]>();
+      for (const row of balances) {
+        if (!available.has(`${row.branch_id}:${row.account_id}`)) continue;
+        if (row.shift_state==='CERRADO') row.system=row.closing_system ?? row.system;
+        const key = `${row.branch_id}:${row.account_id}`;
+        const previous = shared.get(key);
+        const priority = row.shift_state==='CERRADO'?0:1;
+        const previousPriority = previous?.shift_state==='CERRADO'?0:1;
+        if (!previous || priority>previousPriority || (priority===previousPriority && new Date(row.updated_at).getTime()>new Date(previous.updated_at).getTime())) shared.set(key,row);
+      }
+      const reconciliation = await client.query(`with active_accounts as (
+        select cb.id_cuenta,e.codigo as entity,m.codigo as currency,s.id_sucursal as branch_id,s.nombre as branch
+        from temo.cuentas_bancarias cb join temo.entidades_bancarias e using(id_entidad)
+        join temo.monedas m using(id_moneda) cross join temo.sucursales s
+        where cb.estado='ACTIVO' and e.estado='ACTIVO' and m.estado='ACTIVO' and s.estado='ACTIVO'
+          and (e.codigo='PEX' or (e.codigo='TELEDOLAR' and m.codigo='USD'))
+          and (not exists(select 1 from temo.cuentas_sucursales scope where scope.id_cuenta=cb.id_cuenta)
+            or exists(select 1 from temo.cuentas_sucursales scope where scope.id_cuenta=cb.id_cuenta and scope.id_sucursal=s.id_sucursal))
+      ), movements as (
+        select cm.id_cuenta,t.id_sucursal,
+          sum(t.monto_original) filter(where ef.direccion_efectivo='ENTRA') as income,
+          sum(t.monto_original) filter(where ef.direccion_efectivo='SALE') as expense
+        from temo.transacciones t join temo.cuentas_movimientos cm using(id_cuenta_movimiento)
+        join temo.efectos_movimientos ef using(id_cuenta_movimiento)
+        where t.estado<>'ANULADA'
+          and t.fecha_transaccion>=($1::date::timestamp at time zone 'America/Managua')
+          and t.fecha_transaccion<(($1::date+1)::timestamp at time zone 'America/Managua')
+        group by cm.id_cuenta,t.id_sucursal
+      ) select a.branch_id,a.branch,a.entity,a.currency,
+          coalesce(sum(m.income),0) as income,coalesce(sum(m.expense),0) as expense
+        from active_accounts a left join movements m on m.id_cuenta=a.id_cuenta and m.id_sucursal=a.branch_id
+        group by a.branch_id,a.branch,a.entity,a.currency order by a.branch,a.entity,a.currency`,[clock.today]);
+      return {today:clock.today,tableDay,from:start,to:end,counts:counts.rows,accounts:accounts.rows,
+        banks:[...new Set([...accounts.rows,...counts.rows].map(row=>row.entity))].sort(),balances:[...shared.values()],
+        lafise:balances.filter(row=>row.entity==='LAFISE' && row.shift_day===clock.today),reconciliation:reconciliation.rows};
+    });
+  }
+
   async list(user: AuthenticatedUser) {
     const result = await this.db.query<ShiftRow>(
       `${this.shiftSelect()}
@@ -226,7 +299,7 @@ export class ShiftsService {
   async update(shiftId: string, input: UpdateShiftInput, user: AuthenticatedUser) {
     this.requireBoss(user);
     const currentShift = await this.findAuthorizedShift(shiftId, user);
-    // La Jefa puede corregir un turno alistado, pero no modificar turnos cerrados o anulados.
+    // El Administrador puede corregir un turno alistado, pero no modificar turnos cerrados o anulados.
     if (!['PENDIENTE_APERTURA', 'ABIERTO', 'PENDIENTE_APROBACION'].includes(currentShift.estado)) {
       throw new ConflictException('El turno ya no admite cambios de apertura.');
     }
@@ -366,10 +439,12 @@ export class ShiftsService {
   ) {
     await this.findAuthorizedShift(shiftId, user, true);
     await this.db.transaction(async (client) => {
+      const currentBalances = await this.loadBalances(shiftId, client);
       for (const balance of balances) {
+        const current = currentBalances.find((row) => row.account === balance.account);
         await client.query(
           `update temo.saldos_turno_cuentas stc
-           set saldo_final_calculado = stc.saldo_inicial
+           set saldo_final_calculado = case when eb.codigo = 'TELEDOLAR' then $8 else stc.saldo_inicial
                  + (case when eb.codigo = 'PEX' then -1 else 1 end) * coalesce((
                    select sum(case movement.direccion when 'ENTRA' then movement.monto else -movement.monto end)
                    from (
@@ -383,16 +458,19 @@ export class ShiftsService {
                      join temo.transferencias tf on tf.id_transferencia = mc.id_transferencia
                      where mc.id_cuenta = stc.id_cuenta and tf.id_turno = $1 and tf.estado = 'ACTIVO'
                    ) movement
-                 ), 0),
+                 ), 0) end,
                saldo_final_sistema = $3,
                saldo_ingresos_sistema = $4,
-               saldo_egresos_sistema = $5
+               saldo_egresos_sistema = $5,
+               ingresos_referencia_sistema = $6,
+               egresos_referencia_sistema = $7
            from temo.cuentas_bancarias cb
            join temo.entidades_bancarias eb on eb.id_entidad = cb.id_entidad
            where stc.id_turno = $1
              and stc.id_cuenta = cb.id_cuenta
              and cb.alias = $2`,
-          [shiftId, balance.account, balance.amount, balance.income ?? null, balance.expense ?? null],
+          [shiftId, balance.account, balance.amount, balance.income ?? null, balance.expense ?? null,
+            current?.income ?? null, current?.expense ?? null, current?.calculated ?? null],
         );
       }
     });
@@ -756,7 +834,7 @@ export class ShiftsService {
 
   private requireBoss(user: AuthenticatedUser) {
     if (user.roleCode !== 'JEFA') {
-      throw new ForbiddenException('Esta operacion requiere el perfil Jefa.');
+      throw new ForbiddenException('Esta operacion requiere el perfil Administrador.');
     }
   }
 
@@ -961,9 +1039,18 @@ export class ShiftsService {
     return output;
   }
 
-  private async loadBalances(shiftId: string) {
-    const result = await this.db.query(
+  private async loadBalances(shiftId: string | string[], database: Queryable = this.db) {
+    const result = await database.query(
       `select
+         selected_shift.id_turno as shift_id, selected_shift.estado as shift_state,
+         selected_shift.id_sucursal as branch_id, branch.nombre as branch,
+         selected_shift.id_cajero as cashier_id, cashier.nombre_completo as cashier,
+         to_char(coalesce(selected_shift.fecha_cierre,selected_shift.fecha_apertura) at time zone 'America/Managua','YYYY-MM-DD') as shift_day,
+         greatest(stc.fecha_actualizacion,stc.fecha_registro_cierre,selected_shift.fecha_cierre,selected_shift.fecha_apertura,
+           (select max(mc.fecha_creacion) from temo.movimientos_cuentas mc
+            left join temo.transacciones last_t on last_t.id_transaccion=mc.id_transaccion
+            left join temo.transferencias last_tf on last_tf.id_transferencia=mc.id_transferencia
+            where mc.id_cuenta=stc.id_cuenta and coalesce(last_t.id_turno,last_tf.id_turno)=stc.id_turno)) as updated_at,
          stc.id_cuenta as account_id,
          cb.alias as account,
          eb.codigo as entity,
@@ -972,18 +1059,31 @@ export class ShiftsService {
          coalesce(movements.income, 0) as income,
          coalesce(movements.expense, 0) as expense,
          computed.amount as calculated,
+         stc.saldo_final_sistema as closing_system,
          case
+           when eb.codigo = 'TELEDOLAR' then computed.amount
+             + case when stc.ingresos_referencia_sistema is not null then coalesce(stc.saldo_ingresos_sistema,0) - stc.ingresos_referencia_sistema else 0 end
+             - case when stc.egresos_referencia_sistema is not null then coalesce(stc.saldo_egresos_sistema,0) - stc.egresos_referencia_sistema else 0 end
            when stc.saldo_final_calculado is distinct from computed.amount then computed.amount
            else coalesce(stc.saldo_final_sistema, computed.amount)
          end as system,
-         case when eb.codigo = 'TELEDOLAR' then coalesce(movements.income, 0) else stc.saldo_ingresos_sistema end as system_income,
-         case when eb.codigo = 'TELEDOLAR' then coalesce(movements.expense, 0) else stc.saldo_egresos_sistema end as system_expense,
+         case when eb.codigo = 'TELEDOLAR' then coalesce(movements.income, 0)
+           + case when stc.ingresos_referencia_sistema is not null then coalesce(stc.saldo_ingresos_sistema,0) - stc.ingresos_referencia_sistema else 0 end
+           else stc.saldo_ingresos_sistema end as system_income,
+         case when eb.codigo = 'TELEDOLAR' then coalesce(movements.expense, 0)
+           + case when stc.egresos_referencia_sistema is not null then coalesce(stc.saldo_egresos_sistema,0) - stc.egresos_referencia_sistema else 0 end
+           else stc.saldo_egresos_sistema end as system_expense,
          case
+           when eb.codigo = 'TELEDOLAR' then
+             case when stc.ingresos_referencia_sistema is not null then coalesce(stc.saldo_ingresos_sistema,0) - stc.ingresos_referencia_sistema else 0 end
+             - case when stc.egresos_referencia_sistema is not null then coalesce(stc.saldo_egresos_sistema,0) - stc.egresos_referencia_sistema else 0 end
            when stc.saldo_final_calculado is distinct from computed.amount then 0
            else coalesce(stc.saldo_final_sistema, computed.amount) - computed.amount
          end as difference
        from temo.saldos_turno_cuentas stc
        join temo.turnos selected_shift on selected_shift.id_turno = stc.id_turno
+       join temo.sucursales branch on branch.id_sucursal=selected_shift.id_sucursal
+       join temo.usuarios cashier on cashier.id_usuario=selected_shift.id_cajero
        join temo.cuentas_bancarias cb on cb.id_cuenta = stc.id_cuenta
        join temo.entidades_bancarias eb on eb.id_entidad = cb.id_entidad
        join temo.monedas m on m.id_moneda = cb.id_moneda
@@ -1025,7 +1125,7 @@ export class ShiftsService {
            + (case when eb.codigo = 'PEX' then -coalesce(movements.income, 0) else coalesce(movements.income, 0) end)
            + (case when eb.codigo = 'PEX' then coalesce(movements.expense, 0) else -coalesce(movements.expense, 0) end) as amount
        ) computed
-       where stc.id_turno = $1
+       where stc.id_turno = any($1::uuid[])
          and (
            cb.estado = 'ACTIVO'
            or stc.saldo_inicial <> 0
@@ -1034,7 +1134,7 @@ export class ShiftsService {
            or coalesce(movements.expense, 0) <> 0
          )
        order by m.codigo, eb.codigo, cb.alias`,
-      [shiftId],
+      [Array.isArray(shiftId) ? shiftId : [shiftId]],
     );
     return result.rows;
   }

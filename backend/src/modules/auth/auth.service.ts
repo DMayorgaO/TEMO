@@ -38,7 +38,7 @@ export class AuthService {
     this.passwordResetEmailFrom = config.get<string>('PASSWORD_RESET_EMAIL_FROM', '').trim();
   }
 
-  // Genera y envía un código sólo para cuentas activas con rol Jefa y correo registrado.
+  // Genera y envía un código sólo para cuentas activas con rol Administrador y correo registrado.
   async requestPasswordRecovery(identifier: string, ip: string, userAgent: string) {
     const normalizedIdentifier = identifier.trim().toLowerCase();
     const genericResponse = { success: true, message: 'Si los datos coinciden, recibirá un código de recuperación en el correo registrado.' };
@@ -295,7 +295,7 @@ export class AuthService {
     );
     return {
       id: row.id, fullName: row.full_name, username: row.username, roleId: row.role_id,
-      roleCode: row.role_code, roleName: row.role_name,
+      roleCode: row.role_code, roleName: row.role_code === 'JEFA' ? 'Administrador' : row.role_name,
       permissions: permissions.rows.map((item) => item.code),
       mustChangePassword: Boolean(row.must_change_password), sessionVersion: Number(row.session_version),
       profilePhoto: row.profile_photo ?? null,

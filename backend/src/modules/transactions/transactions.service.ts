@@ -5,6 +5,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { PoolClient, QueryResultRow } from 'pg';
+import { randomUUID } from 'node:crypto';
 import { AuthenticatedUser } from '../auth/auth.service';
 import { DatabaseService } from '../database/database.service';
 import { preferentialGroupMarker } from '../../common/preferential-cash';
@@ -13,6 +14,7 @@ import {
   PayPendingBatchInput,
   PayPendingInput,
   UpdateTransactionInput,
+  UpdateTransactionGroupInput,
 } from './transaction-batch.schema';
 
 type CurrencyCode = 'NIO' | 'USD';
@@ -611,6 +613,7 @@ export class TransactionsService {
            coalesce(mm.codigo, m.codigo) as moneda,
            coalesce(tm.direccion, ef.direccion_efectivo, 'ENTRA') as direccion,
            t.estado,
+           exists(select 1 from temo.transacciones_montos digital where digital.id_transaccion=t.id_transaccion and digital.medio='CUENTA_BANCARIA') as digitalSettlement,
            e.codigo as entidad,
            cm.codigo_operativo as codigo_movimiento,
            cm.nombre_operativo as movimiento,
@@ -647,7 +650,7 @@ export class TransactionsService {
          left join temo.monedas mm on mm.id_moneda = tm.id_moneda
          left join temo.pagos_pendientes pp
            on pp.id_transaccion = t.id_transaccion
-          and pp.estado in ('PENDIENTE', 'ABONADO', 'VENCIDO')
+          and pp.estado <> 'CANCELADO'
          left join temo.contrapartes cp on cp.id_contraparte = pp.id_contraparte
          where t.id_transaccion = $1`,
         [transactionId],
@@ -729,9 +732,15 @@ export class TransactionsService {
       }
 
       const { id_cajero: _cashierId, id_sucursal: _branchId, fecha_turno: _shiftDate, estado_turno: _shiftState, ...visibleTransaction } = transaction;
+      const historical = await client.query<{ datos: UpdateTransactionInput | null; proyeccion: Record<string, unknown>; anulada: boolean } & QueryResultRow>(
+        'select datos,proyeccion,anulada from temo.correcciones_transacciones_cerradas where id_transaccion=$1', [transactionId],
+      );
+      const correction = historical.rows[0];
       return {
-        transaction: visibleTransaction,
-        rates: {
+        transaction: { ...visibleTransaction, ...correction?.proyeccion,
+          ...(correction?.anulada ? { estado: 'ANULADA' } : {}),
+          historicalCorrection: Boolean(correction), closedShift: _shiftState === 'CERRADO' },
+        rates: correction?.datos?.rates ?? {
           buy: Number(transaction.tasa_compra_usada),
           sell: Number(transaction.tasa_venta_usada),
         },
@@ -743,6 +752,7 @@ export class TransactionsService {
           expectedChange,
           primaryCounts,
           changeCounts,
+          ...(correction?.datos ? { ...correction.datos.settlement, shared: false } : {}),
         },
       };
     });
@@ -761,13 +771,17 @@ export class TransactionsService {
       details.push(member.id_transaccion === transactionId ? selected : await this.detail(member.id_transaccion, user));
     }
     const compensations = await this.db.query(
-      `select pp.codigo_pendiente, ap.monto, m.codigo as moneda
+      `select pp.codigo_pendiente, ap.monto, m.codigo as moneda, cp.nombre as contraparte, ap.id_transaccion,
+         ap.observaciones
        from temo.abonos_pendientes ap
        join temo.pagos_pendientes pp using (id_pendiente)
+       left join temo.contrapartes cp on cp.id_contraparte=pp.id_contraparte
        join temo.monedas m on m.id_moneda = ap.id_moneda
        join temo.transacciones t on t.id_transaccion = ap.id_transaccion
-       where t.id_grupo_transacciones = $1
-         and ap.observaciones = 'Compensación con saldo a favor de una transacción en curso'
+       where ap.id_lote_liquidacion in (
+         select linked.id_lote_liquidacion from temo.abonos_pendientes linked
+         join temo.transacciones operation on operation.id_transaccion=linked.id_transaccion where operation.id_grupo_transacciones=$1
+       )
        order by pp.codigo_pendiente`,
       [selected.transaction.id_grupo_transacciones],
     );
@@ -778,13 +792,27 @@ export class TransactionsService {
     transactionId: string,
     input: UpdateTransactionInput,
     user: AuthenticatedUser,
+    groupClient?: PoolClient,
+    balance?: Record<CurrencyCode, number>,
   ) {
-    return this.db.transaction(async (client) => {
+    const work = async (client: PoolClient) => {
       const transaction = await this.loadEditableTransaction(
         client,
         transactionId,
         user,
       );
+      if (transaction.estado_turno === 'CERRADO') {
+        await this.saveHistoricalCorrection(client, transaction, input, false, user);
+        return { id: transactionId, updated: true, historical: true };
+      }
+      if (await this.isDigitalPayment(client, transactionId)) {
+        await this.updateDigitalPayment(client, transaction, input, user);
+        return { id: transactionId, updated: true };
+      }
+      if (!groupClient && (await client.query(`select 1 from temo.abonos_pendientes where id_transaccion=$1 and observaciones=$2 limit 1`,
+        [transactionId,'Compensación con saldo a favor de una transacción en curso'])).rowCount) {
+        throw new ConflictException('Edite esta operacion desde el grupo para recalcular sus pendientes vinculados.');
+      }
       const previousSettlement = await this.loadStoredSettlement(
         client,
         transaction.id_grupo_transacciones,
@@ -808,12 +836,15 @@ export class TransactionsService {
         amount: input.amount,
         pendingName: input.pendingName,
         settlement: input.settlement,
-      }, movement.direccion_efectivo);
+      }, movement.direccion_efectivo, balance);
 
-      if (transaction.estado_pendiente === 'PAGADO') {
-        throw new ConflictException(
-          'Una transaccion con el pendiente pagado no puede modificar sus datos financieros.',
-        );
+      const paid = transaction.id_pendiente ? await client.query(`select pp.tipo,m.codigo as moneda,
+        coalesce((select sum(ap.monto) from temo.abonos_pendientes ap where ap.id_pendiente=pp.id_pendiente),0) as total
+        from temo.pagos_pendientes pp join temo.monedas m using(id_moneda) where pp.id_pendiente=$1 for update of pp`, [transaction.id_pendiente]) : null;
+      const paidAmount = Number(paid?.rows[0]?.total ?? 0);
+      if (paidAmount > 0 && (!input.pendingName || input.currencyCode !== paid!.rows[0].moneda
+        || input.amount < paidAmount || paid!.rows[0].tipo !== (movement.tipo_pendiente ?? (movement.direccion_efectivo === 'ENTRA' ? 'POR_COBRAR' : 'POR_PAGAR')))) {
+        throw new ConflictException('El pendiente tiene abonos: conserve su moneda y tipo, y un monto no inferior a lo pagado. Para retirarlo, revierta primero su liquidacion.');
       }
 
       const methods = await this.loadPaymentMethods(client);
@@ -921,7 +952,8 @@ export class TransactionsService {
             user.id,
           ],
         );
-        if (!transaction.id_pendiente || transaction.estado_pendiente !== 'PENDIENTE') {
+        if (paidAmount > 0) await this.refreshPendingRemainder(client, pendingResult.rows[0].id_pendiente, user);
+        if (!paidAmount && (!transaction.id_pendiente || transaction.estado_pendiente !== 'PENDIENTE')) {
           await client.query(
             `insert into temo.historial_pendientes (
                id_pendiente, estado_anterior, estado_nuevo, id_usuario, motivo
@@ -980,12 +1012,24 @@ export class TransactionsService {
       );
 
       return { id: transactionId, updated: true };
-    });
+    };
+    return groupClient ? work(groupClient) : this.db.transaction(work);
   }
 
-  void(transactionId: string, user: AuthenticatedUser) {
-    return this.db.transaction(async (client) => {
+  void(transactionId: string, user: AuthenticatedUser, groupClient?: PoolClient) {
+    const work = async (client: PoolClient) => {
       const transaction = await this.loadEditableTransaction(client, transactionId, user);
+      if (transaction.estado_turno === 'CERRADO') {
+        await this.saveHistoricalCorrection(client, transaction, null, true, user);
+        return { id: transactionId, status: 'ANULADA', historical: true };
+      }
+      if (await this.isDigitalPayment(client, transactionId)) {
+        await this.releasePayments(client, [transactionId], user);
+      } else if (!groupClient) {
+        const compensation = await client.query(`select 1 from temo.abonos_pendientes
+          where id_transaccion=$1 and observaciones=$2 limit 1`, [transactionId, 'Compensación con saldo a favor de una transacción en curso']);
+        if (compensation.rowCount) throw new ConflictException('Anule esta operacion desde la edicion del grupo para recalcular sus pendientes.');
+      }
       if (transaction.id_pendiente) {
         const payments = await client.query(
           `select 1 from temo.abonos_pendientes where id_pendiente = $1 limit 1`,
@@ -1071,6 +1115,94 @@ export class TransactionsService {
         [user.id, transactionId, JSON.stringify({ pendingId: transaction.id_pendiente })],
       );
       return { id: transactionId, status: 'ANULADA' };
+    };
+    return groupClient ? work(groupClient) : this.db.transaction(work);
+  }
+
+  updateGroup(transactionId: string, input: UpdateTransactionGroupInput, user: AuthenticatedUser) {
+    return this.db.transaction(async client => {
+      const anchor = await this.loadEditableTransaction(client, transactionId, user);
+      await client.query('select id_turno from temo.turnos where id_turno=$1 for update', [anchor.id_turno]);
+      const groupRates = input.updates[0]?.data.rates;
+      if (input.updates.some(item => input.preferential !== (item.data.rates.buy === 36.55)
+        || item.data.rates.buy !== groupRates?.buy || item.data.rates.sell !== groupRates?.sell)) {
+        throw new ConflictException('Las tasas del grupo y la marca D deben coincidir en todas las pestanas.');
+      }
+      const members = await client.query<{ id_transaccion: string } & QueryResultRow>(
+        `select t.id_transaccion from temo.transacciones t
+         left join temo.correcciones_transacciones_cerradas h using(id_transaccion)
+         where t.id_grupo_transacciones=$1 and t.estado<>'ANULADA' and not coalesce(h.anulada,false)
+         order by t.orden_grupo for update of t`,
+        [anchor.id_grupo_transacciones],
+      );
+      const ids = [...input.updates.map(row => row.id), ...input.voidIds];
+      if (new Set(ids).size !== ids.length || ids.length !== members.rows.length || members.rows.some(row => !ids.includes(row.id_transaccion))) {
+        throw new ConflictException('El grupo cambio. Vuelva a abrirlo antes de guardar.');
+      }
+      if (anchor.estado_turno === 'CERRADO') {
+        for (const member of members.rows) {
+          const transaction = await this.loadEditableTransaction(client, member.id_transaccion, user);
+          const change = input.updates.find(item => item.id === member.id_transaccion);
+          await this.saveHistoricalCorrection(client, transaction, change?.data ?? null, !change, user);
+        }
+        return { updated: input.updates.length, voided: input.voidIds.length, historical: true };
+      }
+      const originalRows = await client.query('select to_jsonb(t) as data from temo.transacciones t where id_grupo_transacciones=$1 order by orden_grupo', [anchor.id_grupo_transacciones]);
+      const compensation = await client.query<{ id_abono: string; monto: string; moneda: CurrencyCode } & QueryResultRow>(
+        `select ap.id_abono,ap.monto,m.codigo as moneda from temo.abonos_pendientes ap
+         join temo.monedas m on m.id_moneda=ap.id_moneda
+         where ap.id_transaccion=any($1::uuid[]) and ap.observaciones=$2 for update of ap`,
+        [ids, 'Compensación con saldo a favor de una transacción en curso']);
+      if (!input.updates.length && compensation.rowCount) await this.releasePayments(client, ids, user, true);
+      const merge = (items: StoredSettlement[]): StoredSettlement => {
+        const result: StoredSettlement = { independent: true, primaryDirection: 'ENTRA', primaryCounts: {NIO:[],USD:[]}, changeCounts:{NIO:[],USD:[]} };
+        for (const currency of ['NIO','USD'] as const) {
+          const net = new Map<number,number>();
+          for (const item of items) for (const [lines, sign] of [[item.primaryCounts[currency], item.primaryDirection === 'ENTRA' ? 1 : -1], [item.changeCounts[currency], -1]] as const) {
+            for (const line of lines) net.set(line.denomination, (net.get(line.denomination) ?? 0) + sign * (line.piles25 * 25 + line.loose));
+          }
+          for (const [denomination, quantity] of net) (quantity >= 0 ? result.primaryCounts : result.changeCounts)[currency].push({denomination,piles25:0,loose:Math.abs(quantity)});
+        }
+        return result;
+      };
+      const before: StoredSettlement[] = [];
+      let shared = false;
+      for (const row of members.rows) {
+        const stored = await this.loadStoredSettlement(client, anchor.id_grupo_transacciones, row.id_transaccion);
+        if (stored.independent || !shared) before.push(stored);
+        if (!stored.independent) shared = true;
+      }
+      await client.query("select set_config('temo.defer_cash', 'on', true)");
+      if (shared) {
+        await client.query('delete from temo.movimientos_efectivo where id_grupo_transacciones=$1 and id_transaccion is null and not es_reverso', [anchor.id_grupo_transacciones]);
+        await client.query(`delete from temo.arqueos where id_grupo_transacciones=$1 and id_transaccion is null
+          and tipo in ('TRANSACCION_RECIBIDO','TRANSACCION_ENTREGADO','TRANSACCION_VUELTO')`, [anchor.id_grupo_transacciones]);
+      }
+      const balance = {NIO:0,USD:0};
+      for (const row of members.rows) {
+        const change = input.updates.find(item => item.id === row.id_transaccion);
+        if (change) {
+          if (input.preferential !== (change.data.rates.buy === 36.55)) throw new ConflictException('La marca D y la tasa no coinciden.');
+          await this.update(change.id, change.data, user, client, balance);
+        } else await this.void(row.id_transaccion, user, client);
+      }
+      if (input.updates.length && compensation.rowCount) {
+        for (const currency of ['NIO','USD'] as const) {
+          const amount = compensation.rows.filter(row => row.moneda === currency).reduce((sum, row) => sum + Number(row.monto), 0);
+          if (balance[currency] + 0.005 < amount) throw new ConflictException(`El saldo del grupo no cubre los pendientes liquidados en ${currency}. No se guardo ningun cambio.`);
+        }
+        const last = members.rows.filter(row => !input.voidIds.includes(row.id_transaccion)).at(-1)!;
+        await client.query('update temo.abonos_pendientes set id_transaccion=$2 where id_abono=any($1::uuid[])', [compensation.rows.map(row => row.id_abono), last.id_transaccion]);
+      }
+      const after: StoredSettlement[] = [];
+      for (const row of members.rows) if (!input.voidIds.includes(row.id_transaccion)) after.push(await this.loadStoredSettlement(client, anchor.id_grupo_transacciones, row.id_transaccion));
+      await client.query("select set_config('temo.defer_cash', 'off', true)");
+      await this.applySettlementDeltaToCurrentCashCount(client, anchor.id_turno, merge(before), merge(after), true);
+      await client.query(`update temo.grupos_transacciones set observaciones=$2,fecha_modificacion=now() where id_grupo_transacciones=$1`, [anchor.id_grupo_transacciones,input.preferential ? preferentialGroupMarker : null]);
+      await client.query(`insert into temo.bitacora(id_usuario,accion,tabla,id_registro,datos_anteriores,datos_nuevos)
+        values($1,'ACTUALIZAR','grupos_transacciones',$2,$3::jsonb,$4::jsonb)`,
+      [user.id,anchor.id_grupo_transacciones,JSON.stringify({transactions:originalRows.rows.map(row=>row.data),settlements:before}),JSON.stringify(input)]);
+      return {updated:input.updates.length,voided:input.voidIds.length};
     });
   }
 
@@ -1192,7 +1324,7 @@ export class TransactionsService {
           user.id,
           activeShift
             ? 'Pago aplicado al arqueo del turno de origen.'
-            : 'Pago registrado por Jefa sin afectar otro turno del cajero.',
+            : 'Pago registrado por Administrador sin afectar otro turno del cajero.',
         ],
       );
       const paymentId = abonoResult.rows[0].id_abono;
@@ -1298,7 +1430,7 @@ export class TransactionsService {
           [
             pending.id_cajero,
             'Pendiente marcado como pagado',
-            `La Jefa registró el pago pendiente de ${pending.contraparte}.`,
+            `El Administrador registró el pago pendiente de ${pending.contraparte}.`,
             pendingId,
             activeShift.id_turno,
             user.id,
@@ -1337,6 +1469,7 @@ export class TransactionsService {
 
   payPendingBatch(input: PayPendingBatchInput, user: AuthenticatedUser) {
     return this.db.transaction(async (client) => {
+      const paymentBatchId = randomUUID();
       // Bloquea todos los pendientes para liquidarlos como una sola operacion atomica.
       const result = await client.query<{
         id_pendiente: string;
@@ -1422,13 +1555,13 @@ export class TransactionsService {
             `insert into temo.abonos_pendientes (
                id_pendiente, id_transaccion, id_turno_aplicacion, id_moneda,
                monto, id_tipo_cambio, tasa_compra_usada, tasa_venta_usada,
-               id_usuario_creacion, observaciones
-             ) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+               id_usuario_creacion, observaciones, id_lote_liquidacion
+             ) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
              returning id_abono`,
             [pending.id_pendiente, pending.id_transaccion, activeShift.id_turno,
               pending.id_moneda, portion.amount, rateId,
               input.rates.buy, input.rates.sell, user.id,
-              `Liquidacion ${portion.kind} de operacion ${input.method.toLowerCase()}.`],
+              `Liquidacion ${portion.kind} de operacion ${input.method.toLowerCase()}.`, paymentBatchId],
           );
           const allocation = { id: payment.rows[0].id_abono, pendingId: pending.id_pendiente, amount: portion.amount };
           if (portion.kind === 'digital') {
@@ -1574,6 +1707,168 @@ export class TransactionsService {
     });
   }
 
+  async pendingPaymentDetail(pendingId: string, user: AuthenticatedUser) {
+    const source = await this.db.query('select id_transaccion from temo.pagos_pendientes where id_pendiente=$1', [pendingId]);
+    if (!source.rows[0]) throw new NotFoundException('El pendiente no existe.');
+    await this.detail(source.rows[0].id_transaccion, user);
+    const payments = await this.db.query(`select ap.id_abono,ap.id_lote_liquidacion,ap.id_pendiente as pending_database_id,ap.monto,m.codigo as moneda,
+      pp.codigo_pendiente,cp.nombre as contraparte,ap.observaciones,ap.id_transaccion,
+      pp.id_transaccion as original_transaction_id,ap.fecha_abono
+      from temo.abonos_pendientes ap join temo.pagos_pendientes pp using(id_pendiente)
+      join temo.contrapartes cp using(id_contraparte) join temo.monedas m on m.id_moneda=ap.id_moneda
+      where ap.id_lote_liquidacion in(select id_lote_liquidacion from temo.abonos_pendientes where id_pendiente=$1)
+      order by ap.fecha_abono,pp.codigo_pendiente,ap.id_abono`, [pendingId]);
+    const details = [];
+    for (const id of new Set(payments.rows.map(row => row.original_transaction_id))) details.push(await this.detail(id, user));
+    const cash = await this.db.query(`select ap.id_lote_liquidacion,a.tipo,m.codigo as moneda,
+      d.valor as denomination,ad.montones_25 as piles25,ad.sueltos as loose
+      from temo.arqueos a join temo.abonos_pendientes ap on ap.id_abono=a.id_abono_pendiente
+      join temo.monedas m on m.id_moneda=a.id_moneda join temo.arqueos_denominaciones ad using(id_arqueo)
+      join temo.denominaciones d using(id_denominacion)
+      where ap.id_abono=any($1::uuid[]) order by ap.id_lote_liquidacion,a.tipo,m.codigo,d.valor desc`, [payments.rows.map(row => row.id_abono)]);
+    return { details, compensations: payments.rows, cash: cash.rows };
+  }
+
+  async reopenPaymentBatch(pendingId: string, expectedIds: string[], user: AuthenticatedUser) {
+    await this.pendingPaymentDetail(pendingId, user);
+    return this.db.transaction(async client => {
+      const payments = await client.query(`select ap.*,pp.tipo,pp.id_transaccion as original_transaction_id,
+        s.estado as shift_state,s.id_cajero from temo.abonos_pendientes ap
+        join temo.pagos_pendientes pp using(id_pendiente)
+        join temo.turnos s on s.id_turno=ap.id_turno_aplicacion
+        where ap.id_lote_liquidacion in(select id_lote_liquidacion from temo.abonos_pendientes where id_pendiente=$1)
+        order by ap.id_abono for update of s,pp,ap`, [pendingId]);
+      const ids = payments.rows.map(row => row.id_abono);
+      if (new Set(expectedIds).size !== expectedIds.length || ids.length !== expectedIds.length || ids.some(id => !expectedIds.includes(id))) {
+        throw new ConflictException('La liquidacion cambio. Vuelva a abrirla antes de confirmar.');
+      }
+      for (const payment of payments.rows) {
+        if (!['ABIERTO','PENDIENTE_APROBACION'].includes(payment.shift_state) || (user.roleCode !== 'JEFA' && payment.id_cajero !== user.id)) {
+          throw new ForbiddenException('Solo puede revertir liquidaciones aplicadas a un turno activo autorizado. Los cierres no se modifican.');
+        }
+        if (payment.observaciones === 'Compensación con saldo a favor de una transacción en curso') {
+          throw new ConflictException('Este pago utiliza saldo de una transaccion. Corrija o anule el grupo que lo liquido.');
+        }
+        const cash = await client.query(`select a.tipo,m.codigo as moneda,d.valor,ad.montones_25,ad.sueltos
+          from temo.arqueos a join temo.monedas m using(id_moneda) join temo.arqueos_denominaciones ad using(id_arqueo)
+          join temo.denominaciones d using(id_denominacion) where a.id_abono_pendiente=$1`, [payment.id_abono]);
+        const before: StoredSettlement = { independent:true,primaryDirection:payment.tipo==='POR_COBRAR'?'ENTRA':'SALE',primaryCounts:{NIO:[],USD:[]},changeCounts:{NIO:[],USD:[]} };
+        for (const line of cash.rows) (line.tipo==='PENDIENTE_VUELTO'?before.changeCounts:before.primaryCounts)[line.moneda as CurrencyCode].push({denomination:Number(line.valor),piles25:Number(line.montones_25),loose:Number(line.sueltos)});
+        await this.applySettlementDeltaToCurrentCashCount(client,payment.id_turno_aplicacion,before,{...before,primaryCounts:{NIO:[],USD:[]},changeCounts:{NIO:[],USD:[]}},true);
+        await client.query('delete from temo.movimientos_efectivo where id_abono_pendiente=$1',[payment.id_abono]);
+        await client.query('delete from temo.arqueos where id_abono_pendiente=$1',[payment.id_abono]);
+        if (payment.id_transaccion !== payment.original_transaction_id) {
+          await client.query(`update temo.transacciones set estado='ANULADA',id_usuario_modificacion=$2,fecha_modificacion=now() where id_transaccion=$1`,[payment.id_transaccion,user.id]);
+          await client.query(`update temo.grupos_transacciones g set estado='ANULADO',id_usuario_modificacion=$2,fecha_modificacion=now()
+            where g.id_grupo_transacciones=(select id_grupo_transacciones from temo.transacciones where id_transaccion=$1)
+            and not exists(select 1 from temo.transacciones t where t.id_grupo_transacciones=g.id_grupo_transacciones and t.estado<>'ANULADA')`,[payment.id_transaccion,user.id]);
+          await this.refreshShiftAccountBalances(client,payment.id_turno_aplicacion);
+        }
+        await client.query('delete from temo.abonos_pendientes where id_abono=$1',[payment.id_abono]);
+        await this.refreshPendingRemainder(client,payment.id_pendiente,user);
+        await client.query(`insert into temo.bitacora(id_usuario,accion,tabla,id_registro,datos_anteriores,datos_nuevos)
+          values($1,'CORREGIR','abonos_pendientes',$2,$3::jsonb,$4::jsonb)`,[user.id,payment.id_abono,JSON.stringify({payment,cash:cash.rows}),JSON.stringify({revertido:true})]);
+      }
+      return { ids: [...new Set(payments.rows.map(row=>row.id_pendiente))] };
+    });
+  }
+
+  private async isDigitalPayment(client: PoolClient, id: string) {
+    const result = await client.query(`select 1 from temo.transacciones_montos tm
+      where tm.id_transaccion=$1 and tm.medio='CUENTA_BANCARIA'
+      and exists(select 1 from temo.abonos_pendientes ap where ap.id_transaccion=tm.id_transaccion)`, [id]);
+    return Boolean(result.rowCount);
+  }
+
+  private async refreshPendingRemainder(client: PoolClient, pendingId: string, user: AuthenticatedUser) {
+    const before = await client.query('select estado from temo.pagos_pendientes where id_pendiente=$1 for update', [pendingId]);
+    const next = await client.query(`update temo.pagos_pendientes pp set
+      saldo_pendiente=pp.monto_original-coalesce((select sum(monto) from temo.abonos_pendientes where id_pendiente=pp.id_pendiente),0),
+      estado=case when coalesce((select sum(monto) from temo.abonos_pendientes where id_pendiente=pp.id_pendiente),0)>=pp.monto_original then 'PAGADO'::temo.estado_pendiente
+        when exists(select 1 from temo.abonos_pendientes where id_pendiente=pp.id_pendiente) then 'ABONADO'::temo.estado_pendiente else 'PENDIENTE'::temo.estado_pendiente end,
+      fecha_modificacion=now() where id_pendiente=$1 returning estado`, [pendingId]);
+    await client.query(`insert into temo.historial_pendientes(id_pendiente,estado_anterior,estado_nuevo,id_usuario,motivo)
+      values($1,$2::temo.estado_pendiente,$3::temo.estado_pendiente,$4,'Recalculo al corregir el grupo de liquidacion')`, [pendingId, before.rows[0].estado, next.rows[0].estado, user.id]);
+  }
+
+  private async releasePayments(client: PoolClient, ids: string[], user: AuthenticatedUser, compensationOnly = false) {
+    const payments = await client.query(`select ap.* from temo.abonos_pendientes ap
+      join temo.pagos_pendientes pp using(id_pendiente)
+      where ap.id_transaccion=any($1::uuid[]) and ap.id_transaccion<>pp.id_transaccion
+      and (not $2::boolean or ap.observaciones=$3) for update of ap,pp`,
+    [ids, compensationOnly, 'Compensación con saldo a favor de una transacción en curso']);
+    for (const payment of payments.rows) {
+      await client.query('delete from temo.abonos_pendientes where id_abono=$1', [payment.id_abono]);
+      await this.refreshPendingRemainder(client, payment.id_pendiente, user);
+      await client.query(`insert into temo.bitacora(id_usuario,accion,tabla,id_registro,datos_anteriores)
+        values($1,'ANULAR','abonos_pendientes',$2,$3::jsonb)`, [user.id, payment.id_abono, JSON.stringify(payment)]);
+    }
+  }
+
+  private async updateDigitalPayment(client: PoolClient, transaction: EditableTransactionRow, input: UpdateTransactionInput, user: AuthenticatedUser) {
+    const primary = this.cashTotals(input.settlement.primaryCounts);
+    const change = this.cashTotals(input.settlement.changeCounts);
+    if (input.pendingName || primary.NIO || primary.USD || change.NIO || change.USD) throw new ConflictException('La liquidacion digital no admite efectivo ni un nuevo pendiente.');
+    const payments = await client.query(`select ap.*,pp.tipo,pp.monto_original,m.codigo as moneda,
+      pp.monto_original-coalesce((select sum(other.monto) from temo.abonos_pendientes other where other.id_pendiente=ap.id_pendiente and other.id_abono<>ap.id_abono),0) as disponible
+      from temo.abonos_pendientes ap join temo.pagos_pendientes pp using(id_pendiente)
+      join temo.monedas m on m.id_moneda=pp.id_moneda where ap.id_transaccion=$1 for update of ap,pp`, [transaction.id_transaccion]);
+    if (payments.rows.length !== 1) throw new ConflictException('La liquidacion digital debe conservar un pendiente por pestana.');
+    const payment = payments.rows[0];
+    if (input.currencyCode !== payment.moneda || input.amount > Number(payment.disponible) + 0.005) throw new ConflictException('La moneda y el monto deben corresponder al saldo del pendiente vinculado.');
+    const movement = await this.resolveMovement(client, transaction.id_sucursal, input.entityCode, input.currencyCode, input.movementCode);
+    const direction = payment.tipo === 'POR_COBRAR' ? 'ENTRA' : 'SALE';
+    if (!movement.afecta_cuenta || movement.direccion_cuenta !== direction) throw new ConflictException('El movimiento elegido no tiene la direccion bancaria de esta liquidacion.');
+    const rateId = await this.resolveExchangeRate(client, input, user.id);
+    await client.query(`update temo.transacciones set id_cuenta_movimiento=$2,monto_original=$3,id_tipo_cambio=$4,
+      tasa_compra_usada=$5,tasa_venta_usada=$6,descripcion=$7,id_usuario_modificacion=$8,fecha_modificacion=now() where id_transaccion=$1`,
+    [transaction.id_transaccion,movement.id_cuenta_movimiento,input.amount,rateId,input.rates.buy,input.rates.sell,input.description,user.id]);
+    await client.query(`update temo.transacciones_montos set monto=$2,id_cuenta=$3 where id_transaccion=$1 and medio='CUENTA_BANCARIA'`, [transaction.id_transaccion,input.amount,movement.id_cuenta]);
+    await client.query(`update temo.movimientos_cuentas set monto=$2,id_cuenta=$3 where id_transaccion=$1 and not es_reverso`, [transaction.id_transaccion,input.amount,movement.id_cuenta]);
+    await client.query(`update temo.abonos_pendientes set monto=$2,id_tipo_cambio=$3,tasa_compra_usada=$4,tasa_venta_usada=$5 where id_abono=$1`, [payment.id_abono,input.amount,rateId,input.rates.buy,input.rates.sell]);
+    await this.refreshPendingRemainder(client, payment.id_pendiente, user);
+    await this.refreshShiftAccountBalances(client, transaction.id_turno);
+    await client.query(`insert into temo.bitacora(id_usuario,accion,tabla,id_registro,datos_anteriores,datos_nuevos)
+      values($1,'CORREGIR','abonos_pendientes',$2,$3::jsonb,$4::jsonb)`, [user.id,payment.id_abono,JSON.stringify(payment),JSON.stringify(input)]);
+  }
+
+  async applyHistoricalRows(rows: QueryResultRow[]) {
+    if (!rows.length) return rows;
+    const revisions = await this.db.query(
+      'select id_transaccion,proyeccion,anulada from temo.correcciones_transacciones_cerradas where id_transaccion=any($1::uuid[])',
+      [rows.map(row => row.database_id)],
+    );
+    const indexed = new Map(revisions.rows.map(row => [row.id_transaccion, row]));
+    return rows.map(row => {
+      const revision = indexed.get(row.database_id);
+      return revision ? { ...row, ...revision.proyeccion, ...(revision.anulada ? { estado: 'ANULADA' } : {}), historicalCorrection: true } : row;
+    });
+  }
+
+  private async saveHistoricalCorrection(client: PoolClient, transaction: EditableTransactionRow, input: UpdateTransactionInput | null, annul: boolean, user: AuthenticatedUser) {
+    if (user.roleCode !== 'JEFA' || transaction.estado_turno !== 'CERRADO') throw new ForbiddenException('Solo el Administrador puede corregir registros de turnos cerrados.');
+    const previous = await client.query('select * from temo.correcciones_transacciones_cerradas where id_transaccion=$1 for update', [transaction.id_transaccion]);
+    if (previous.rows[0]?.anulada) throw new ConflictException('El registro historico ya fue anulado.');
+    let projection = previous.rows[0]?.proyeccion ?? {};
+    if (input) {
+      const movement = await this.resolveMovement(client, transaction.id_sucursal, input.entityCode, input.currencyCode, input.movementCode);
+      projection = {
+        monto: String(input.amount), moneda: input.currencyCode, direccion: movement.direccion_efectivo,
+        entidad: input.entityCode, codigo_movimiento: input.movementCode, movimiento: movement.nombre_operativo,
+        descripcion: input.description, pendiente: input.pendingName,
+        tasa_compra_usada: String(input.rates.buy), tasa_venta_usada: String(input.rates.sell),
+      };
+    }
+    const next = { datos: input ?? previous.rows[0]?.datos ?? null, proyeccion: projection, anulada: annul };
+    await client.query(`insert into temo.correcciones_transacciones_cerradas(id_transaccion,datos,proyeccion,anulada,id_usuario)
+      values($1,$2::jsonb,$3::jsonb,$4,$5) on conflict(id_transaccion) do update
+      set datos=excluded.datos,proyeccion=excluded.proyeccion,anulada=excluded.anulada,id_usuario=excluded.id_usuario,fecha_modificacion=now()`,
+    [transaction.id_transaccion, JSON.stringify(next.datos), JSON.stringify(projection), annul, user.id]);
+    await client.query(`insert into temo.bitacora(id_usuario,accion,tabla,id_registro,datos_anteriores,datos_nuevos)
+      values($1,'CORREGIR','correcciones_transacciones_cerradas',$2,$3::jsonb,$4::jsonb)`,
+    [user.id, transaction.id_transaccion, JSON.stringify(previous.rows[0] ?? null), JSON.stringify({ ...next, cierrePreservado: true })]);
+  }
+
   private async loadEditableTransaction(
     client: PoolClient,
     transactionId: string,
@@ -1596,7 +1891,7 @@ export class TransactionsService {
        left join temo.pagos_pendientes pp
          on pp.id_transaccion = t.id_transaccion
        where t.id_transaccion = $1
-       for update of t`,
+       for update of tu,t`,
       [transactionId],
     );
     const transaction = result.rows[0];
@@ -1675,6 +1970,18 @@ export class TransactionsService {
       );
       if (!payments.rowCount) {
         throw new ConflictException('No se encontró la liquidación que debe corregirse.');
+      }
+      const protectedPayments = await client.query(`select ap.id_abono from temo.abonos_pendientes ap
+        left join temo.turnos s on s.id_turno=ap.id_turno_aplicacion
+        where ap.id_pendiente=$1 and (
+          s.estado is null or s.estado not in ('ABIERTO','PENDIENTE_APROBACION')
+          or (not $2::boolean and s.id_cajero<>$3)
+          or ap.observaciones=$4
+          or exists(select 1 from temo.abonos_pendientes other
+            where other.id_lote_liquidacion=ap.id_lote_liquidacion and other.id_pendiente<>$1))`,
+      [pendingId,user.roleCode==='JEFA',user.id,'Compensación con saldo a favor de una transacción en curso']);
+      if (protectedPayments.rowCount) {
+        throw new ConflictException('Abra la liquidacion completa para corregirla. No se permiten correcciones individuales de lotes, compensaciones o pagos de turnos cerrados.');
       }
       if (payments.rows.some((payment) => payment.observaciones?.includes('de operacion'))) {
         throw new ConflictException(
@@ -1845,8 +2152,8 @@ export class TransactionsService {
         `insert into temo.abonos_pendientes (
            id_pendiente, id_transaccion, id_turno_aplicacion, id_moneda, monto,
            id_tipo_cambio, tasa_compra_usada, tasa_venta_usada,
-           id_usuario_creacion, observaciones
-         ) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,'Compensación con saldo a favor de una transacción en curso')
+           id_usuario_creacion, observaciones, id_lote_liquidacion
+         ) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,'Compensación con saldo a favor de una transacción en curso',$2)
          returning id_abono`,
         [pending.id_pendiente, paymentTransactionId, shift.id_turno, pending.id_moneda,
           Number(pending.saldo_pendiente), rateId, input.rates.buy, input.rates.sell, userId],
@@ -1932,7 +2239,7 @@ export class TransactionsService {
         loose: Number(row.loose || 0),
       });
     }
-    return { independent: result.rows.some((row) => row.independent), primaryDirection, primaryCounts, changeCounts };
+    return { independent: !result.rows.length || result.rows.some((row) => row.independent), primaryDirection, primaryCounts, changeCounts };
   }
 
   private async replaceGroupSettlement(
@@ -1951,13 +2258,15 @@ export class TransactionsService {
            tasa_venta_usada = $4,
            id_usuario_modificacion = $5,
            fecha_modificacion = now()
-       where id_grupo_transacciones = $1`,
+       where id_grupo_transacciones = $1 and ($6::uuid is null or id_transaccion = $6)
+         and estado <> 'ANULADA'`,
       [
         transaction.id_grupo_transacciones,
         rateId,
         input.rates.buy,
         input.rates.sell,
         userId,
+        previous.independent ? transaction.id_transaccion : null,
       ],
     );
 
@@ -2195,6 +2504,8 @@ export class TransactionsService {
     next: StoredSettlement,
     rejectNegative = false,
   ) {
+    const deferred = await client.query<{ deferred: string } & QueryResultRow>("select current_setting('temo.defer_cash', true) as deferred");
+    if (deferred.rows[0]?.deferred === 'on') return;
     const quantityMap = (counts: CashCounts, currency: CurrencyCode) =>
       new Map(counts[currency].map((line) => [
         Number(line.denomination),

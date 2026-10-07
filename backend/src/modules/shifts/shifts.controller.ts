@@ -1,4 +1,4 @@
-import { BadRequestException, Body, Controller, Get, Param, Post, Put, Req } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Get, Param, Post, Put, Query, Req } from '@nestjs/common';
 import { AuthenticatedUser } from '../auth/auth.service';
 import { ShiftsService } from './shifts.service';
 import {
@@ -26,6 +26,15 @@ export class ShiftsController {
     return this.shifts.open(request.user);
   }
 
+  @Get('dashboard')
+  dashboard(@Query('from') from: string | undefined, @Query('to') to: string | undefined, @Query('day') day: string | undefined, @Req() request: AuthenticatedRequest) {
+    for (const value of [from, to, day]) {
+      if (value && (!/^\d{4}-\d{2}-\d{2}$/.test(value) || !Number.isFinite(Date.parse(value)) || new Date(value).toISOString().slice(0,10) !== value)) throw new BadRequestException('Fecha invalida.');
+    }
+    if (Boolean(from) !== Boolean(to) || (from && to && (from > to || Date.parse(to)-Date.parse(from)>366*86400000))) throw new BadRequestException('Seleccione un rango de hasta 367 dias.');
+    return this.shifts.dashboard(request.user, from, to, day);
+  }
+
   @Get('current')
   current(@Req() request: AuthenticatedRequest) {
     return this.shifts.current(request.user);
@@ -51,7 +60,7 @@ export class ShiftsController {
     return this.shifts.create(this.parse(openShiftSchema, body), request.user);
   }
 
-  // El cajero confirma con un solo paso el turno previamente alistado por la Jefa.
+  // El cajero confirma con un solo paso el turno previamente alistado por el Administrador.
   @Post(':id/open-prepared')
   openPrepared(@Param('id') id: string, @Req() request: AuthenticatedRequest) {
     return this.shifts.openPrepared(id, request.user);
