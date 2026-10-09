@@ -163,17 +163,35 @@ export class ShiftsService {
     return result.rows;
   }
 
+  async access(user: AuthenticatedUser) {
+    if (user.roleCode !== 'CAJERO') throw new ForbiddenException('Esta consulta corresponde al cajero autenticado.');
+    const result = await this.db.query<{ database_id: string; estado: string; sucursal: string; caja: string }>(
+      `select t.id_turno as database_id, t.estado, s.nombre as sucursal, c.nombre as caja
+       from temo.turnos t join temo.sucursales s using(id_sucursal) join temo.cajas c using(id_caja)
+       where t.id_cajero=$1 and t.estado in ('ABIERTO','PENDIENTE_APROBACION','PENDIENTE_APERTURA')
+       order by t.fecha_apertura desc, t.fecha_creacion desc`, [user.id]);
+    return {
+      active: result.rows.find(row => row.estado === 'ABIERTO' || row.estado === 'PENDIENTE_APROBACION') ?? null,
+      prepared: result.rows.find(row => row.estado === 'PENDIENTE_APERTURA') ?? null,
+    };
+  }
+
   async current(user: AuthenticatedUser) {
     const shift = await this.findCurrentShift(user);
     if (!shift) {
       return null;
     }
     await this.ensureCurrentCashCount(shift.database_id, user.id);
-    return this.detail(shift.database_id, user);
+    return this.loadShiftDetail(shift);
   }
 
   async detail(shiftId: string, user: AuthenticatedUser) {
     const shift = await this.findAuthorizedShift(shiftId, user);
+    return this.loadShiftDetail(shift);
+  }
+
+  private async loadShiftDetail(shift: ShiftRow) {
+    const shiftId = shift.database_id;
     const cashCounts = await this.loadCashCounts(shiftId);
     const balances = await this.loadBalances(shiftId);
     const availableAccounts = await this.loadAvailableAccounts(shift.id_sucursal);

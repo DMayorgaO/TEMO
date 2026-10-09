@@ -59,6 +59,11 @@ export class ShiftsController {
     return this.shifts.current(request.user);
   }
 
+  @Get('access')
+  access(@Req() request: AuthenticatedRequest) {
+    return this.shifts.access(request.user);
+  }
+
   @Get('notifications')
   notifications(@Req() request: AuthenticatedRequest) {
     return this.shifts.notifications(request.user);

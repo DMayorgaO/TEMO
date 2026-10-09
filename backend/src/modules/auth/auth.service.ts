@@ -299,7 +299,7 @@ export class AuthService {
 
   async validateAccessToken(token: string) {
     const payload = this.verifyToken(token);
-    const user = await this.loadUser(payload.sub, payload.username);
+    const user = await this.loadUser(payload.sub, payload.username, false);
     if (user.sessionVersion !== payload.version) throw new UnauthorizedException('La sesion ya no es valida. Inicie sesion nuevamente.');
     if (user.roleCode === 'JEFA') {
       if (payload.mfa !== true) throw new UnauthorizedException('Complete la verificacion en dos pasos.');
@@ -309,12 +309,16 @@ export class AuthService {
     return user;
   }
 
-  private async loadUser(id: string, username: string) {
+  async session(user: AuthenticatedUser) {
+    return { user: await this.loadUser(user.id, user.username) };
+  }
+
+  private async loadUser(id: string, username: string, includePhoto = true) {
     const result = await this.db.query<AuthUserRow>(
       `select u.id_usuario as id, u.id_rol as role_id, r.codigo as role_code,
               r.nombre as role_name, u.nombre_completo as full_name, u.usuario as username,
               u.debe_cambiar_contrasena as must_change_password, u.version_sesion as session_version,
-              u.foto_perfil as profile_photo
+              ${includePhoto ? 'u.foto_perfil' : 'null::text'} as profile_photo
        from temo.usuarios u join temo.roles r on r.id_rol = u.id_rol
        where u.id_usuario = $1 and u.usuario = $2 and u.estado = 'ACTIVO' and r.estado = 'ACTIVO' limit 1`,
       [id, username],

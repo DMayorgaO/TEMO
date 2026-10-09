@@ -58,7 +58,7 @@ export class AuthController {
 
   @Get('me')
   session(@Req() request: HttpRequest) {
-    return { user: request.user };
+    return this.auth.session(request.user as import('./auth.service').AuthenticatedUser);
   }
 
   @Public()

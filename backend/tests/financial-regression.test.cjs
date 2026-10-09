@@ -64,9 +64,19 @@ test('financial regression in local preview with rollback', { skip: !process.env
       const prepared = await shifts.create(input, admin);
       const id = prepared.database_id ?? prepared.id_turno;
       assert.ok(id, 'prepared shift id');
+      const waiting = await shifts.access(cashier);
+      assert.equal(waiting.active, null);
+      assert.equal(waiting.prepared.database_id, id);
+      const outsiderAccess = await shifts.access({ id: admin.id, roleCode: 'CAJERO' });
+      assert.ok(outsiderAccess.prepared?.database_id !== id);
       await assert.rejects(shifts.openPrepared(id, { id: admin.id, roleCode: 'CAJERO' }), (error) => error.getStatus() === 403);
       await shifts.openPrepared(id, cashier);
       shift = await shifts.detail(id, cashier);
+      assert.deepEqual(await shifts.current(cashier), shift);
+      const access = await shifts.access(cashier);
+      assert.equal(access.active.database_id, id);
+      assert.equal(access.prepared, null);
+      assert.ok(Buffer.byteLength(JSON.stringify(access)) < Buffer.byteLength(JSON.stringify(shift)) / 5);
       near(shift.expectedCash.NIO, 1000);
       const accounts = await catalogs.cuentasBancarias({ user: cashier });
       assert.ok(accounts.some((row) => row.entidad === 'BAC' && row.moneda === 'NIO'));
@@ -82,6 +92,7 @@ test('financial regression in local preview with rollback', { skip: !process.env
       const before = await summary();
       deposit = await transactions.createBatch(batch([{ amount: 100 }], settlement(100)), {});
       const after = await summary();
+      assert.deepEqual(await shifts.current(cashier), after);
       near(after.expectedCash.NIO, before.expectedCash.NIO + 100);
       const movement = (await client.query('select id_cuenta,direccion,monto from temo.movimientos_cuentas where id_transaccion=$1', [deposit.transactions[0].id])).rows[0];
       assert.ok(movement);

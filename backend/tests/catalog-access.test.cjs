@@ -182,6 +182,18 @@ test('HTTP: anonymous is denied, cashier restricted, administrator allowed', { s
       const token = session.token ?? session.accessToken;
       assert.ok(token);
       const headers = { Authorization: `Bearer ${token}` };
+      const shiftAccess = await fetch(`${base}/shifts/access`, { headers });
+      assert.equal(shiftAccess.status, username === 'cajero.pruebas' ? 200 : 403);
+      if (shiftAccess.ok) {
+        const access = await shiftAccess.json();
+        assert.deepEqual(Object.keys(access).sort(), ['active', 'prepared']);
+        for (const shift of [access.active, access.prepared].filter(Boolean)) {
+          assert.deepEqual(Object.keys(shift).sort(), ['caja', 'database_id', 'estado', 'sucursal']);
+        }
+      }
+      const own = await fetch(`${base}/auth/me`, { headers });
+      assert.equal(own.status, 200);
+      assert.ok(Object.hasOwn((await own.json()).user, 'profilePhoto'));
       const exportHeaders = { ...headers, 'Content-Type': 'application/json' };
       for (const resource of ['transactions', 'shifts']) {
         const selection = (await (await fetch(`${base}/${resource}`, { headers })).json()).slice(0, 2);
