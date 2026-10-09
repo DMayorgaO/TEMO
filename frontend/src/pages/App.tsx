@@ -2,6 +2,8 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { buildSafeExportTable, escapeExportHtml } from '../utils/export-html';
 import { downloadExport, exportFilename } from '../utils/export-download';
 import { createTemporaryPassword } from '../utils/temporary-password';
+import { startVisiblePolling } from '../utils/visible-polling';
+import { InFlightReads } from '../utils/in-flight-reads';
 import { removeLegacyOperationalCache, SessionCache } from '../utils/session-cache';
 import type { ChangeEvent, ClipboardEvent, FormEvent, InputHTMLAttributes, KeyboardEvent, PointerEvent as ReactPointerEvent } from 'react';
 import type { LucideIcon } from 'lucide-react';
@@ -319,6 +321,8 @@ type TransactionGroupDetailApi = {
   compensations: Array<{ codigo_pendiente: string; monto: string; moneda: CashCurrency; contraparte?: string; observaciones?: string; id_transaccion?: string; id_abono?: string; pending_database_id?: string }>;
 };
 
+type ShiftAccessSummary = Pick<ShiftDetail, 'database_id' | 'estado' | 'sucursal' | 'caja'>;
+
 type PendingPaymentDetailApi = Omit<TransactionGroupDetailApi, 'compensations'> & {
   compensations: Array<TransactionGroupDetailApi['compensations'][number] & { original_transaction_id: string; id_lote_liquidacion: string | null; fecha_abono: string; tasa_compra_usada: string; tasa_venta_usada: string }>;
   cash: Array<{ id_lote_liquidacion: string; tipo: string; moneda: CashCurrency; denomination: string; piles25: number; loose: number }>;
@@ -430,9 +434,19 @@ const operationalCache = new SessionCache(window.sessionStorage, () => window.se
 removeLegacyOperationalCache(window.localStorage);
 const authUserStorageKey = 'temo:auth-user';
 const rememberedUsernameStorageKey = 'temo:remembered-username';
+const inFlightReads = new InFlightReads();
 
 async function apiRequest<T>(path: string, init?: RequestInit): Promise<T> {
   const token = window.sessionStorage.getItem(authTokenStorageKey);
+  if (init?.method && !['GET', 'HEAD'].includes(init.method.toUpperCase())) inFlightReads.clear();
+  // Share only identical default reads in progress; never cache completed data or retry writes.
+  if (!init && token) {
+    return inFlightReads.run(`${token}:${path}`, () => performApiRequest<T>(path, token));
+  }
+  return performApiRequest<T>(path, token, init);
+}
+
+async function performApiRequest<T>(path: string, token: string | null, init?: RequestInit): Promise<T> {
   const response = await fetch(`${apiBaseUrl}${path}`, {
     ...init,
     headers: {
@@ -455,7 +469,8 @@ async function apiRequest<T>(path: string, init?: RequestInit): Promise<T> {
       payload && typeof payload === 'object' && 'message' in payload
         ? payload.message
         : null;
-    if (response.status === 401 && path !== '/auth/login' && path !== '/auth/mfa/verify') {
+    if (response.status === 401 && path !== '/auth/login' && path !== '/auth/mfa/verify'
+      && token === window.sessionStorage.getItem(authTokenStorageKey)) {
       window.dispatchEvent(new Event('temo:session-expired'));
     }
     const readableMessage = Array.isArray(message)
@@ -465,6 +480,9 @@ async function apiRequest<T>(path: string, init?: RequestInit): Promise<T> {
       ? ` Código: ${payload.code}${payload.requestId ? ` · Ref: ${payload.requestId}` : ''}`
       : '';
     throw new Error(`${readableMessage}${reference}`);
+  }
+  if (token !== window.sessionStorage.getItem(authTokenStorageKey)) {
+    throw new Error('La sesion cambio durante la operacion. Inicie sesion nuevamente; si estaba guardando, compruebe el registro antes de repetirlo.');
   }
   return payload as T;
 }
@@ -3190,7 +3208,7 @@ function useOperationalRefresh(
   }, [enabled, intervalMs]);
 }
 
-function CashierShiftWaiting({ user, preparedShift, onOpen, onLogout }: { user: AuthUser; preparedShift: ShiftDetail | null; onOpen: () => Promise<void>; onLogout: () => void }) {
+function CashierShiftWaiting({ user, preparedShift, onOpen, onLogout }: { user: AuthUser; preparedShift: ShiftAccessSummary | null; onOpen: () => Promise<void>; onLogout: () => void }) {
   const [opening, setOpening] = useState(false);
   const [error, setError] = useState('');
   async function openPrepared() {
@@ -3224,7 +3242,7 @@ function cleanNotificationObservation(value: string | null | undefined) {
 
 export function App() {
   const [currentUser, setCurrentUser] = useState<AuthUser | null>(() => readAuthenticatedUser());
-  const [cashierShiftAccess, setCashierShiftAccess] = useState<{ loaded: boolean; active: ShiftDetail | null; prepared: ShiftDetail | null }>({ loaded: false, active: null, prepared: null });
+  const [cashierShiftAccess, setCashierShiftAccess] = useState<{ loaded: boolean; active: ShiftAccessSummary | null; prepared: ShiftAccessSummary | null }>({ loaded: false, active: null, prepared: null });
   const cashierShiftAccessRef = useRef(cashierShiftAccess);
   const [activeScreen, setActiveScreen] = useState<ScreenId>(getScreenFromHash);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
@@ -3251,47 +3269,25 @@ export function App() {
       return;
     }
     let active = true;
-    let running = false;
+    const initialAccess = { loaded: false, active: null, prepared: null };
+    cashierShiftAccessRef.current = initialAccess;
+    setCashierShiftAccess(initialAccess);
     const loadShiftAccess = async () => {
-      if (running) return;
-      running = true;
-      const [currentResult, shiftsResult] = await Promise.allSettled([
-        apiRequest<ShiftDetail | null>('/shifts/current'),
-        apiRequest<ShiftDetail[]>('/shifts'),
-      ]);
-      if (!active) { running = false; return; }
-
-      const previous = cashierShiftAccessRef.current;
-      const knownShiftResult = currentResult.status === 'fulfilled' && !currentResult.value && previous.active
-        ? await apiRequest<ShiftDetail>(`/shifts/${previous.active.database_id}`).then((shift) => shift).catch(() => undefined)
-        : undefined;
-      if (!active) { running = false; return; }
-      const prepared = shiftsResult.status === 'fulfilled'
-        ? shiftsResult.value.find((shift) => shift.estado === 'PENDIENTE_APERTURA') ?? null
-        : previous.prepared;
-      let nextAccess = { ...previous, loaded: true, prepared };
-
-      // Un error de red o de una consulta auxiliar nunca invalida un turno ya confirmado.
-      if (currentResult.status === 'fulfilled') {
-        if (currentResult.value) {
-          nextAccess = { loaded: true, active: currentResult.value, prepared };
-        } else if (previous.active && knownShiftResult && ['ABIERTO', 'PENDIENTE_APROBACION'].includes(knownShiftResult.estado)) {
-          nextAccess = { loaded: true, active: knownShiftResult, prepared };
-        } else if (previous.active && knownShiftResult) {
-          nextAccess = { loaded: true, active: null, prepared };
-        } else if (previous.active) {
-          // Si tampoco fue posible verificar el turno conocido, se conserva la ultima certeza.
-        } else {
-          nextAccess = { loaded: true, active: null, prepared };
-        }
+      try {
+        const summary = await apiRequest<{ active: ShiftAccessSummary | null; prepared: ShiftAccessSummary | null }>('/shifts/access');
+        if (!active) return;
+        const nextAccess = { loaded: true, ...summary };
+        cashierShiftAccessRef.current = nextAccess;
+        setCashierShiftAccess(nextAccess);
+      } catch {
+        if (!active) return;
+        const nextAccess = { ...cashierShiftAccessRef.current, loaded: true };
+        cashierShiftAccessRef.current = nextAccess;
+        setCashierShiftAccess(nextAccess);
       }
-      cashierShiftAccessRef.current = nextAccess;
-      setCashierShiftAccess(nextAccess);
-      running = false;
     };
-    void loadShiftAccess();
-    const timer = window.setInterval(() => void loadShiftAccess(), 5000);
-    return () => { active = false; window.clearInterval(timer); };
+    const stop = startVisiblePolling(loadShiftAccess, 5000, operationalDataChangedEvent);
+    return () => { active = false; stop(); };
   }, [currentUser?.id, currentUser?.roleCode]);
 
   // Cierra el menu de usuario al hacer clic fuera o presionar Escape.
@@ -3358,10 +3354,12 @@ export function App() {
     }
     void apiRequest<{ user: AuthUser }>('/auth/me')
       .then(({ user }) => {
+        if (window.sessionStorage.getItem(authTokenStorageKey) !== token) return;
         window.sessionStorage.setItem(authUserStorageKey, JSON.stringify(user));
         setCurrentUser(user);
       })
       .catch(() => {
+        if (window.sessionStorage.getItem(authTokenStorageKey) !== token) return;
         window.sessionStorage.removeItem(authTokenStorageKey);
         window.sessionStorage.removeItem(authUserStorageKey);
         operationalCache.clear();
@@ -3376,19 +3374,14 @@ export function App() {
       return;
     }
     let active = true;
-    const loadNotifications = () => {
-      void apiRequest<ShiftNotification[]>('/shifts/notifications')
-        .then((items) => active && setNotifications(items))
-        .catch(() => undefined);
+    const loadNotifications = async () => {
+      const items = await apiRequest<ShiftNotification[]>('/shifts/notifications');
+      if (active) setNotifications(items);
     };
-    loadNotifications();
-    const refreshNotifications = () => loadNotifications();
-    window.addEventListener(operationalDataChangedEvent, refreshNotifications);
-    const timer = window.setInterval(loadNotifications, 5000);
+    const stop = startVisiblePolling(loadNotifications, 5000, operationalDataChangedEvent);
     return () => {
       active = false;
-      window.clearInterval(timer);
-      window.removeEventListener(operationalDataChangedEvent, refreshNotifications);
+      stop();
     };
   }, [currentUser?.id]);
 
