@@ -142,7 +142,8 @@ TOTP aumenta seguridad, pero no evita por completo phishing ni abuso de una sesi
 
 - [x] Usuario confirma exportaciones y cierre de sesiones; autoriza publicacion del paquete acumulado.
 - [x] Preflight de produccion correcto; respaldo nuevo legible y migraciones040-043 aplicadas mediante TLS verificado. Build/lint y93 pruebas correctos. Ver PREPARACION_PAQUETE_SEGURIDAD_2026-10-08.md.
-- [ ] Confirmar revision desplegada, API/web, cabeceras y continuidad del acceso MFA despues del push. No reiniciar el enrolamiento ni reemplazar su clave.
+- [x] Revision0374238 desplegada, API/base y web saludables; cabeceras, CORS y rechazo de anonimos en exportaciones comprobados el2026-10-08 22:30 Managua. Clave MFA y enrolamientos conservados.
+- [ ] Confirmacion del titular del Administrador de acceso real con VIP Access despues de este despliegue; no se usaron claves privadas para las verificaciones automatizadas.
 
 ### Refuerzo de exportaciones del 2026-10-08 (solo desarrollo)
 

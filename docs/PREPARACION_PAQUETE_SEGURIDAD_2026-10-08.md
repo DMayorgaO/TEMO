@@ -51,3 +51,14 @@ Preview: http://127.0.0.1:3187. Reiniciar sus servicios puede exigir nuevo login
 - Migraciones040-043 aplicadas con TLS verificado y runner existente; 39 anteriores omitidas tras validar hashes. Resultado: 43 migraciones registradas. No se modificaron saldos ni transacciones financieras.
 - Repetidos build, lint y suites: backend79/79 y frontend14/14 correctos.
 - Pendiente al preparar este commit: push y comprobacion de revision/API/web desplegadas. Conservar MFA_ENCRYPTION_KEY existente.
+
+## Despliegue confirmado
+
+- Revision publicada en main y develop: 0374238c2285bda1062d61eaeb90ec6e12d9035a, sin force push.
+- 2026-10-09 04:30 UTC (2026-10-08 22:30 Managua): API200, database ok y revision exacta comprobada. Web200, asset index-BTwsK50e.js con MFA, cierre de sesiones y exportaciones por API.
+- Base verificada despues de migrar: 43 migraciones, 3 indices unicos nuevos validos y 0 eventos de auditoria sin numero.
+- Rutas privadas /auth/me, /catalogs/auditoria y /catalogs/usuarios rechazan anonimos con401 y Cache-Control no-store; API mantiene CSP, DENY y nosniff.
+- Las cuatro rutas de exportacion verificadas rechazan anonimos con401/no-store. CORS autoriza el origen de TEMO y no devuelve autorizacion para un origen ajeno. Web mantiene CSP y DENY.
+- No se cambiaron variables de Render ni la clave MFA, ni se reiniciaron enrolamientos. No se crearon operaciones financieras para verificar produccion.
+- Pendiente confirmacion de acceso real con VIP Access por el titular del Administrador despues de actualizar; no se utilizaron sus claves u OTP. La verificacion automatizada no sustituye el recorrido funcional autenticado en produccion.
+- Evidencia posterior registrada en develop para no generar otro despliegue de codigo por un cambio exclusivamente documental.
