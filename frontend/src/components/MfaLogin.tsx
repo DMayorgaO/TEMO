@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import type { FormEvent } from 'react';
 import { ArrowLeft, Download, ShieldCheck } from 'lucide-react';
+import { downloadExport } from '../utils/export-download';
 
 export type MfaChallenge = { mfaRequired: true; challenge: string; enrollment: boolean; expiresIn: number; qrDataUrl: string | null };
 
@@ -39,9 +40,9 @@ export function MfaLogin<T extends { recoveryCodes?: string[] }>({ challenge, ve
   }
 
   function downloadCodes() {
-    const url = URL.createObjectURL(new Blob(['TEMO - Codigos de recuperacion de un uso\n\n', ...(confirmed?.recoveryCodes ?? []).map(value => value + '\n')], { type: 'text/plain' }));
-    const link = document.createElement('a'); link.href = url; link.download = 'TEMO-recuperacion.txt'; link.click();
-    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    if (!confirmed?.recoveryCodes?.length) return;
+    downloadExport(new Blob(['TEMO - Codigos de recuperacion de un uso\n\n', ...confirmed.recoveryCodes.map(value => value + '\n')],
+      { type: 'text/plain;charset=utf-8' }), 'TEMO-recuperacion.txt');
   }
 
   return <div className="mfa-content">

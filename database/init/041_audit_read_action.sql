@@ -1,0 +1,1 @@
+ALTER TYPE temo.accion_bitacora ADD VALUE IF NOT EXISTS 'CONSULTAR';

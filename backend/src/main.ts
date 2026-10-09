@@ -7,6 +7,9 @@ import { rateLimit } from 'express-rate-limit';
 import helmet from 'helmet';
 import { AppModule } from './app.module';
 import { AppExceptionFilter } from './common/errors/app-exception.filter';
+import { DatabaseService } from './modules/database/database.service';
+import { SensitiveReadInterceptor } from './common/errors/sensitive-read.interceptor';
+import { ExportLimitInterceptor } from './common/export-limit.interceptor';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule, { bodyParser: false });
@@ -74,7 +77,8 @@ async function bootstrap() {
   app.setGlobalPrefix('api', {
     exclude: [{ path: '', method: RequestMethod.GET }],
   });
-  app.useGlobalFilters(new AppExceptionFilter());
+  app.useGlobalFilters(new AppExceptionFilter(app.get(DatabaseService)));
+  app.useGlobalInterceptors(new ExportLimitInterceptor(), new SensitiveReadInterceptor(app.get(DatabaseService)));
 
   await app.listen(port, '0.0.0.0');
 }

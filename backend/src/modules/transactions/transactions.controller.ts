@@ -20,6 +20,7 @@ import {
   reopenPaymentsSchema,
 } from './transaction-batch.schema';
 import { TransactionsService } from './transactions.service';
+import { authorizedExport, parseExportSelection, requireExportRole } from '../../common/export-selection';
 
 @Controller('transactions')
 export class TransactionsController {
@@ -27,6 +28,14 @@ export class TransactionsController {
     private readonly db: DatabaseService,
     private readonly transactions: TransactionsService,
   ) {}
+
+  @Post('export')
+  async exportRows(@Body() body: unknown, @Req() request: { user: AuthenticatedUser; ip?: string }) {
+    requireExportRole(request.user);
+    const input = parseExportSelection(body);
+    const rows = await this.list('200', '0', request, input.ids);
+    return authorizedExport(this.db, request, 'Transacciones', input, rows, row => String(row.database_id));
+  }
 
   @Post('batch')
   createBatch(
@@ -56,8 +65,9 @@ export class TransactionsController {
     @Query('limit') limit = '50',
     @Query('offset') offset = '0',
     @Req() request: { user: AuthenticatedUser },
+    selectedIds?: string[],
   ) {
-    const safeLimit = Math.min(Math.max(Number.parseInt(limit, 10) || 50, 1), 200);
+    const safeLimit = selectedIds ? Math.max(1, selectedIds.length) : Math.min(Math.max(Number.parseInt(limit, 10) || 50, 1), 200);
     const safeOffset = Math.max(Number.parseInt(offset, 10) || 0, 0);
     const result = await this.db.query(
       `select
@@ -136,9 +146,10 @@ export class TransactionsController {
            and tu.estado in ('ABIERTO', 'PENDIENTE_APROBACION')
          )
        )
+       and ($5::uuid[] is null or t.id_transaccion = any($5::uuid[]))
        order by t.fecha_transaccion desc, t.id_transaccion desc
        limit $1 offset $2`,
-      [safeLimit, safeOffset, request.user.roleCode, request.user.id],
+      [safeLimit, safeOffset, request.user.roleCode, request.user.id, selectedIds ?? null],
     );
 
     return this.transactions.applyHistoricalRows(result.rows);

@@ -9,7 +9,7 @@ test('branches: rejects unsupported roles before querying', async () => {
   assert.equal(queries, 0);
 });
 
-for (const method of ['roles', 'usuarios', 'reglasComisiones']) {
+for (const method of ['roles', 'usuarios', 'reglasComisiones', 'auditoria']) {
   test(`${method}: denies cashier and unknown roles before querying`, async () => {
     let queries = 0;
     const controller = new CatalogsController({ query: async () => { queries++; return { rows: [] }; } }, {});
@@ -21,6 +21,19 @@ for (const method of ['roles', 'usuarios', 'reglasComisiones']) {
     assert.equal(queries, 1);
   });
 }
+
+test('audit: returns bounded metadata without operation payloads or secrets', async () => {
+  let statement;
+  const expected = [{ id: 'event', accion: 'MFA_VERIFICADO' }];
+  const controller = new CatalogsController({ query: async sql => { statement = sql; return { rows: expected }; } }, {});
+  assert.deepEqual(await controller.auditoria({ user: { roleCode: 'JEFA' } }), expected.map(row => ({ ...row, navegador: 'No registrado' })));
+  assert.match(statement, /limit 500/i);
+  assert.match(statement, /order by b.fecha_creacion desc, b.id_bitacora desc/i);
+  assert.doesNotMatch(statement, /datos_nuevos|datos_anteriores|contrasena|select\s+\*/i);
+  assert.match(statement, /numero_auditoria/);
+  assert.match(statement, /left\(coalesce\(b.agente_usuario, ''\), 300\)/);
+  await assert.rejects(controller.auditoria({ user: { roleCode: 'TRANSFERISTA' } }), error => error.getStatus() === 403);
+});
 
 test('accounts: binds identity and administrator flag, denies unsupported roles', async () => {
   const calls = [];
@@ -47,6 +60,15 @@ test('preview database: scoped accounts match independently authorized accounts'
     const users = await client.query("select u.id_usuario as id from temo.usuarios u join temo.roles r using (id_rol) where r.codigo='CAJERO'");
     assert.ok(users.rows.length > 0);
     const controller = new CatalogsController(client, {});
+    const auditRows = await controller.auditoria({ user: { roleCode: 'JEFA' } });
+    assert.ok(auditRows.length <= 500);
+    assert.ok(auditRows.every(row => Number(row.numero) > 0 && typeof row.navegador === 'string'));
+    if (auditRows.length) {
+      const detail = await controller.auditDetail(auditRows[0].id, { user: { roleCode: 'JEFA' } });
+      assert.ok(Array.isArray(detail.changes));
+      assert.equal(typeof detail.hasBefore, 'boolean');
+      assert.ok(!Object.prototype.hasOwnProperty.call(detail, 'datos_nuevos'));
+    }
     for (const user of users.rows) {
       const accounts = await controller.cuentasBancarias({ user: { id: user.id, roleCode: 'CAJERO' } });
       const allowed = await client.query(`select c.id_cuenta as id from temo.cuentas_bancarias c
@@ -126,6 +148,9 @@ test('HTTP: anonymous is denied, cashier restricted, administrator allowed', { s
     assert.equal(health.headers.get('x-content-type-options'), 'nosniff');
     const routes = ['usuarios', 'roles', 'reglas-comisiones', 'cuentas-bancarias', 'sucursales'];
     for (const route of routes) assert.equal((await fetch(`${base}/catalogs/${route}`)).status, 401);
+    for (const route of ['transactions/export', 'shifts/export', 'catalogs/export/users', 'shifts/dashboard/export']) {
+      assert.equal((await fetch(`${base}/${route}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })).status, 401);
+    }
     for (const username of ['cajero.pruebas', adminUsername]) {
       const login = await fetch(`${base}/auth/login`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ username, password: 'TemoPruebas2026!' }) });
@@ -157,6 +182,34 @@ test('HTTP: anonymous is denied, cashier restricted, administrator allowed', { s
       const token = session.token ?? session.accessToken;
       assert.ok(token);
       const headers = { Authorization: `Bearer ${token}` };
+      const exportHeaders = { ...headers, 'Content-Type': 'application/json' };
+      for (const resource of ['transactions', 'shifts']) {
+        const selection = (await (await fetch(`${base}/${resource}`, { headers })).json()).slice(0, 2);
+        const dataset = await fetch(`${base}/${resource}/export`, { method: 'POST', headers: exportHeaders,
+          body: JSON.stringify({ format: 'EXCEL', ids: selection.map(row => row.database_id) }) });
+        assert.equal(dataset.status, 201);
+        assert.equal(dataset.headers.get('cache-control'), 'no-store');
+        assert.equal((await dataset.json()).length, selection.length);
+      }
+      const usersExport = await fetch(`${base}/catalogs/export/users`, { method: 'POST', headers: exportHeaders,
+        body: JSON.stringify({ format: 'PDF', ids: [adminId] }) });
+      assert.equal(usersExport.status, username === 'cajero.pruebas' ? 403 : 201);
+      if (usersExport.ok) assert.ok(!(await usersExport.text()).includes('contrasena'));
+      const pngExport = await fetch(`${base}/shifts/dashboard/export`, { method: 'POST', headers: exportHeaders, body: '{}' });
+      assert.equal(pngExport.status, username === 'cajero.pruebas' ? 403 : 201);
+      const verified = (await database.query(`select datos_nuevos from temo.bitacora b join temo.usuarios u using(id_usuario)
+        where u.usuario=$1 and datos_nuevos->>'evento'='EXPORTACION_AUTORIZADA' order by numero_auditoria desc limit 1`, [username])).rows[0];
+      assert.equal(typeof verified.datos_nuevos.filas_verificadas, 'number');
+      const exportSection = username === 'cajero.pruebas' ? 'Transacciones' : 'Auditoria';
+      const exported = await fetch(`${base}/catalogs/auditoria/exportaciones`, { method: 'POST', headers: { ...headers, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ section: exportSection, format: 'PDF', rows: 3 }) });
+      assert.equal(exported.status, 201);
+      assert.equal((await exported.json()).recorded, true);
+      const exportEvent = (await database.query(`select b.accion,b.datos_nuevos from temo.bitacora b join temo.usuarios u using(id_usuario)
+        where u.usuario=$1 and b.datos_nuevos->>'evento'='EXPORTACION_SOLICITADA' order by b.numero_auditoria desc limit 1`, [username])).rows[0];
+      assert.equal(exportEvent.accion, 'EXPORTAR');
+      assert.equal(exportEvent.datos_nuevos.apartado, exportSection);
+      assert.equal(exportEvent.datos_nuevos.filas_declaradas, 3);
       for (const route of routes) {
         const response = await fetch(`${base}/catalogs/${route}`, { headers });
         assert.equal(response.status, username === 'cajero.pruebas' && !['cuentas-bancarias','sucursales'].includes(route) ? 403 : 200);
@@ -166,9 +219,32 @@ test('HTTP: anonymous is denied, cashier restricted, administrator allowed', { s
         }
       }
       const allowedOrigin = await fetch(`${base}/catalogs/cuentas-bancarias`, { headers: { ...headers, Origin: 'http://127.0.0.1:3187' } });
+      if (username === 'cajero.pruebas') {
+        const denied = await database.query(`select b.datos_nuevos from temo.bitacora b join temo.usuarios u using(id_usuario)
+          where u.usuario=$1 and b.tabla='seguridad' and b.datos_nuevos->>'evento'='ACCESO_DENEGADO'
+          and b.datos_nuevos->>'ruta'='/api/catalogs/usuarios' order by b.fecha_creacion desc limit 1`, [username]);
+        assert.equal(denied.rows.length, 1);
+        assert.equal(denied.rows[0].datos_nuevos.metodo, 'GET');
+        const reads = await database.query(`select b.accion,b.datos_nuevos from temo.bitacora b join temo.usuarios u using(id_usuario)
+          where u.usuario=$1 and b.tabla='seguridad' and b.datos_nuevos->>'evento'='LECTURA_SENSIBLE'
+          and b.datos_nuevos->>'ruta'='/api/catalogs/cuentas-bancarias' order by b.fecha_creacion desc limit 1`, [username]);
+        assert.equal(reads.rows.length, 1);
+        assert.equal(reads.rows[0].accion, 'CONSULTAR');
+        assert.equal(reads.rows[0].datos_nuevos.metodo, 'GET');
+      }
       assert.equal(allowedOrigin.headers.get('access-control-allow-origin'), 'http://127.0.0.1:3187');
       const foreignOrigin = await fetch(`${base}/catalogs/cuentas-bancarias`, { headers: { ...headers, Origin: 'https://untrusted.invalid' } });
       assert.equal(foreignOrigin.headers.get('access-control-allow-origin'), null);
+      const revoked = await fetch(`${base}/catalogs/usuarios/${adminId}/revoke-sessions`, {
+        method: 'POST', headers: exportHeaders, body: '{}',
+      });
+      assert.equal(revoked.status, username === 'cajero.pruebas' ? 403 : 201);
+      if (username === adminUsername) {
+        assert.equal((await fetch(`${base}/auth/me`, { headers })).status, 401);
+        const event = (await database.query(`select datos_nuevos from temo.bitacora
+          where id_registro=$1 and datos_nuevos->>'evento'='REVOCAR_SESIONES'`, [adminId])).rows[0];
+        assert.equal(event.datos_nuevos.evento, 'REVOCAR_SESIONES');
+      }
     }
   } finally {
     if (child.exitCode === null) child.kill();

@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { buildSafeExportTable, escapeExportHtml } from '../utils/export-html';
+import { downloadExport, exportFilename } from '../utils/export-download';
+import { createTemporaryPassword } from '../utils/temporary-password';
 import { removeLegacyOperationalCache, SessionCache } from '../utils/session-cache';
 import type { ChangeEvent, ClipboardEvent, FormEvent, InputHTMLAttributes, KeyboardEvent, PointerEvent as ReactPointerEvent } from 'react';
 import type { LucideIcon } from 'lucide-react';
@@ -1069,7 +1071,7 @@ const crudConfigs: Record<ScreenId, CrudConfig[]> = {
     {
       storageKey: 'audit',
       title: 'Auditoria',
-      description: 'Historial de acciones sensibles del sistema.',
+      description: 'Ultimos 500 eventos registrados.',
       idPrefix: 'AUD',
       columns: [
         { key: 'id', label: 'IdAuditoria', readOnly: true },
@@ -1077,12 +1079,12 @@ const crudConfigs: Record<ScreenId, CrudConfig[]> = {
         { key: 'user', label: 'Usuario' },
         { key: 'action', label: 'Accion' },
         { key: 'entity', label: 'Entidad' },
-        { key: 'status', label: 'Estado', inputKind: 'select', options: ['Activo', 'Inactivo'] },
+        { key: 'record', label: 'Registro', readOnly: true },
+        { key: 'ip', label: 'IP', readOnly: true },
+        { key: 'device', label: 'Dispositivo', readOnly: true },
+        { key: 'browser', label: 'Navegador', readOnly: true },
       ],
-      rows: [
-        { id: 'AUD-001', date: 'Hoy 08:00', user: 'Administrador', action: 'Iniciar sesion', entity: 'auth', status: 'Activo' },
-        { id: 'AUD-002', date: 'Hoy 09:25', user: 'Cajero 1', action: 'Crear', entity: 'transacciones', status: 'Activo' },
-      ],
+      rows: [],
     },
   ],
 };
@@ -1095,9 +1097,10 @@ const catalogEndpointByStorageKey: Record<string, string> = {
   accounts: '/catalogs/cuentas-bancarias',
   movements: '/catalogs/movimientos-bancarios',
   commissions: '/catalogs/reglas-comisiones',
+  audit: '/catalogs/auditoria',
 };
 
-const writableCatalogStorageKeys = new Set(Object.keys(catalogEndpointByStorageKey));
+const writableCatalogStorageKeys = new Set(Object.keys(catalogEndpointByStorageKey).filter((key) => key !== 'audit'));
 
 function displayCatalogStatus(value: unknown) {
   const normalized = String(value ?? '').trim().toUpperCase();
@@ -1190,9 +1193,36 @@ function buildAccountVisibleIds(apiRows: CatalogApiRow[], config: CrudConfig) {
   return idsByDatabaseId;
 }
 
+function auditEntityLabel(entity: string) {
+  const labels: Record<string, string> = {
+    seguridad: 'Control de acceso',
+    usuarios: 'Usuario', roles: 'Rol', transacciones: 'Transaccion',
+    grupos_transacciones: 'Grupo de transacciones', pagos_pendientes: 'Pendiente',
+    correcciones_transacciones_cerradas: 'Correccion de transaccion cerrada',
+    abonos_pendientes: 'Liquidacion de pendiente', turnos: 'Turno',
+    transferencias: 'Transferencia', transferencias_efectivo: 'Transferencia de efectivo',
+    transferencias_digitales: 'Transferencia digital', sucursales: 'Sucursal',
+    cuentas_bancarias: 'Cuenta bancaria', entidades_bancarias: 'Banco',
+    movimientos_bancarios: 'Movimiento bancario', reglas_comisiones: 'Regla de comision',
+    directorio: 'Contacto del directorio', contrapartes: 'Contacto',
+  };
+  return labels[entity] ?? entity.replace(/_/g, ' ');
+}
+
 function mapCatalogApiRows(storageKey: string, apiRows: CatalogApiRow[], config: CrudConfig) {
   const accountVisibleIds = storageKey === 'accounts' ? buildAccountVisibleIds(apiRows, config) : null;
   return apiRows.map((apiRow, index): CrudRow => {
+    if (storageKey === 'audit') {
+      return {
+        id: `AUD-${String(apiRow.numero ?? '').padStart(4, '0')}`, databaseId: String(apiRow.id ?? ''),
+        date: String(apiRow.fecha ?? ''),
+        user: String(apiRow.usuario ?? ''), action: String(apiRow.accion ?? ''),
+        entity: auditEntityLabel(String(apiRow.entidad ?? '')),
+        record: `${auditEntityLabel(String(apiRow.entidad ?? ''))}\n${String(apiRow.codigo_registro ?? apiRow.registro ?? '')}`,
+        ip: String(apiRow.ip ?? ''),
+        device: String(apiRow.dispositivo ?? ''), browser: String(apiRow.navegador ?? ''),
+      };
+    }
     const fallback = findFallbackCatalogRow(storageKey, apiRow, config.rows);
     const databaseId = String(apiRow.id ?? '');
     const visibleId =
@@ -1303,7 +1333,7 @@ async function hydrateRelationalCatalogs(includeAdministrativeCatalogs: boolean)
   const requestToken = window.sessionStorage.getItem(authTokenStorageKey);
   await Promise.all(
     Object.entries(catalogEndpointByStorageKey)
-      .filter(([storageKey]) => includeAdministrativeCatalogs || !['commissions', 'users', 'roles'].includes(storageKey))
+      .filter(([storageKey]) => storageKey !== 'audit' && (includeAdministrativeCatalogs || !['commissions', 'users', 'roles'].includes(storageKey)))
       .map(async ([storageKey]) => {
       const config =
         storageKey === 'roles'
@@ -2994,6 +3024,7 @@ function getVisibleColumns(config: CrudConfig): TableColumn[] {
 function usePersistentRows(storageKey: string, initialRows: CrudRow[]) {
   const sessionToken = window.sessionStorage.getItem(authTokenStorageKey);
   const [rows, setRows] = useState<CrudRow[]>(() => {
+    if (storageKey === 'audit') return [];
     const stored = operationalCache.getItem(`temo:${storageKey}`);
     const storedRows = stored ? (JSON.parse(stored) as CrudRow[]) : initialRows;
     let parsedRows = mergeInitialCatalogRows(storageKey, storedRows, initialRows);
@@ -3043,7 +3074,7 @@ function usePersistentRows(storageKey: string, initialRows: CrudRow[]) {
         ? roleCatalogConfig
         : Object.values(crudConfigs).flat().find((candidate) => candidate.storageKey === storageKey);
     if (config) setRows(await loadCatalogRows(storageKey, config));
-  }, Boolean(catalogEndpointByStorageKey[storageKey]), 5000);
+  }, storageKey !== 'audit' && Boolean(catalogEndpointByStorageKey[storageKey]), 5000);
 
   return [rows, setRows] as const;
 }
@@ -7366,10 +7397,10 @@ function ShiftTable({
             <h2>{config.title}</h2>
           </div>
           <div className="action-row">
-            <button type="button" className="secondary-button export-button export-button--excel" title="Exportar Excel" aria-label="Exportar Excel" onClick={() => exportExcel(config.title, columns, processedRows)}>
+            <button type="button" className="secondary-button export-button export-button--excel" title="Exportar Excel" aria-label="Exportar Excel" onClick={() => void exportExcel(config, columns, processedRows)}>
               <FileSpreadsheet size={17} />
             </button>
-            <button type="button" className="secondary-button export-button export-button--pdf" title="Exportar PDF" aria-label="Exportar PDF" onClick={() => exportPdf(config.title, columns, processedRows)}>
+            <button type="button" className="secondary-button export-button export-button--pdf" title="Exportar PDF" aria-label="Exportar PDF" onClick={() => void exportPdf(config, columns, processedRows)}>
               <FileText size={17} />
             </button>
             {isBoss && (
@@ -8763,10 +8794,10 @@ function TransactionTable({ config, currentUser }: { config: CrudConfig; current
               <CheckCircle2 size={17} />
               Modo marcador{markerMode ? ` (${visibleMarkedCount})` : ''}
             </button>
-            <button type="button" className="secondary-button export-button export-button--excel transaction-export-icon" title="Exportar Excel" aria-label="Exportar Excel" onClick={() => exportExcel(config.title, columns, processedRows)}>
+            <button type="button" className="secondary-button export-button export-button--excel transaction-export-icon" title="Exportar Excel" aria-label="Exportar Excel" onClick={() => void exportExcel(config, columns, processedRows)}>
               <FileSpreadsheet size={17} />
             </button>
-            <button type="button" className="secondary-button export-button export-button--pdf transaction-export-icon" title="Exportar PDF" aria-label="Exportar PDF" onClick={() => exportPdf(config.title, columns, processedRows)}>
+            <button type="button" className="secondary-button export-button export-button--pdf transaction-export-icon" title="Exportar PDF" aria-label="Exportar PDF" onClick={() => void exportPdf(config, columns, processedRows)}>
               <FileText size={17} />
             </button>
             <button type="button" className="primary-button transaction-add-button" onClick={openCreateModal}>
@@ -10505,6 +10536,7 @@ function CrudTable({
 
   // Abre el modal con un registro vacio listo para guardar.
   function openCreateModal() {
+    if (config.storageKey === 'audit') return;
     setCatalogSaveError('');
     setCatalogSuccess('');
     const formColumns = getFormColumns();
@@ -10520,6 +10552,7 @@ function CrudTable({
 
   // Abre el modal de edicion con una copia del registro seleccionado.
   function openEditModal(row: CrudRow) {
+    if (config.storageKey === 'audit') return;
     setCatalogSaveError('');
     setCatalogSuccess('');
     const editableRow = config.storageKey === 'users' ? normalizeUserRow(row) : row;
@@ -10534,6 +10567,19 @@ function CrudTable({
     const viewableRow = config.storageKey === 'users' ? normalizeUserRow(row) : row;
     const formColumns = getFormColumns(viewableRow);
     setModal({ mode: 'view', row: normalizeRowDefaults(viewableRow, formColumns), columns: formColumns });
+    if (config.storageKey === 'audit') {
+      const detailColumn: CrudColumn = { key: 'changes', label: 'Cambios registrados', inputKind: 'textarea', readOnly: true };
+      setModal({ mode: 'view', row: { ...viewableRow, changes: 'Cargando...' }, columns: [...formColumns, detailColumn] });
+      void apiRequest<{ hasBefore: boolean; hasAfter: boolean; changes: { field: string; before: string; after: string }[] }>(`/catalogs/auditoria/${row.databaseId}`)
+        .then((detail) => {
+          const coverage = `Antes: ${detail.hasBefore ? 'registrado (puede ser parcial)' : 'no registrado'}. Despues: ${detail.hasAfter ? 'registrado (puede ser parcial)' : 'no registrado'}.`;
+          const text = detail.changes.length
+            ? detail.changes.map((change) => `${change.field}\nAntes: ${change.before}\nDespues: ${change.after}`).join('\n\n')
+            : 'Sin diferencias disponibles en los campos habilitados. Esto no significa que no hubo cambios.';
+          setModal((current) => current?.row.databaseId === row.databaseId ? { ...current, row: { ...current.row, changes: `${coverage}\n\n${text}` } } : current);
+        })
+        .catch(() => setModal((current) => current?.row.databaseId === row.databaseId ? { ...current, row: { ...current.row, changes: 'No se pudo cargar el detalle. Cierre y vuelva a abrir el registro para reintentar.' } } : current));
+    }
   }
 
   // Guarda altas y ediciones en memoria local del navegador.
@@ -10624,6 +10670,16 @@ function CrudTable({
     setCatalogSuccess(`Contraseña temporal asignada a ${passwordResetRow.username}. Deberá cambiarla al ingresar.`);
   }
 
+  async function revokeUserSessions(row: CrudRow) {
+    if (!row.databaseId || !await requestSystemConfirm(`Se cerraran todas las sesiones de ${row.username}. Tendrá que iniciar sesion nuevamente. Los datos sin guardar pueden quedar pendientes.`,
+      { title: 'Cerrar sesiones', confirmLabel: 'Cerrar sesiones', tone: 'danger' })) return;
+    setCatalogSaveError(''); setCatalogSuccess('');
+    try {
+      await apiRequest(`/catalogs/usuarios/${row.databaseId}/revoke-sessions`, { method: 'POST' });
+      setCatalogSuccess(`Sesiones revocadas para ${row.username}.`);
+    } catch (error) { setCatalogSaveError(error instanceof Error ? error.message : 'No se pudieron cerrar las sesiones.'); }
+  }
+
   // Cambia el ordenamiento en ciclo: sin orden, ascendente, descendente.
   function cycleSort(columnKey: string) {
     if (sortKey !== columnKey) {
@@ -10661,16 +10717,16 @@ function CrudTable({
           <h2>{config.title}</h2>
         </div>
         <div className="action-row">
-          <button type="button" className="secondary-button export-button export-button--excel" title="Exportar Excel" aria-label="Exportar Excel" onClick={() => exportExcel(config.title, visibleColumns, processedRows)}>
+          <button type="button" disabled={!catalogEndpointByStorageKey[config.storageKey]} className="secondary-button export-button export-button--excel" title="Exportar Excel" aria-label="Exportar Excel" onClick={() => void exportExcel(config, visibleColumns, processedRows)}>
             <FileSpreadsheet size={17} />
           </button>
-          <button type="button" className="secondary-button export-button export-button--pdf" title="Exportar PDF" aria-label="Exportar PDF" onClick={() => exportPdf(config.title, visibleColumns, processedRows)}>
+          <button type="button" disabled={!catalogEndpointByStorageKey[config.storageKey]} className="secondary-button export-button export-button--pdf" title="Exportar PDF" aria-label="Exportar PDF" onClick={() => void exportPdf(config, visibleColumns, processedRows)}>
             <FileText size={17} />
           </button>
-          <button type="button" className="primary-button" onClick={openCreateModal}>
+          {config.storageKey !== 'audit' && <button type="button" className="primary-button" onClick={openCreateModal}>
             <Plus size={17} />
             Agregar
-          </button>
+          </button>}
         </div>
       </div>
 
@@ -10758,18 +10814,24 @@ function CrudTable({
                   <td className="number-column">{processedRows.length - ((page - 1) * pageSize + index)}</td>
                   {visibleColumns.map((column) => {
                     const value = getCellValue(row, column);
+                    if (config.storageKey === 'audit' && column.key === 'record') {
+                      const [label, identifier] = String(value).split('\n');
+                      return <td key={column.key} className="multi-line-cell"><span>{label}</span><small>{identifier || 'Sin registro asociado'}</small></td>;
+                    }
                     const isDateTime = /fecha|date|At$/i.test(column.key) && /\d.*[:T ]/.test(String(value));
-                    return <td key={column.key} className={isDateTime ? 'multi-line-cell' : undefined}>{isDateTime ? formatTransferDate(String(value)) : value}</td>;
+                    return <td key={column.key} className={isDateTime ? 'multi-line-cell' : undefined}>{config.storageKey === 'audit' && column.key === 'date' ? <><span>{new Date(String(value)).toLocaleDateString('es-NI', { timeZone: 'America/Managua' })}</span><small>{new Date(String(value)).toLocaleTimeString('es-NI', { timeZone: 'America/Managua', hour: '2-digit', minute: '2-digit' })}</small></> : isDateTime ? formatTransferDate(String(value)) : value}</td>;
                   })}
                   <td>
-                    <div className="row-actions">
-                      <button type="button" className="icon-action" title="Editar" onClick={(event) => { event.stopPropagation(); openEditModal(row); }}>
+                    <div className="row-actions" style={config.storageKey === 'audit' ? { display: 'none' } : undefined}>
+                      <button type="button" className="icon-action" title="Editar" hidden={config.storageKey === 'audit'} disabled={config.storageKey === 'audit'} onClick={(event) => { event.stopPropagation(); openEditModal(row); }}>
                         <Edit3 size={16} />
                       </button>
                       <button
                         type="button"
                         className={`icon-action ${isInactive(row) ? 'icon-action--inactive' : ''}`}
                         title={isInactive(row) ? 'Reactivar' : 'Inactivar'}
+                        hidden={config.storageKey === 'audit'}
+                        disabled={config.storageKey === 'audit'}
                         onClick={(event) => { event.stopPropagation(); toggleInactive(row); }}
                       >
                         {isInactive(row) ? <RotateCcw size={16} /> : <Ban size={16} />}
@@ -10789,6 +10851,10 @@ function CrudTable({
                         >
                           <KeyRound size={16} />
                         </button>
+                      )}
+                      {config.storageKey === 'users' && row.databaseId && (
+                        <button type="button" className="icon-action" title="Cerrar sesiones" aria-label={`Cerrar sesiones de ${row.username}`}
+                          onClick={(event) => { event.stopPropagation(); void revokeUserSessions(row); }}><LogOut size={16} /></button>
                       )}
                     </div>
                   </td>
@@ -10841,7 +10907,7 @@ function CrudTable({
           title={config.title}
           onCancel={() => setModal(null)}
           onSave={saveRow}
-          onEdit={modal.mode === 'view' ? () => setModal({ ...modal, mode: 'edit' }) : undefined}
+          onEdit={modal.mode === 'view' && config.storageKey !== 'audit' ? () => setModal({ ...modal, mode: 'edit' }) : undefined}
           navigation={modal.mode === 'view' ? {
             currentIndex: processedRows.findIndex((catalogRow) => (catalogRow.databaseId || catalogRow.id) === (modal.row.databaseId || modal.row.id)),
             total: processedRows.length,
@@ -10878,9 +10944,7 @@ type ModalRecordNavigation = {
 };
 
 function createEasyTemporaryPassword() {
-  // Genera una clave pronunciable, temporal y compatible con la politica de seguridad.
-  const digits = String(crypto.getRandomValues(new Uint32Array(1))[0] % 10_000).padStart(4, '0');
-  return `Temo-${digits}-Aa`;
+  return createTemporaryPassword();
 }
 
 function ResetCashierPasswordDialog({
@@ -11018,7 +11082,8 @@ function CrudModal({
 }) {
   const [draft, setDraft] = useState(() => normalizeRowDefaults(row, columns));
   const modalRef = useAutoFocusFirstField<HTMLElement>();
-  const fields = columns.filter((column) => !column.hiddenInForm);
+  const fields = columns.filter((column) => !column.hiddenInForm
+    && !(storageKey === 'users' && mode !== 'create' && column.key === 'password'));
   const hasPercentage = Boolean(normalizePercentage(draft.percentage));
   const hasFixedAmount = Boolean(String(draft.fixed ?? '').trim());
   const isReadOnly = mode === 'view';
@@ -11335,29 +11400,56 @@ function FormFieldControl({ field }: { field: ProcessField }) {
 }
 
 // Exporta la tabla filtrada como archivo compatible con Excel.
-function exportExcel(title: string, columns: TableColumn[], rows: CrudRow[]) {
-  const tableHtml = buildExportTable(title, columns, rows);
-  const blob = new Blob([tableHtml], { type: 'application/vnd.ms-excel;charset=utf-8' });
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement('a');
-  link.href = url;
-  link.download = `${title.toLowerCase().replace(/\s+/g, '-')}.xls`;
-  link.click();
-  URL.revokeObjectURL(url);
+const activeExports = new Set<string>();
+
+async function loadExportRows(config: CrudConfig, rows: CrudRow[], format: 'EXCEL' | 'PDF') {
+  const token = window.sessionStorage.getItem(authTokenStorageKey);
+  if (!token) throw new Error('Inicie sesion nuevamente antes de exportar.');
+  const ids = rows.map(row => row.databaseId);
+  if (rows.length > 5000 || ids.some(id => !id)) throw new Error('Actualice la tabla y seleccione hasta 5000 registros por archivo.');
+  const path = config.storageKey === 'transactions' ? '/transactions/export' : config.storageKey === 'shifts'
+    ? '/shifts/export' : `/catalogs/export/${encodeURIComponent(config.storageKey)}`;
+  const result = await apiRequest<CatalogApiRow[]>(path, { method: 'POST', body: JSON.stringify({ format, ids }) });
+  if (token !== window.sessionStorage.getItem(authTokenStorageKey)) throw new Error('La sesion cambio; vuelva a solicitar la exportacion.');
+  if (config.storageKey === 'transactions') return (result as unknown as TransactionApiRow[]).map(mapApiTransactionRow);
+  if (config.storageKey === 'shifts') return (result as unknown as ShiftDetail[]).map(shiftDetailToCrudRow);
+  const mapped = mapCatalogApiRows(config.storageKey, result, config);
+  const visibleIds = new Map(rows.map(row => [row.databaseId, row.id]));
+  return mapped.map(row => ({ ...row, id: visibleIds.get(row.databaseId) ?? row.id }));
+}
+
+async function exportExcel(config: CrudConfig, columns: TableColumn[], rows: CrudRow[]) {
+  if (activeExports.has(config.storageKey)) return;
+  activeExports.add(config.storageKey);
+  try {
+    const verified = await loadExportRows(config, rows, 'EXCEL');
+    const tableHtml = buildExportTable(config.title, columns, verified, true);
+    const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'"></head><body>${tableHtml}</body></html>`;
+    downloadExport(new Blob(['\uFEFF', html], { type: 'application/vnd.ms-excel;charset=utf-8' }), exportFilename(config.title, 'xls'));
+  } catch (error) {
+    await requestSystemAlert(error instanceof Error ? error.message : 'No se pudo exportar el archivo.', 'Exportacion no disponible');
+  } finally { activeExports.delete(config.storageKey); }
 }
 
 // Abre una vista imprimible para que el usuario guarde el resultado como PDF.
-function exportPdf(title: string, columns: TableColumn[], rows: CrudRow[]) {
+async function exportPdf(config: CrudConfig, columns: TableColumn[], rows: CrudRow[]) {
+  if (activeExports.has(config.storageKey)) return;
   const printable = window.open('', '_blank', 'width=1000,height=720');
   if (!printable) {
+    await requestSystemAlert('Permita abrir la ventana de impresion en su navegador.', 'Exportacion PDF');
     return;
   }
   printable.opener = null;
-  printable.document.write(`
-    <html>
+  activeExports.add(config.storageKey);
+  try {
+    const verified = await loadExportRows(config, rows, 'PDF');
+    if (printable.closed) return;
+    printable.document.write(`
+    <!DOCTYPE html><html lang="es">
       <head>
+        <meta charset="utf-8">
         <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'">
-        <title>${escapeExportHtml(title)}</title>
+        <title>${escapeExportHtml(config.title)}</title>
         <style>
           body { font-family: Arial, sans-serif; padding: 24px; color: #17212b; }
           table { border-collapse: collapse; width: 100%; }
@@ -11365,15 +11457,19 @@ function exportPdf(title: string, columns: TableColumn[], rows: CrudRow[]) {
           th { background: #f4f7f6; }
         </style>
       </head>
-      <body>${buildExportTable(title, columns, rows)}</body>
+      <body>${buildExportTable(config.title, columns, verified)}</body>
     </html>
   `);
-  printable.document.close();
-  printable.print();
+    printable.document.close();
+    printable.print();
+  } catch (error) {
+    printable.close();
+    await requestSystemAlert(error instanceof Error ? error.message : 'No se pudo exportar el PDF.', 'Exportacion no disponible');
+  } finally { activeExports.delete(config.storageKey); }
 }
 
 // Construye una tabla HTML reutilizada por las exportaciones a Excel y PDF.
-function buildExportTable(title: string, columns: TableColumn[], rows: CrudRow[]) {
+function buildExportTable(title: string, columns: TableColumn[], rows: CrudRow[], spreadsheet = false) {
   return buildSafeExportTable(title, columns.map((column) => column.label),
-    rows.map((row) => columns.map((column) => getCellValue(row, column))));
+    rows.map((row) => columns.map((column) => getCellValue(row, column))), spreadsheet);
 }

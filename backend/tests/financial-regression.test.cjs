@@ -4,10 +4,11 @@ const { randomUUID } = require('node:crypto');
 const { Client } = require('pg');
 const { ShiftsService } = require('../dist/modules/shifts/shifts.service');
 const { TransactionsService } = require('../dist/modules/transactions/transactions.service');
+const { TransactionsController } = require('../dist/modules/transactions/transactions.controller');
 const { TransfersService } = require('../dist/modules/transfers/transfers.service');
 const { CatalogsController } = require('../dist/modules/catalogs/catalogs.controller');
 const { DollarPurchasesService } = require('../dist/modules/dollar-purchases/dollar-purchases.service');
-const { createTransactionBatchSchema, payPendingBatchSchema } = require('../dist/modules/transactions/transaction-batch.schema');
+const { createTransactionBatchSchema, payPendingBatchSchema, updateTransactionSchema } = require('../dist/modules/transactions/transaction-batch.schema');
 const { openShiftSchema } = require('../dist/modules/shifts/shifts.schema');
 
 const counts = (amount) => ({ NIO: amount ? [{ denomination: 10, piles25: 0, loose: amount / 10 }] : [], USD: [] });
@@ -88,6 +89,103 @@ test('financial regression in local preview with rollback', { skip: !process.env
       const newBank = after.balances.find((row) => row.account_id === movement.id_cuenta);
       near(newBank.calculated, Number(oldBank.calculated) + (movement.direccion === 'ENTRA' ? 100 : -100));
       near(newBank.system, newBank.calculated);
+    });
+    await t.test('Individual update stores comparable before/after atomically and preserves balances', async () => {
+      const before = await summary();
+      const created = await transactions.createBatch(batch([{ amount: 100 }], settlement(100)), {});
+      const id = created.transactions[0].id;
+      await transactions.update(id, updateTransactionSchema.parse({ entityCode: 'BAC', movementCode: 'DC', currencyCode: 'NIO', amount: 120, rates, settlement: settlement(120) }), cashier);
+      const event = (await client.query("select id_bitacora,datos_anteriores,datos_nuevos from temo.bitacora where tabla='transacciones' and accion='ACTUALIZAR' and id_registro=$1 order by fecha_creacion desc limit 1", [id])).rows[0];
+      assert.ok(event);
+      near(event.datos_anteriores.amount, 100);
+      near(event.datos_nuevos.amount, 120);
+      near(event.datos_anteriores.rates.buy, 36.4);
+      const detail = await catalogs.auditDetail(event.id_bitacora, { user: admin });
+      assert.ok(detail.changes.some(change => change.field === 'Monto' && change.before === '100' && change.after === '120'));
+      assert.ok(detail.changes.some(change => change.field.startsWith('Efectivo principal C$ 10') && change.before === '10 unidades' && change.after === '12 unidades'));
+      near((await summary()).expectedCash.NIO, before.expectedCash.NIO + 120);
+      await transactions.void(id, cashier);
+      near((await summary()).expectedCash.NIO, before.expectedCash.NIO);
+    });
+    await t.test('Group audit captures each annulled tab and cash is restored', async () => {
+      const before = await summary();
+      const created = await transactions.createBatch(batch([{ amount: 100 }, { amount: 60 }], settlement(160)), {});
+      const ids = created.transactions.map(row => row.id);
+      await transactions.updateGroup(ids[0], { updates: [], voidIds: ids, preferential: false }, cashier);
+      const event = (await client.query("select id_bitacora from temo.bitacora where tabla='grupos_transacciones' and accion='ACTUALIZAR' and datos_nuevos->'voidIds' @> $1::jsonb order by fecha_creacion desc limit 1", [JSON.stringify(ids)])).rows[0];
+      assert.ok(event);
+      const detail = await catalogs.auditDetail(event.id_bitacora, { user: admin });
+      for (const id of ids) assert.ok(detail.changes.some(row => row.field.includes(id) && row.after === 'ANULADA'));
+      near((await summary()).expectedCash.NIO, before.expectedCash.NIO);
+    });
+    await t.test('Closed group corrections audit original and subsequent values without changing closure cash or bank movements', async () => {
+      await client.query('savepoint historical_audit');
+      try {
+        const created = await transactions.createBatch(batch([{ amount: 100 }, { amount: 60 }], settlement(160)), {});
+        const ids = created.transactions.map(row => row.id);
+        await client.query("update temo.turnos set estado='CERRADO' where id_turno=$1", [shiftId]);
+        const stored = async () => (await client.query(`select
+          (select jsonb_agg(to_jsonb(a) order by a.id_arqueo) from temo.arqueos a where a.id_turno=$1) as cash,
+          (select jsonb_agg(to_jsonb(mc) order by mc.id_movimiento_cuenta) from temo.movimientos_cuentas mc where mc.id_transaccion=any($2::uuid[])) as bank`, [shiftId, ids])).rows[0];
+        const before = await stored();
+        const change = amount => updateTransactionSchema.parse({ entityCode: 'BAC', movementCode: 'DC', currencyCode: 'NIO', amount, rates, settlement: settlement(amount) });
+        await assert.rejects(transactions.update(ids[0], change(120), cashier), error => error.getStatus() === 403);
+        await transactions.updateGroup(ids[0], { updates: [{ id: ids[0], data: change(120) }], voidIds: [ids[1]], preferential: false }, admin);
+        assert.deepEqual(await stored(), before);
+        const events = await client.query("select id_bitacora,id_registro from temo.bitacora where tabla='correcciones_transacciones_cerradas' and id_registro=any($1::uuid[]) order by fecha_creacion", [ids]);
+        assert.equal(events.rows.length, 2);
+        const first = await catalogs.auditDetail(events.rows.find(row => row.id_registro === ids[0]).id_bitacora, { user: admin });
+        assert.ok(first.changes.some(row => row.field === 'Monto' && row.before === '100' && row.after === '120'));
+        const annulled = await catalogs.auditDetail(events.rows.find(row => row.id_registro === ids[1]).id_bitacora, { user: admin });
+        assert.ok(annulled.changes.some(row => row.field === 'Estado' && row.after === 'ANULADA'));
+        await transactions.update(ids[0], change(130), admin);
+        const latest = (await client.query("select datos_anteriores,datos_nuevos from temo.bitacora where tabla='correcciones_transacciones_cerradas' and id_registro=$1 order by numero_auditoria desc limit 1", [ids[0]])).rows[0];
+        near(latest.datos_anteriores.auditTransaction.amount, 120);
+        near(latest.datos_nuevos.auditTransaction.amount, 130);
+        assert.deepEqual(await stored(), before);
+      } finally {
+        await client.query('rollback to savepoint historical_audit');
+        await client.query('release savepoint historical_audit');
+      }
+    });
+    await t.test('Same-branch coworker cannot read ordinary records; shared pending groups stay accessible only in branch', async () => {
+      const createCoworker = async (branchId, label) => {
+        const login = `${username}_${label}`;
+        const user = (await client.query(`insert into temo.usuarios(id_rol,nombres,apellidos,usuario,contrasena_hash,estado)
+          select id_rol,'Scope',$1,$2,'not-a-login-credential','ACTIVO' from temo.roles where codigo='CAJERO' returning id_usuario as id`, [label, login])).rows[0];
+        const identity = { id: user.id, roleCode: 'CAJERO' };
+        await client.query('insert into temo.usuarios_sucursales(id_usuario,id_sucursal) values($1,$2)', [identity.id, branchId]);
+        const prepared = await shifts.create(openShiftSchema.parse({ branchId, branch: branch.nombre, register: `Scope ${label}`, cashier: login, counts: counts(1000), balances: [], prepared: true }), admin);
+        await shifts.openPrepared(prepared.database_id ?? prepared.id_turno, identity);
+        return identity;
+      };
+      const colleague = await createCoworker(branch.id, 'same');
+      await assert.rejects(transactions.detail(deposit.transactions[0].id, colleague), error => error.getStatus() === 403);
+      await assert.rejects(transactions.groupDetail(deposit.transactions[0].id, colleague), error => error.getStatus() === 403);
+      await assert.rejects(transactions.updateGroup(deposit.transactions[0].id, { updates: [], voidIds: [deposit.transactions[0].id], preferential: false }, colleague), error => error.getStatus() === 403);
+      const controller = new TransactionsController(db, transactions);
+      await assert.rejects(controller.exportRows({ format: 'EXCEL', ids: [deposit.transactions[0].id] }, { user: colleague }), error => error.getStatus() === 403);
+      await assert.rejects(shifts.exportRows({ format: 'PDF', ids: [shiftId] }, { user: colleague }), error => error.getStatus() === 403);
+      const exportable = await controller.exportRows({ format: 'PDF', ids: [deposit.transactions[0].id] }, { user: admin });
+      assert.equal(exportable[0].database_id, deposit.transactions[0].id);
+      const before = (await client.query('select count(*)::int as n from temo.transacciones')).rows[0].n;
+      await assert.rejects(controller.createBatch(batch([{ amount: 100 }], settlement(100)), { user: colleague, headers: {} }), error => error.getStatus() === 409);
+      assert.equal((await client.query('select count(*)::int as n from temo.transacciones')).rows[0].n, before);
+      const own = await controller.list('200', '0', { user: colleague });
+      assert.ok(!own.some(row => row.database_id === deposit.transactions[0].id));
+      const shared = await transactions.createBatch(batch([{ amount: 100, pendingName: 'Scope pending' }, { amount: 60, pendingName: 'Scope pending' }], settlement(0)), {});
+      await transactions.groupDetail(shared.transactions[0].id, colleague);
+      const pending = (await transactions.listPending(colleague)).find(row => row.transaction_database_id === shared.transactions[0].id);
+      assert.ok(pending);
+      const otherBranch = (await client.query("select id_sucursal as id from temo.sucursales where id_sucursal<>$1 and estado='ACTIVO' limit 1", [branch.id])).rows[0];
+      assert.ok(otherBranch, 'preview requires two active branches for scope tests');
+      const foreign = await createCoworker(otherBranch.id, 'foreign');
+      await assert.rejects(controller.exportRows({ format: 'PDF', ids: [shared.transactions[0].id] }, { user: foreign }), error => error.getStatus() === 403);
+      await assert.rejects(transactions.detail(shared.transactions[0].id, foreign), error => error.getStatus() === 403);
+      await assert.rejects(transactions.pendingPaymentDetail(pending.database_id, foreign), error => error.getStatus() === 403);
+      assert.ok(!(await transactions.listPending(foreign)).some(row => row.database_id === pending.database_id));
+      await transactions.detail(deposit.transactions[0].id, admin);
+      await transactions.updateGroup(shared.transactions[0].id, { updates: [], voidIds: shared.transactions.map(row => row.id), preferential: false }, cashier);
     });
     await t.test('Another cashier cannot read or void this transaction', async () => {
       const outsider = { id: admin.id, roleCode: 'CAJERO' };

@@ -665,8 +665,14 @@ export class TransactionsService {
           `select 1 from temo.turnos
            where id_cajero = $1 and id_sucursal = $2
              and estado in ('ABIERTO', 'PENDIENTE_APROBACION')
-             and fecha_apertura::date = $3::date limit 1`,
-          [user.id, transaction.id_sucursal, transaction.fecha_turno],
+             and fecha_apertura::date = $3::date
+             and exists (
+               select 1 from temo.transacciones shared_transaction
+               join temo.pagos_pendientes shared_pending on shared_pending.id_transaccion = shared_transaction.id_transaccion
+               where shared_transaction.id_grupo_transacciones = $4
+                 and shared_transaction.estado <> 'ANULADA'
+             ) limit 1`,
+          [user.id, transaction.id_sucursal, transaction.fecha_turno, transaction.id_grupo_transacciones],
         )).rowCount);
         if (!sameBranchDay) throw new ForbiddenException('No tiene permiso para consultar esta transaccion.');
       }
@@ -817,6 +823,18 @@ export class TransactionsService {
         client,
         transaction.id_grupo_transacciones,
         transaction.id_transaccion,
+      );
+      const previousAudit = await client.query(
+        `select t.monto_original::float8 as amount, m.codigo as "currencyCode",
+                e.codigo as "entityCode", cm.codigo_operativo as "movementCode",
+                jsonb_build_object('buy', t.tasa_compra_usada::float8,
+                                   'sell', t.tasa_venta_usada::float8) as rates
+         from temo.transacciones t
+         join temo.monedas m on m.id_moneda = t.id_moneda_original
+         join temo.cuentas_movimientos cm on cm.id_cuenta_movimiento = t.id_cuenta_movimiento
+         join temo.cuentas_bancarias cb on cb.id_cuenta = cm.id_cuenta
+         join temo.entidades_bancarias e on e.id_entidad = cb.id_entidad
+         where t.id_transaccion = $1`, [transactionId],
       );
       const rateId = await this.resolveExchangeRate(client, input, user.id);
       const movement = await this.resolveMovement(
@@ -1006,9 +1024,11 @@ export class TransactionsService {
 
       await client.query(
         `insert into temo.bitacora (
-           id_usuario, accion, tabla, id_registro, datos_nuevos
-         ) values ($1, 'ACTUALIZAR', 'transacciones', $2, $3::jsonb)`,
-        [user.id, transactionId, JSON.stringify(input)],
+           id_usuario, accion, tabla, id_registro, datos_anteriores, datos_nuevos
+         ) values ($1, 'ACTUALIZAR', 'transacciones', $2, $3::jsonb, $4::jsonb)`,
+        [user.id, transactionId,
+          JSON.stringify({ ...previousAudit.rows[0], settlement: previousSettlement }),
+          JSON.stringify({ ...input, settlement: await this.loadStoredSettlement(client, transaction.id_grupo_transacciones, transactionId) })],
       );
 
       return { id: transactionId, updated: true };
@@ -1148,6 +1168,7 @@ export class TransactionsService {
         return { updated: input.updates.length, voided: input.voidIds.length, historical: true };
       }
       const originalRows = await client.query('select to_jsonb(t) as data from temo.transacciones t where id_grupo_transacciones=$1 order by orden_grupo', [anchor.id_grupo_transacciones]);
+      const auditBefore = await this.groupAuditSnapshot(client, anchor.id_grupo_transacciones);
       const compensation = await client.query<{ id_abono: string; monto: string; moneda: CurrencyCode } & QueryResultRow>(
         `select ap.id_abono,ap.monto,m.codigo as moneda from temo.abonos_pendientes ap
          join temo.monedas m on m.id_moneda=ap.id_moneda
@@ -1201,9 +1222,30 @@ export class TransactionsService {
       await client.query(`update temo.grupos_transacciones set observaciones=$2,fecha_modificacion=now() where id_grupo_transacciones=$1`, [anchor.id_grupo_transacciones,input.preferential ? preferentialGroupMarker : null]);
       await client.query(`insert into temo.bitacora(id_usuario,accion,tabla,id_registro,datos_anteriores,datos_nuevos)
         values($1,'ACTUALIZAR','grupos_transacciones',$2,$3::jsonb,$4::jsonb)`,
-      [user.id,anchor.id_grupo_transacciones,JSON.stringify({transactions:originalRows.rows.map(row=>row.data),settlements:before}),JSON.stringify(input)]);
+      [user.id,anchor.id_grupo_transacciones,
+        JSON.stringify({transactions:originalRows.rows.map(row=>row.data),settlements:before,auditTransactions:auditBefore}),
+        JSON.stringify({...input,auditTransactions:await this.groupAuditSnapshot(client,anchor.id_grupo_transacciones)})]);
       return {updated:input.updates.length,voided:input.voidIds.length};
     });
+  }
+
+  private async groupAuditSnapshot(client: PoolClient, groupId: string) {
+    const result = await client.query(
+      `select t.id_transaccion as id, t.orden_grupo as "order", t.estado as estado,
+              t.monto_original::float8 as amount, m.codigo as "currencyCode",
+              e.codigo as "entityCode", cm.codigo_operativo as "movementCode",
+              jsonb_build_object('buy',t.tasa_compra_usada::float8,'sell',t.tasa_venta_usada::float8) as rates
+       from temo.transacciones t
+       join temo.monedas m on m.id_moneda=t.id_moneda_original
+       join temo.cuentas_movimientos cm on cm.id_cuenta_movimiento=t.id_cuenta_movimiento
+       join temo.cuentas_bancarias cb on cb.id_cuenta=cm.id_cuenta
+       join temo.entidades_bancarias e on e.id_entidad=cb.id_entidad
+       where t.id_grupo_transacciones=$1 order by t.orden_grupo`, [groupId],
+    );
+    const snapshots = [];
+    for (const row of result.rows) snapshots.push({ ...row,
+      settlement: await this.loadStoredSettlement(client, groupId, String(row.id)) });
+    return snapshots;
   }
 
   payPending(
@@ -1849,6 +1891,10 @@ export class TransactionsService {
     if (user.roleCode !== 'JEFA' || transaction.estado_turno !== 'CERRADO') throw new ForbiddenException('Solo el Administrador puede corregir registros de turnos cerrados.');
     const previous = await client.query('select * from temo.correcciones_transacciones_cerradas where id_transaccion=$1 for update', [transaction.id_transaccion]);
     if (previous.rows[0]?.anulada) throw new ConflictException('El registro historico ya fue anulado.');
+    const original = (await this.groupAuditSnapshot(client, transaction.id_grupo_transacciones))
+      .find(row => row.id === transaction.id_transaccion);
+    const auditBefore = { ...(previous.rows[0]?.datos ?? original),
+      estado: previous.rows[0]?.anulada ? 'ANULADA' : transaction.estado_transaccion };
     let projection = previous.rows[0]?.proyeccion ?? {};
     if (input) {
       const movement = await this.resolveMovement(client, transaction.id_sucursal, input.entityCode, input.currencyCode, input.movementCode);
@@ -1866,7 +1912,10 @@ export class TransactionsService {
     [transaction.id_transaccion, JSON.stringify(next.datos), JSON.stringify(projection), annul, user.id]);
     await client.query(`insert into temo.bitacora(id_usuario,accion,tabla,id_registro,datos_anteriores,datos_nuevos)
       values($1,'CORREGIR','correcciones_transacciones_cerradas',$2,$3::jsonb,$4::jsonb)`,
-    [user.id, transaction.id_transaccion, JSON.stringify(previous.rows[0] ?? null), JSON.stringify({ ...next, cierrePreservado: true })]);
+    [user.id, transaction.id_transaccion,
+      JSON.stringify({ ...(previous.rows[0] ?? {}), auditTransaction: auditBefore }),
+      JSON.stringify({ ...next, cierrePreservado: true,
+        auditTransaction: { ...(input ?? auditBefore), estado: annul ? 'ANULADA' : transaction.estado_transaccion } })]);
   }
 
   private async loadEditableTransaction(

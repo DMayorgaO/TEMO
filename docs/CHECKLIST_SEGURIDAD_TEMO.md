@@ -27,6 +27,7 @@ Seguimiento 2026-10-07: correccion operativa autorizada desplegada en d45772c (l
 - [x] Regresion automatizada de escritura en preview: preparacion/apertura, deposito NIO/USD, multiples, anular grupo, efectivo de pendientes con vuelto, compensacion retiro380/pendiente180/deposito200, tasa preferencial36.55 y transferencia egreso/anulacion. Evidencia: backend/tests/financial-regression.test.cjs; nueve escenarios con servicios reales y PostgreSQL, rollback de fixtures.
 - [x] Pruebas negativas adicionales: cajero no abre turno asignado a otro, no lee/anula transaccion ajena ni lee transferencia ajena; no crea transferencias digitales. No equivale a una matriz completa de todas las rutas/sucursales.
 - [ ] Pruebas negativas: cajero no consulta otra sucursal ni modifica/exporta registros ajenos mediante IDs manipulados.
+- [x] 2026-10-08, desarrollo: detalle de transacciones ajenas en misma sucursal/dia restringido a grupos vinculados a pendientes compartidos. Pruebas de dos sucursales, IDs de otro cajero, consulta/grupo/edicion y creacion en turno ajeno. Suite55/55; no acredita toda la matriz ni exportacion controlada por servidor. Ver VALIDACION_ALCANCE_TRANSACCIONES_2026-10-08.md.
 - [ ] Actualizar dependencias vulnerables con pruebas de regresion; revisar tambien formatos/formulas de archivos exportados.
 - [x] En desarrollo: snapshots operativos/catalogos pasan de localStorage a sessionStorage ligado a la sesion; limpiar cache al salir o detectar sesion invalida y eliminar snapshots heredados al cargar. Respuestas tardias de catalogos no repueblan otra sesion. Evidencia: frontend/tests/session-cache.test.mjs (3/3), build/lint frontend exitosos.
 - [ ] Revisar todos los borradores, almacenamiento del navegador y permisos locales demostrativos; sessionStorage sigue accesible a JavaScript, no sustituye proteccion XSS ni almacenamiento seguro del token.
@@ -68,6 +69,14 @@ Recordatorio persistente, no aviso programado: al informar la compra del dominio
 
 ## Bloque 4: identidad y OTP
 
+### Estado actual al 2026-10-08
+
+- [x] MFA administrativo desplegado y probado por el usuario en produccion el 2026-10-07. Las notas de preparacion inferiores documentan etapas anteriores, no ausencia actual de MFA.
+- [x] Desarrollo: cambios sensibles de usuarios/roles revocan sesiones; proteccion de Administrador propio/ultimo activo y codigos de roles esenciales; auditoria atomica de cambios sin secretos.
+- [x] Desarrollo: Cerrar sesiones por usuario con confirmacion, API exclusiva de Administrador y auditoria; claves temporales criptograficas; rutas exactas durante cambio obligatorio y control de cambio concurrente de privilegios.
+- [x] Desarrollo: unicidad normalizada de usuarios/correos (migracion043) y recuperacion rechazada ante identidad ambigua. Ver VALIDACION_IDENTIDADES_Y_ROLES_2026-10-08.md.
+- [ ] Recorrido visual del nuevo control de sesiones con Administrador/MFA y publicacion autorizada del paquete. Inventario por dispositivo y reto adicional para operaciones sensibles siguen pendientes.
+
 - [x] Preparacion de produccion autorizada 2026-10-07: respaldo legible y migracion 039 aplicada, sin alterar registros financieros. Dependencias actualizadas (audit 0), 34 pruebas backend y 8 frontend correctas. Ver `PREPARACION_DESPLIEGUE_SEGURIDAD_2026-10-07.md`.
 - [ ] Configurar clave MFA en Render, publicar codigo y verificar activacion en produccion. No desplegar sin clave; acceso al panel pendiente.
 
@@ -85,11 +94,29 @@ Recordatorio persistente, no aviso programado: al informar la compra del dominio
 - [ ] Sesiones visibles/revocables, inactividad controlada y aviso de nuevos accesos; evaluar passkeys resistentes al phishing.
 - [ ] Web: evaluar cookies HttpOnly/Secure/SameSite y CSRF. Movil: almacenamiento seguro del SO, tokens cortos y renovacion revocable.
 
-TOTP aumenta seguridad, pero no evita por completo phishing ni abuso de una sesion ya robada. No esta implementado todavia.
+TOTP aumenta seguridad, pero no evita por completo phishing ni abuso de una sesion ya robada. Esta implementado para Administrador; las tareas historicas pendientes deben leerse junto al estado actual indicado arriba.
 
 ## Bloque 5: auditoria y deteccion
 
-- [ ] Sustituir datos demostrativos de auditoria por eventos reales.
+- [x] 2026-10-08, desarrollo: botones Excel/PDF comunes y PNG del dashboard notifican EXPORTACION_SOLICITADA; API valida metadatos y rol, identidad desde sesion, sin archivo/contenido. Migracion042 solo preview. Build/lint,54 pruebas backend y8 frontend correctos. Ver VALIDACION_EXPORTACIONES_AUDITORIA_2026-10-08.md.
+- [x] 2026-10-08, desarrollo: datos de exportaciones de tablas y PNG autorizados por API, alcance de registros revalidado y auditoria obligatoria previa con filas verificadas. Cliente sin fallback local ante fallo. Esto acredita entrega de datos, no que el archivo se guardo ni toda copia manual. Ver VALIDACION_SEGURIDAD_EXPORTACIONES_2026-10-08.md.
+- [ ] Validacion final de apertura Excel, impresion PDF y descarga PNG por Administrador en navegador habitual, seguida de despliegue aprobado. La compatibilidad del archivo Excel HTML depende del importador.
+
+- [x] 2026-10-08, desarrollo: consultasGET exitosas en rutas sensibles registran CONSULTAR/LECTURA_SENSIBLE con usuario, plantilla de operacion e ID UUID consultado cuando existe, sin contenido. Agrupacion5min por usuario/ruta/registro. Migracion041 solo preview; build/lint y52 pruebas backend correctos. Ver VALIDACION_LECTURAS_SENSIBLES_2026-10-08.md.
+
+- [x] 2026-10-08, desarrollo: respuestas403 con identidad autenticada generan RECHAZAR/ACCESO_DENEGADO, ruta de servidor/metodo/IP valida, sin cuerpo/query/token. Dedupe60s por usuario/metodo/ruta y escrituras simultaneas acotadas. Logs tecnicos ya no incluyen query, mensaje de excepcion ni stack. Suite backend50/50, build/lint correctos. Ver VALIDACION_ACCESOS_DENEGADOS_2026-10-08.md.
+
+- [x] 2026-10-08, desarrollo: correcciones de turnos cerrados guardan snapshot comparable original o de la ultima correccion, diferenciando anulacion y preservacion del cierre. Prueba de grupo cerrado, dos ediciones sucesivas, rechazo a cajero y arqueos/movimientos intactos. Suite backend completa 46/46, build/lint correctos. Ver VALIDACION_AUDITORIA_CIERRES_2026-10-08.md.
+
+- [x] 2026-10-08, desarrollo: captura comparable de pestañas de grupos abiertos editados mediante updateGroup, con UUID/orden, estado, monto, moneda, banco, movimiento, tasas y efectivo almacenado. Visor vincula UUID y etiqueta conteos compartidos; 21 pruebas auditoria/regresion financiera correctas. Ver VALIDACION_AUDITORIA_GRUPOS_2026-10-08.md.
+
+- [x] En desarrollo: edicion individual ordinaria conserva efectivo almacenado antes/despues; visor compara unidades por denominacion en NIO/USD, separando principal/vuelto. Datos ausentes o invalidos no se interpretan como cero. Build/lint y 19 pruebas de auditoria/regresion financiera aprobadas.
+
+- [x] En desarrollo: detalle de cambios restringido al Administrador, UUID validado, campos escalares permitidos por entidad, sin JSON completos ni secretos; estados anteriores/ posteriores parciales identificados. Build/lint y 12 pruebas de auditoria/catalogos correctas.
+- [ ] Ampliar captura de antes/despues y normalizacion de estructuras de grupos/denominaciones; el visor inicial no acredita cobertura completa. Revisar visualmente el detalle en preview.
+- [x] En desarrollo: edicion individual ordinaria captura monto, moneda, banco, movimiento y tasas anteriores bajo bloqueo y en la misma transaccion que la edicion. Visor compara tasas por rutas permitidas. Prueba real de edicion 100 a 120, auditoria y anulacion/arqueo correctos; 18 pruebas de auditoria/regresion financiera aprobadas. Rutas digitales e historicas conservan su auditoria separada.
+
+- [x] En desarrollo: Auditoria consulta los ultimos 500 eventos reales, solo Administrador y sin opciones de escritura. No expone JSON internos ni secretos. Pruebas de catalogos 9/9 con preview, build y lint correctos. Ver VALIDACION_AUDITORIA_2026-10-07.md.
 - [ ] Registrar accesos, denegaciones, lecturas sensibles, exportaciones, cambios de permisos, anulaciones y MFA sin registrar secretos.
 - [ ] Alertas de nuevos dispositivos, intentos anormales y extraccion masiva; responsables, retencion y proteccion de logs.
 - [ ] Limites por identidad/operacion y controles de abuso sin cupo arbitrario de registros; paginacion y reduccion de consultas duplicadas.
@@ -105,10 +132,29 @@ TOTP aumenta seguridad, pero no evita por completo phishing ni abuso de una sesi
 
 ## Bloque 7: validacion continua
 
+### Paquete preparado el 2026-10-08 (solo desarrollo)
+
+- [x] Backend79/79, frontend14/14, build/lint correctos; npm audit completo y produccion con0 vulnerabilidades conocidas reportadas.
+- [x] Preflight de solo lectura local: identidades sin duplicados, roles esenciales y Administradores activos, indices/migraciones040-043 presentes, ningun usuario activo con rol no soportado.
+- [ ] Puertas manuales y preflight real antes de autorizar publicacion. Respaldo nuevo obligatorio. Ver PREPARACION_PAQUETE_SEGURIDAD_2026-10-08.md. Este bloque no despliega produccion.
+
+### Publicacion autorizada del 2026-10-08
+
+- [x] Usuario confirma exportaciones y cierre de sesiones; autoriza publicacion del paquete acumulado.
+- [x] Preflight de produccion correcto; respaldo nuevo legible y migraciones040-043 aplicadas mediante TLS verificado. Build/lint y93 pruebas correctos. Ver PREPARACION_PAQUETE_SEGURIDAD_2026-10-08.md.
+- [ ] Confirmar revision desplegada, API/web, cabeceras y continuidad del acceso MFA despues del push. No reiniciar el enrolamiento ni reemplazar su clave.
+
+### Refuerzo de exportaciones del 2026-10-08 (solo desarrollo)
+
+- [x] Exportaciones Excel HTML: cadenas con formato de texto y prefijo protector cuando comienzan con =, +, - o @, incluso tras espacios o controles. PDF sin cambios. Ver VALIDACION_EXCEL_FORMULAS_2026-10-08.md.
+- [x] Regresion conjunta: 55 pruebas backend, 11 frontend, compilacion y lint correctos.
+- [ ] Abrir un Excel exportado en la aplicacion usada por el negocio; confirmar importes, textos y que las formulas de prueba no se ejecuten.
+- [ ] Evaluar despliegue del paquete acumulado con respaldo, migraciones 040-042 en orden y verificaciones de permisos, auditoria y operaciones financieras. No desplegado por este bloque.
+
 ### Despliegue del 2026-10-07
 
 - [x] MFA y paquete de seguridad publicados en produccion: b06b201; API y base saludables, web con flujo MFA, CSP/anti-framing, CORS y no-store verificados. Ver PREPARACION_DESPLIEGUE_SEGURIDAD_2026-10-07.md.
-- [ ] Confirmar enrolamiento y acceso de Administradores reales con VIP Access en produccion, sin compartir semillas ni codigos de recuperacion.
+- [x] Usuario confirma enrolamiento y acceso correcto del usuario Admin con VIP Access en produccion. No acredita todos los demas Administradores.
 
 ### Evidencia adicional del 2026-10-07 (solo desarrollo)
 

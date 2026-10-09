@@ -1,6 +1,7 @@
 import { BadRequestException, Body, Controller, Get, Param, Post, Put, Query, Req } from '@nestjs/common';
 import { AuthenticatedUser } from '../auth/auth.service';
 import { ShiftsService } from './shifts.service';
+import { z } from 'zod';
 import {
   closeShiftSchema,
   openShiftSchema,
@@ -15,6 +16,24 @@ type AuthenticatedRequest = { user: AuthenticatedUser };
 @Controller('shifts')
 export class ShiftsController {
   constructor(private readonly shifts: ShiftsService) {}
+
+  @Post('export')
+  exportRows(@Body() body: unknown, @Req() request: AuthenticatedRequest & { ip?: string }) {
+    return this.shifts.exportRows(body, request);
+  }
+
+  @Post('dashboard/export')
+  exportDashboard(@Body() body: unknown, @Req() request: AuthenticatedRequest & { ip?: string }) {
+    const date = z.string().regex(/^\d{4}-\d{2}-\d{2}$/).refine(value =>
+      Number.isFinite(Date.parse(value)) && new Date(value).toISOString().slice(0, 10) === value);
+    const result = z.object({ from: date.optional(), to: date.optional(), day: date.optional() }).strict().safeParse(body);
+    if (!result.success) throw new BadRequestException('Fechas de exportacion invalidas.');
+    const { from, to, day } = result.data;
+    if (Boolean(from) !== Boolean(to) || (from && to && (from > to || Date.parse(to) - Date.parse(from) > 366 * 86400000))) {
+      throw new BadRequestException('Seleccione un rango de hasta 367 dias.');
+    }
+    return this.shifts.exportDashboard(request, from, to, day);
+  }
 
   @Get()
   list(@Req() request: AuthenticatedRequest) {

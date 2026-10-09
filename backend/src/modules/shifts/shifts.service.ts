@@ -7,6 +7,7 @@ import {
 import { PoolClient, QueryResult, QueryResultRow } from 'pg';
 import { AuthenticatedUser } from '../auth/auth.service';
 import { DatabaseService } from '../database/database.service';
+import { authorizedExport, parseExportSelection, requireExportRole, recordAuthorizedExport } from '../../common/export-selection';
 import { preferentialCashAdjustment, preferentialGroupMarker, PreferentialCashRow } from '../../common/preferential-cash';
 import {
   CashCountsInput,
@@ -53,6 +54,19 @@ type ShiftRow = QueryResultRow & {
 @Injectable()
 export class ShiftsService {
   constructor(private readonly db: DatabaseService) {}
+
+  async exportRows(body: unknown, request: { user: AuthenticatedUser; ip?: string }) {
+    requireExportRole(request.user);
+    const input = parseExportSelection(body);
+    return authorizedExport(this.db, request, 'Turnos', input, await this.list(request.user, input.ids), row => row.database_id);
+  }
+
+  async exportDashboard(request: { user: AuthenticatedUser; ip?: string }, from?: string, to?: string, day?: string) {
+    requireExportRole(request.user, true);
+    const data = await this.dashboard(request.user, from, to, day);
+    await recordAuthorizedExport(this.db, request, 'Grafica de transacciones', 'PNG', data.counts.length);
+    return data;
+  }
 
   async dashboard(user: AuthenticatedUser, from?: string, to?: string, day?: string) {
     this.requireBoss(user);
@@ -127,12 +141,13 @@ export class ShiftsService {
     });
   }
 
-  async list(user: AuthenticatedUser) {
+  async list(user: AuthenticatedUser, selectedIds?: string[]) {
     const result = await this.db.query<ShiftRow>(
       `${this.shiftSelect()}
        where ($1 = 'JEFA' or t.id_cajero = $2)
+         and ($3::uuid[] is null or t.id_turno = any($3::uuid[]))
        order by t.fecha_apertura desc, t.fecha_creacion desc`,
-      [user.roleCode, user.id],
+      [user.roleCode, user.id, selectedIds ?? null],
     );
     return result.rows;
   }

@@ -49,11 +49,11 @@ export class AuthService {
        from temo.usuarios u join temo.roles r on r.id_rol = u.id_rol
        where (lower(u.usuario) = $1 or lower(u.correo) = $1)
          and u.estado = 'ACTIVO' and r.estado = 'ACTIVO' and r.codigo = 'JEFA'
-         and nullif(trim(u.correo), '') is not null limit 1`,
+         and nullif(trim(u.correo), '') is not null limit 2`,
       [normalizedIdentifier],
     );
     const target = result.rows[0];
-    if (!target) return genericResponse;
+    if (result.rows.length !== 1) return genericResponse;
 
     // Reemplaza códigos anteriores para que sólo el último correo sea válido.
     const code = String(randomInt(0, 1_000_000)).padStart(6, '0');
@@ -79,9 +79,9 @@ export class AuthService {
                  nullif($3, '')::inet, nullif($4, ''))`,
         [target.id, recovery.rows[0].id, this.normalizeIp(ip), userAgent.slice(0, 1000)],
       );
-    } catch (error) {
+    } catch {
       await this.db.query(`delete from temo.recuperaciones_contrasena where id_recuperacion = $1`, [recovery.rows[0].id]);
-      this.logger.error('No fue posible enviar el correo de recuperación.', error instanceof Error ? error.stack : undefined);
+      this.logger.error('No fue posible enviar el correo de recuperación.');
     }
     return genericResponse;
   }
@@ -92,16 +92,23 @@ export class AuthService {
     this.validateNewPassword(newPassword);
     if (!/^\d{6}$/.test(code)) throw new BadRequestException('El código de recuperación no es válido.');
     const recovered = await this.db.transaction(async (client) => {
+      await client.query('select pg_advisory_xact_lock(741260810)');
+      const identities = await client.query<{ id: string }>(`select u.id_usuario as id
+        from temo.usuarios u join temo.roles r using(id_rol)
+        where (lower(u.usuario)=$1 or lower(u.correo)=$1)
+          and u.estado='ACTIVO' and r.estado='ACTIVO' and r.codigo='JEFA'
+          and nullif(trim(u.correo),'') is not null limit 2`, [normalizedIdentifier]);
+      if (identities.rows.length !== 1) throw new BadRequestException('El código venció o no es válido. Solicite uno nuevo.');
       const result = await client.query<QueryResultRow & { recovery_id: string; user_id: string; code_hash: string }>(
         `select rc.id_recuperacion as recovery_id, u.id_usuario as user_id, rc.codigo_hash as code_hash
          from temo.recuperaciones_contrasena rc
          join temo.usuarios u on u.id_usuario = rc.id_usuario
          join temo.roles r on r.id_rol = u.id_rol
-         where (lower(u.usuario) = $1 or lower(u.correo) = $1)
-           and r.codigo = 'JEFA' and u.estado = 'ACTIVO'
+         where u.id_usuario = $1
+           and r.codigo = 'JEFA' and r.estado = 'ACTIVO' and u.estado = 'ACTIVO'
            and rc.consumido_en is null and rc.vence_en > now() and rc.intentos < 5
          order by rc.fecha_creacion desc limit 1 for update of rc`,
-        [normalizedIdentifier],
+        [identities.rows[0].id],
       );
       const recovery = result.rows[0];
       if (!recovery) throw new BadRequestException('El código venció o no es válido. Solicite uno nuevo.');
@@ -218,15 +225,18 @@ export class AuthService {
     this.validateNewPassword(newPassword);
     if (!currentPassword) throw new BadRequestException('Ingrese la contrasena actual.');
     const changed = await this.db.transaction(async (client) => {
+      await client.query('select pg_advisory_xact_lock(741260810)');
       const result = await client.query<AuthUserRow>(
         `update temo.usuarios set contrasena_hash = crypt($3, gen_salt('bf', 12)),
              debe_cambiar_contrasena = false, contrasena_modificada_en = now(),
              version_sesion = version_sesion + 1, intentos_fallidos = 0,
              bloqueado_hasta = null, fecha_modificacion = now()
          where id_usuario = $1 and contrasena_hash = crypt($2, contrasena_hash)
+           and version_sesion = $4 and estado = 'ACTIVO'
+           and exists(select 1 from temo.roles r where r.id_rol=usuarios.id_rol and r.codigo=$5 and r.estado='ACTIVO')
            and crypt($3, contrasena_hash) <> contrasena_hash
          returning id_usuario as id, usuario as username`,
-        [user.id, currentPassword, newPassword],
+        [user.id, currentPassword, newPassword, user.sessionVersion, user.roleCode],
       );
       const row = result.rows[0];
       if (!row) throw new BadRequestException('La contrasena actual no es correcta o la nueva es igual a la anterior.');
@@ -241,6 +251,9 @@ export class AuthService {
       return row;
     });
     const refreshed = await this.loadUser(changed.id, changed.username);
+    if (refreshed.roleCode !== user.roleCode || refreshed.sessionVersion !== user.sessionVersion + 1) {
+      throw new UnauthorizedException('El acceso cambio durante la operacion. Inicie sesion nuevamente.');
+    }
     return { token: this.issueToken(refreshed), expiresIn: this.tokenLifetimeSeconds, user: refreshed };
   }
 

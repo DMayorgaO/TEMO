@@ -4,6 +4,7 @@ import { CalendarDays, Download, RefreshCw, X } from 'lucide-react';
 import { bankBalances, cashierCounts, filterCounts, reconciliationRows, reconciliationTotal } from './admin-dashboard-data';
 import type { Currency, DashboardData, ReconciliationRow } from './admin-dashboard-data';
 import './admin-dashboard.css';
+import { downloadExport, exportFilename } from '../utils/export-download';
 
 type Request = <T>(path: string, init?: RequestInit) => Promise<T>;
 type Cell = string | number | { text: string; content: ReactNode };
@@ -65,6 +66,9 @@ export function AdminDashboard({ request }: { request: Request }) {
   const [filter, setFilter] = useState<{ branch: string; cashier?: string; label: string } | null>(null);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [exporting, setExporting] = useState(false);
+  const pendingPng = useRef<{ token: string; generation: number } | null>(null);
+  const pngBusy = useRef(false);
   const canvas = useRef<HTMLCanvasElement>(null);
   const exportChart = useRef<(() => HTMLCanvasElement) | null>(null);
   const generation = useRef(0);
@@ -150,13 +154,41 @@ export function AdminDashboard({ request }: { request: Request }) {
     const index = Math.floor((x - 38) / ((rectangle.width - 50) / points.length));
     if (points[index]) setDay(points[index].day);
   };
-  const download = () => {
-    exportChart.current?.().toBlob(blob => {
-      if (!blob) return;
-      const url = URL.createObjectURL(blob); const anchor = document.createElement('a');
-      anchor.href = url; anchor.download = `TEMO-transacciones-${data?.from}-${data?.to}.png`;
-      document.body.append(anchor); anchor.click(); anchor.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000);
-    });
+  useEffect(() => {
+    const pending = pendingPng.current;
+    if (!pending) return;
+    pendingPng.current = null;
+    const chart = exportChart.current?.();
+    if (!chart) { pngBusy.current = false; setExporting(false); setError('No se pudo preparar la imagen.'); return; }
+    chart.toBlob(blob => {
+      try {
+        if (!blob) throw new Error('No se pudo generar la imagen.');
+        if (pending.token !== window.sessionStorage.getItem('temo:auth-token') || pending.generation !== generation.current) {
+          throw new Error('La sesion o el rango cambio. Vuelva a exportar la grafica.');
+        }
+        downloadExport(blob, exportFilename(`transacciones-${data?.from}-${data?.to}`, 'png'));
+      } catch (cause) { setError(cause instanceof Error ? cause.message : 'No se pudo descargar la imagen.'); }
+      finally { pngBusy.current = false; setExporting(false); }
+    }, 'image/png');
+  }, [data]);
+
+  const download = async () => {
+    if (pngBusy.current) return;
+    pngBusy.current = true; setExporting(true); setError('');
+    const token = window.sessionStorage.getItem('temo:auth-token');
+    const id = generation.current;
+    try {
+      if (!token) throw new Error('Inicie sesion nuevamente antes de exportar.');
+      const result = await request<DashboardData>('/shifts/dashboard/export', { method: 'POST', body: JSON.stringify({
+        ...(range.from && range.to ? { from: range.from, to: range.to } : {}), ...(day ? { day } : {}),
+      }) });
+      if (token !== window.sessionStorage.getItem('temo:auth-token') || id !== generation.current) throw new Error('La sesion o el rango cambio. Vuelva a exportar.');
+      pendingPng.current = { token, generation: id };
+      setData(result);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'No se pudo autorizar la exportacion.');
+      pngBusy.current = false; setExporting(false);
+    }
   };
   const groupedBalances = data ? bankBalances(data) : [];
   const branchBalances = new Map<string, { name: string; rows: typeof groupedBalances }>();
@@ -187,7 +219,7 @@ export function AdminDashboard({ request }: { request: Request }) {
             setFilter({ branch: row.branch_id, cashier: column === 1 ? row.cashier_id : undefined, label: column === 1 ? `${row.branch} · ${row.cashier}` : row.branch });
           }} />
         </section>
-        <section className="report-section report-chart"><header><h2>Transacciones por día</h2><button className="icon-button" title="Exportar en PNG" aria-label="Exportar en PNG" onClick={download}><Download size={17} /></button></header>
+        <section className="report-section report-chart"><header><h2>Transacciones por día</h2><button className="icon-button" title="Exportar en PNG" aria-label="Exportar en PNG" disabled={exporting || loading} onClick={() => void download()}><Download size={17} /></button></header>
           <div className="report-range"><label>Desde<input type="date" aria-label="Gráfica desde" value={range.from || data.from} onChange={e => setRange({ from: e.target.value, to: range.to || data.to })} /></label><label>Hasta<input type="date" aria-label="Gráfica hasta" value={range.to || data.to} onChange={e => setRange({ from: range.from || data.from, to: e.target.value })} /></label><button className="icon-button" title="Semana actual" aria-label="Semana actual" onClick={() => setRange({ from: '', to: '' })}><CalendarDays size={17} /></button>{filter && <button className="icon-button" title="Quitar filtro de cajero o sucursal" aria-label="Quitar filtro" onClick={() => setFilter(null)}><X size={17} /></button>}</div>
           <canvas ref={canvas} className="report-selectable-chart" onClick={selectChartDay} aria-label={`Transacciones: ${points.map(p => `${p.day}: ${p.count}`).join('; ')}`} role="img" />
         </section>

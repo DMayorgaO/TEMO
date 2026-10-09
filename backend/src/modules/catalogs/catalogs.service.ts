@@ -5,6 +5,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { PoolClient } from 'pg';
+import { isIP } from 'node:net';
 import { AuthenticatedUser } from '../auth/auth.service';
 import { DatabaseService } from '../database/database.service';
 
@@ -19,6 +20,8 @@ const writableCatalogs = new Set([
   'movements',
   'commissions',
 ]);
+const protectedRoles = new Set(['JEFA', 'CAJERO', 'TRANSFERISTA']);
+type AuditContext = { ip?: string; userAgent?: string };
 
 @Injectable()
 export class CatalogsService {
@@ -35,6 +38,7 @@ export class CatalogsService {
     this.requireBoss(user);
     this.validateTemporaryPassword(temporaryPassword);
     return this.db.transaction(async (client) => {
+      await this.lockIdentityAdministration(client, user);
       const updated = await client.query<{ id: string; username: string }>(
         `update temo.usuarios target
          set contrasena_hash = crypt($2, gen_salt('bf', 12)),
@@ -73,18 +77,44 @@ export class CatalogsService {
     databaseId: string | undefined,
     payload: CatalogPayload,
     user: AuthenticatedUser,
+    context: AuditContext = {},
   ) {
     this.requireBoss(user);
     if (!writableCatalogs.has(resource)) {
       throw new BadRequestException('El catalogo solicitado no admite modificaciones.');
     }
+    if (!payload || typeof payload !== 'object' || Array.isArray(payload)) throw new BadRequestException('Los datos del catalogo no son validos.');
+    if (resource === 'users' || resource === 'roles') {
+      const keys = resource === 'users' ? ['firstName', 'nombres', 'lastName', 'apellidos', 'username', 'usuario',
+        'email', 'correo', 'roleId', 'role', 'password', 'contrasena', 'status'] : ['code', 'name', 'description', 'status'];
+      if (keys.some(key => payload[key] !== undefined && typeof payload[key] !== 'string')) {
+        throw new BadRequestException('Los campos de usuario y rol deben contener texto.');
+      }
+      const status = this.text(payload.status ?? 'ACTIVO').toUpperCase();
+      if (!(resource === 'users' ? ['ACTIVO', 'INACTIVO', 'BLOQUEADO'] : ['ACTIVO', 'INACTIVO']).includes(status)) {
+        throw new BadRequestException('El estado seleccionado no es valido.');
+      }
+    }
 
     return this.db.transaction(async (client) => {
+      if (resource === 'users' || resource === 'roles') {
+        await this.lockIdentityAdministration(client, user);
+        const before = databaseId ? await this.identitySnapshot(client, resource, databaseId) : null;
+        if (databaseId && !before) throw new NotFoundException('El registro seleccionado no existe.');
+        const result = resource === 'users'
+          ? await this.saveUser(client, databaseId, payload, user, before)
+          : await this.saveRole(client, databaseId, payload, before);
+        const after = await this.identitySnapshot(client, resource, result.id);
+        const address = (context.ip ?? '').replace(/^::ffff:/, '');
+        await client.query(`insert into temo.bitacora
+          (id_usuario,accion,tabla,id_registro,datos_anteriores,datos_nuevos,direccion_ip,agente_usuario)
+          values($1,$2::temo.accion_bitacora,$3,$4,$5::jsonb,$6::jsonb,$7::inet,$8)`,
+        [user.id, databaseId ? 'ACTUALIZAR' : 'CREAR', resource === 'users' ? 'usuarios' : 'roles', result.id,
+          before ? JSON.stringify(before) : null, JSON.stringify(after), isIP(address) ? address : null,
+          (context.userAgent ?? '').slice(0, 300) || null]);
+        return result;
+      }
       switch (resource) {
-        case 'roles':
-          return this.saveRole(client, databaseId, payload);
-        case 'users':
-          return this.saveUser(client, databaseId, payload);
         case 'banks':
           return this.saveBank(client, databaseId, payload);
         case 'branches':
@@ -101,11 +131,16 @@ export class CatalogsService {
     });
   }
 
-  private async saveRole(client: PoolClient, databaseId: string | undefined, payload: CatalogPayload) {
+  private async saveRole(client: PoolClient, databaseId: string | undefined, payload: CatalogPayload, before: Record<string, unknown> | null) {
     const code = this.required(payload.code, 'Detalle nombre clave').toUpperCase();
     const name = this.required(payload.name, 'Nombre visible');
     const description = this.text(payload.description);
     const status = this.recordStatus(payload.status);
+    if (code.length > 40 || name.length > 80 || description.length > 2000) throw new BadRequestException('Los datos del rol exceden la longitud permitida.');
+    if (before && protectedRoles.has(String(before.codigo)) && (code !== before.codigo || status !== 'ACTIVO')) {
+      throw new BadRequestException('No se puede cambiar el codigo ni desactivar un rol operativo del sistema. Desactive el usuario que corresponda.');
+    }
+    if (protectedRoles.has(code) && status !== 'ACTIVO') throw new BadRequestException('Los roles operativos deben permanecer activos.');
     const result = databaseId
       ? await client.query(
           `update temo.roles
@@ -120,36 +155,61 @@ export class CatalogsService {
            returning id_rol as id`,
           [code, name, description || null, status],
         );
-    return this.firstId(result.rows, 'rol');
+    const saved = this.firstId(result.rows, 'rol');
+    if (before && (before.codigo !== code || before.estado !== status)) {
+      await client.query('update temo.usuarios set version_sesion = version_sesion + 1 where id_rol = $1', [saved.id]);
+    }
+    return saved;
   }
 
-  private async saveUser(client: PoolClient, databaseId: string | undefined, payload: CatalogPayload) {
+  private async saveUser(client: PoolClient, databaseId: string | undefined, payload: CatalogPayload,
+    actor: AuthenticatedUser, before: Record<string, unknown> | null) {
     const firstName = this.required(payload.firstName ?? payload.nombres, 'Nombres');
     const lastName = this.text(payload.lastName ?? payload.apellidos);
     const username = this.required(payload.username ?? payload.usuario, 'Usuario').toUpperCase();
     const email = this.text(payload.email ?? payload.correo);
+    if (firstName.length > 80 || lastName.length > 120 || `${firstName} ${lastName}`.trim().length > 180
+      || username.length > 60 || email.length > 160) throw new BadRequestException('Los datos del usuario exceden la longitud permitida.');
     const roleId = await this.resolveId(
       client,
-      'select id_rol as id from temo.roles where id_rol::text = $1 or lower(nombre) = lower($1) or upper(codigo) = upper($1)',
+      `select id_rol as id from temo.roles where estado = 'ACTIVO'
+       and (id_rol::text = $1 or lower(nombre) = lower($1) or upper(codigo) = upper($1))`,
       this.required(payload.roleId ?? payload.role, 'Rol'),
       'El rol seleccionado no existe.',
     );
     const status = this.userStatus(payload.status);
     const password = this.text(payload.password ?? payload.contrasena);
+    const nextRole = (await client.query<{ codigo: string }>('select codigo from temo.roles where id_rol = $1', [roleId])).rows[0].codigo;
+    if (databaseId === actor.id && (status !== 'ACTIVO' || nextRole !== 'JEFA')) {
+      throw new BadRequestException('No puede desactivar su propio acceso ni quitarse el perfil Administrador.');
+    }
+    if (before?.rol === 'JEFA' && before.estado === 'ACTIVO' && (nextRole !== 'JEFA' || status !== 'ACTIVO')) {
+      const remaining = await client.query(`select 1 from temo.usuarios u join temo.roles r using(id_rol)
+        where r.codigo='JEFA' and r.estado='ACTIVO' and u.estado='ACTIVO' and u.id_usuario<>$1 limit 1`, [databaseId]);
+      if (!remaining.rowCount) throw new BadRequestException('Debe conservar al menos un Administrador activo.');
+    }
+    if (password && before && (before.rol !== 'CAJERO' || nextRole !== 'CAJERO')) {
+      throw new BadRequestException('Solo puede asignar una clave temporal a un cajero. El Administrador debe utilizar Cambiar contrasena o recuperacion.');
+    }
     if (!databaseId && !password) {
       throw new BadRequestException('Ingrese una contrasena temporal para el nuevo usuario.');
     }
-    if (password && (password.length < 10 || !/[a-z]/.test(password) || !/[A-Z]/.test(password) || !/[0-9]/.test(password))) {
-      throw new BadRequestException('La contrasena temporal debe tener al menos 10 caracteres, una mayuscula, una minuscula y un numero.');
-    }
+    if (password) this.validateTemporaryPassword(password);
+    const duplicate = await client.query(`select 1 from temo.usuarios
+      where ($3::uuid is null or id_usuario<>$3)
+        and (lower(usuario)=lower($1) or ($2<>'' and lower(correo)=lower($2))) limit 1`,
+    [username, email, databaseId ?? null]);
+    if (duplicate.rowCount) throw new BadRequestException('El usuario o correo ya esta registrado.');
     const result = databaseId
       ? await client.query(
           `update temo.usuarios
-           set id_rol = $2, nombres = $3, apellidos = $4, usuario = $5,
-               correo = nullif($6, ''), estado = $7,
+           set id_rol = $2, nombres = $3, apellidos = $4, usuario = $5::varchar,
+               correo = nullif($6, ''), estado = $7::temo.estado_usuario,
                contrasena_hash = case when $8 <> '' then crypt($8, gen_salt('bf', 12)) else contrasena_hash end,
                debe_cambiar_contrasena = case when $8 <> '' then true else debe_cambiar_contrasena end,
-               version_sesion = case when $8 <> '' then version_sesion + 1 else version_sesion end,
+               version_sesion = case when $8 <> '' or id_rol is distinct from $2
+                 or estado is distinct from $7::temo.estado_usuario or usuario is distinct from $5::varchar
+                 then version_sesion + 1 else version_sesion end,
                contrasena_modificada_en = case when $8 <> '' then now() else contrasena_modificada_en end,
                intentos_fallidos = case when $8 <> '' then 0 else intentos_fallidos end,
                bloqueado_hasta = case when $8 <> '' then null else bloqueado_hasta end,
@@ -168,6 +228,41 @@ export class CatalogsService {
           [roleId, firstName, lastName, username, email, status, password],
         );
     return this.firstId(result.rows, 'usuario');
+  }
+
+  private async lockIdentityAdministration(client: PoolClient, actor: AuthenticatedUser) {
+    // Serialize identity changes before checking the actor and last-administrator invariant.
+    await client.query('select pg_advisory_xact_lock(741260810)');
+    const current = await client.query(`select 1 from temo.usuarios u join temo.roles r using(id_rol)
+      where u.id_usuario=$1 and u.estado='ACTIVO' and r.codigo='JEFA' and r.estado='ACTIVO'
+        and ($2::integer is null or u.version_sesion=$2)`, [actor.id, actor.sessionVersion ?? null]);
+    if (!current.rowCount) throw new ForbiddenException('Su acceso administrativo cambio. Inicie sesion nuevamente.');
+  }
+
+  async revokeUserSessions(targetId: string, actor: AuthenticatedUser, context: AuditContext = {}) {
+    this.requireBoss(actor);
+    return this.db.transaction(async client => {
+      await this.lockIdentityAdministration(client, actor);
+      const before = await this.identitySnapshot(client, 'users', targetId);
+      if (!before) throw new NotFoundException('El usuario seleccionado no existe.');
+      await client.query('update temo.usuarios set version_sesion=version_sesion+1, fecha_modificacion=now() where id_usuario=$1', [targetId]);
+      const after = { ...await this.identitySnapshot(client, 'users', targetId), evento: 'REVOCAR_SESIONES' };
+      const ip = (context.ip ?? '').replace(/^::ffff:/, '');
+      await client.query(`insert into temo.bitacora
+        (id_usuario,accion,tabla,id_registro,datos_anteriores,datos_nuevos,direccion_ip,agente_usuario)
+        values($1,'ACTUALIZAR','usuarios',$2,$3::jsonb,$4::jsonb,$5::inet,$6)`,
+      [actor.id, targetId, JSON.stringify(before), JSON.stringify(after), isIP(ip) ? ip : null,
+        (context.userAgent ?? '').slice(0, 300) || null]);
+      return { success: true };
+    });
+  }
+
+  private async identitySnapshot(client: PoolClient, resource: string, id: string) {
+    const sql = resource === 'users'
+      ? `select u.usuario,u.nombres,u.apellidos,u.correo,r.codigo as rol,u.estado,
+          u.debe_cambiar_contrasena,u.version_sesion from temo.usuarios u join temo.roles r using(id_rol) where u.id_usuario=$1`
+      : `select codigo,nombre,descripcion,estado from temo.roles where id_rol=$1`;
+    return (await client.query(sql, [id])).rows[0] ?? null;
   }
 
   // Aplica a claves temporales la misma politica minima usada por autenticacion.

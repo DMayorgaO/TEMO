@@ -12,6 +12,8 @@ import { IS_PUBLIC_ENDPOINT } from './public.decorator';
 type AuthenticatedRequest = {
   headers: Record<string, string | string[] | undefined>;
   url?: string;
+  method?: string;
+  route?: { path?: string };
   user?: AuthenticatedUser;
 };
 
@@ -33,17 +35,19 @@ export class AuthGuard implements CanActivate {
 
     const request = context.switchToHttp().getRequest<AuthenticatedRequest>();
     const authorization = String(request.headers.authorization ?? '');
-    const [scheme, token] = authorization.split(' ');
-    if (scheme !== 'Bearer' || !token) {
+    const matched = /^Bearer ([A-Za-z0-9_.-]{1,4096})$/.exec(authorization);
+    if (!matched) {
       throw new UnauthorizedException('Debe iniciar sesion.');
     }
 
-    request.user = await this.auth.validateAccessToken(token);
-    if (
-      request.user.mustChangePassword &&
-      !request.url?.startsWith('/api/auth/change-password') &&
-      !request.url?.startsWith('/api/auth/me')
-    ) {
+    request.user = await this.auth.validateAccessToken(matched[1]);
+    const path = request.route?.path ?? request.url?.split('?')[0] ?? '';
+    const basicAccess = new Set(['GET /api/auth/me', 'POST /api/auth/change-password', 'POST /api/auth/logout']);
+    const basic = basicAccess.has(`${request.method} ${path}`);
+    if (!basic && !['JEFA', 'CAJERO', 'TRANSFERISTA'].includes(request.user.roleCode)) {
+      throw new ForbiddenException('Este perfil no tiene acceso operativo configurado.');
+    }
+    if (request.user.mustChangePassword && !basic) {
       throw new ForbiddenException('Debe cambiar su contrasena antes de continuar.');
     }
     return true;
