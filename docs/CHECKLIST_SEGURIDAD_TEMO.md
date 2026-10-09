@@ -132,6 +132,15 @@ TOTP aumenta seguridad, pero no evita por completo phishing ni abuso de una sesi
 
 ## Bloque 7: validacion continua
 
+### Eficiencia de transferencias del 2026-10-08
+
+- [x] Revision agregada de fotos y consultas frecuentes de produccion, solo lectura, sin extraer datos financieros ni atribuir GB exactos a contadores SQL.
+- [x] Validacion de sesion sin descargar foto; acceso al turno ligero y exclusivo del cajero; notificaciones/acceso pausados en pestana oculta y recuperados al volver; deduplicacion de GET solo en curso, aislada por sesion y sin cache de autorizacion.
+- [x] Lectura redundante del turno eliminada en /shifts/current; datos financieros consultados nuevamente en cada peticion. Backend83/83, frontend18/18, build/lint; regresion financiera repetida18/18 y recorrido local de Transacciones, Arqueo y Saldos sin guardar operaciones. Ver OPTIMIZACION_EGRESS_2026-10-08.md.
+- [x] Publicacion autorizada de estas optimizaciones: API7965d1c confirmada antes de publicar web13e690e; asset optimizado y protecciones HTTP comprobados. Sin migraciones ni cambios de claves.
+- [ ] Comparar posteriormente Egress por dia/servicio. No sustituye contratar Pro antes de la restriccion ni elimina consumo previo.
+- [ ] Evaluar paginacion en servidor y deteccion de cambios sin perder filtros, exportaciones, permisos ni actualizacion financiera.
+
 ### Paquete preparado el 2026-10-08 (solo desarrollo)
 
 - [x] Backend79/79, frontend14/14, build/lint correctos; npm audit completo y produccion con0 vulnerabilidades conocidas reportadas.
