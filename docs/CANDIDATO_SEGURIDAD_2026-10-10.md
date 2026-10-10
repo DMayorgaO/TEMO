@@ -1,8 +1,8 @@
 # Candidato acumulado de seguridad
 
-Fecha: 2026-10-10. Estado: publicacion autorizada por el usuario; verificaciones
-previas completas. Ver evidencia de despliegue para las revisiones efectivamente
-publicadas; este documento no confirma por si solo que Render las haya activado.
+Fecha: 2026-10-10. Estado: paquete publicado, API y web80d6594 verificadas a17:42
+Managua. Ver ESTADO_DESPLIEGUE_2026-10-10.md. Confirmacion autenticada del titular
+tras despliegue y pendientes generales del checklist siguen abiertos.
 
 ## Contenido del siguiente paquete
 
@@ -44,7 +44,7 @@ publicadas; este documento no confirma por si solo que Render las haya activado.
   cuenta y movimiento); resumen de transferencias; PDF/Excel/PNG, login/MFA,
   logout. No acredita todos los flujos financieros. Correo local sin proveedor;
   confirma recepcion en produccion, pendiente completar recuperacion tras despliegue.
-- [ ] Revision final del diff, incluidos nuevos archivos no rastreados. No usar
+- [x] Revision final del diff, incluidos nuevos archivos no rastreados. No usar
   git add indiscriminado: excluir respaldos, tmp, .env, secretos y documentos
   ajenos al paquete. Preservar informe de seguridad aportado por el usuario.
 - [x] Autorizacion expresa del commit/push y despliegue. Un push a main puede
@@ -53,12 +53,16 @@ publicadas; este documento no confirma por si solo que Render las haya activado.
   referencia previa13e690e88d49eea2addd3e4dd25c803c66d26424. Respaldo del
   2026-10-10 17:20 Managua restaurado en servidor local aislado:62 tablas/vistas.
   No borrar ni regenerar AUTH_SECRET/MFA_ENCRYPTION_KEY.
-- [ ] Revisar Render real: DATABASE_URL sin query (sslmode/options, etc.), TLS
+- [x] Arranque real de API con validacion estricta y health/base correctos; sin
+  inspeccionar secretos del Dashboard. CORS inicialmente invalido fue corregido
+  por el usuario. Validacion DATABASE_URL sin query (sslmode/options, etc.), TLS
   y CA compatibles, CORS_ORIGINS exactos HTTPS, recursos/limites adecuados.
   No basta editar render.yaml para asegurar cambios en servicios existentes.
-- [ ] Confirmar correo en API: RESEND_API_KEY y PASSWORD_RESET_EMAIL_FROM,
-  dominio verificado y remitente correcto. Nunca exponerlos en frontend/logs.
-- [ ] Confirmar VITE_API_URL/APP_ENV/SESSION_IDLE y CSP reales antes de publicar
+- [x] Usuario confirma configuracion y recepcion real de correo en API:
+  RESEND_API_KEY y PASSWORD_RESET_EMAIL_FROM,
+  dominio verificado. Uso completo del codigo tras despliegue pendiente.
+  Nunca exponerlos en frontend/logs.
+- [x] Confirmar VITE_API_URL/APP_ENV/SESSION_IDLE por bundle exacto y CSP reales al publicar
   web. onrender.com sigue permitido transitoriamente en CSP; no es Zero Trust.
 - [x] Preflight remoto de solo lectura y revisar necesidad real de migraciones.
  43 migraciones coincidentes, sin duplicados y con indices/roles requeridos.

@@ -245,7 +245,7 @@ TOTP aumenta seguridad, pero no evita por completo phishing ni abuso de una sesi
 - [x] Regresion final:151 pruebas backend y21 frontend, build/lint y npm audit sin vulnerabilidades conocidas reportadas.
 - [x] Preflight productivo de solo lectura:43 migraciones coincidentes, indices e identidades correctos; TLS del cliente verificado. Sin SQL nuevo.
 - [x] Respaldo nuevo del10deoctubre restaurado en servidor local aislado:62 tablas/vistas. No modifica produccion ni valida todos los ACL/RLS o recuperacion de claves externas.
-- [ ] Confirmar activacion de API y web en Render y controles HTTP posteriores; registrar revisiones en evidencia de despliegue.
+- [x] API y web80d6594 activas a17:42 Managua; API/base saludables, bundle exacto con API propia, CSP/header/meta, CORS y rechazo de anonimos comprobados. Login carga sin errores observados. Ver ESTADO_DESPLIEGUE_2026-10-10.md. Primer fallo de CORS resuelto por configuracion, sin debilitar validacion.
 - [ ] Titular confirma MFA y recuperacion completa por correo despues de publicar; no compartir OTP ni codigos.
 - [ ] Verificar garantia de cifrado del salto interno pooler/PostgreSQL; pg_stat_ssl=false no invalida TLS verificado del cliente, pero tampoco demuestra TLS interno.
 
