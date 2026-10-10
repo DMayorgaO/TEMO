@@ -4,6 +4,7 @@ import { downloadExport, exportFilename } from '../utils/export-download';
 import { createTemporaryPassword } from '../utils/temporary-password';
 import { startVisiblePolling } from '../utils/visible-polling';
 import { InFlightReads } from '../utils/in-flight-reads';
+import { summarizeTransferNotifications } from '../utils/notification-summary';
 import { removeLegacyOperationalCache, SessionCache } from '../utils/session-cache';
 import type { ChangeEvent, ClipboardEvent, FormEvent, InputHTMLAttributes, KeyboardEvent, PointerEvent as ReactPointerEvent } from 'react';
 import type { LucideIcon } from 'lucide-react';
@@ -1221,7 +1222,7 @@ function auditEntityLabel(entity: string) {
     transferencias: 'Transferencia', transferencias_efectivo: 'Transferencia de efectivo',
     transferencias_digitales: 'Transferencia digital', sucursales: 'Sucursal',
     cuentas_bancarias: 'Cuenta bancaria', entidades_bancarias: 'Banco',
-    movimientos_bancarios: 'Movimiento bancario', reglas_comisiones: 'Regla de comision',
+    movimientos: 'Movimiento bancario', movimientos_bancarios: 'Movimiento bancario', reglas_comisiones: 'Regla de comision',
     directorio: 'Contacto del directorio', contrapartes: 'Contacto',
   };
   return labels[entity] ?? entity.replace(/_/g, ' ');
@@ -3561,7 +3562,7 @@ export function App() {
 
   const visibleNotification = notifications.find((item) => !dismissedNotifications.includes(item.id));
   const notificationCategory = (item: ShiftNotification) => item.kind === 'TRANSFER_RECORDED'
-    ? item.transfer_type === 'EFECTIVO' ? 'Efectivo' : 'Digital' : 'Cierres y otros avisos';
+    ? item.transfer_type === 'EFECTIVO' ? 'Transferencia de Efectivo' : 'Transferencia Digital' : 'Cierres y otros avisos';
   const adminBatch = currentUser?.roleCode === 'JEFA' && visibleNotification
     ? notifications.filter(item => !dismissedNotifications.includes(item.id) && notificationCategory(item) === notificationCategory(visibleNotification)) : [];
   const visibleNotificationObservation = cleanNotificationObservation(visibleNotification?.observations);
@@ -3779,7 +3780,7 @@ export function App() {
                 {visibleNotification.currency ? formatCashCountMoney(Number(visibleNotification.amount || 0), visibleNotification.currency) : 'Monto no disponible'}
               </h2>
               <div className="shift-notification-meta">
-                <strong>{visibleNotification.transfer_type === 'EFECTIVO' ? 'Efectivo' : 'Digital'}</strong>
+                <strong>{visibleNotification.transfer_type === 'EFECTIVO' ? 'Transferencia de Efectivo' : 'Transferencia Digital'}</strong>
                 {visibleNotification.transfer_entity && <span>{visibleNotification.transfer_entity}{visibleNotification.transfer_account ? ` · ${visibleNotification.transfer_account}` : ''}</span>}
               </div>
               {currentUser.roleCode === 'JEFA' && <span className="shift-notification-operator">{visibleNotification.cashier} · {visibleNotification.branch}</span>}
@@ -3836,17 +3837,7 @@ export function App() {
 function NotificationSummary({title,items,onAccept,onReview}:{title:string;items:ShiftNotification[];onAccept:()=>Promise<void>;onReview:(item:ShiftNotification)=>Promise<void>}) {
   const [busy,setBusy]=useState(false);
   const [error,setError]=useState('');
-  const grouped = new Map<string,{label:string;currency:CashCurrency;amount:number;count:number;out:boolean;branches:Set<string>;cashiers:Set<string>}>();
-  for (const item of items.filter(item=>item.kind==='TRANSFER_RECORDED')) {
-    const label=item.transfer_direction==='SALE'?'Egreso':'Ingreso';
-    const currency=item.currency ?? 'NIO';
-    const key=JSON.stringify([label,currency]);
-    const group=grouped.get(key) ?? {label,currency,amount:0,count:0,out:item.transfer_direction==='SALE',branches:new Set<string>(),cashiers:new Set<string>()};
-    group.amount+=Number(item.amount || 0); group.count++;
-    if(item.branch) group.branches.add(item.branch);
-    if(item.cashier) group.cashiers.add(item.cashier);
-    grouped.set(key,group);
-  }
+  const grouped = summarizeTransferNotifications(items);
   const otherGroups = new Map<string, ShiftNotification[]>();
   for (const item of items.filter(item=>item.kind!=='TRANSFER_RECORDED')) {
     const group = otherGroups.get(item.kind) ?? [];
@@ -3857,7 +3848,18 @@ function NotificationSummary({title,items,onAccept,onReview}:{title:string;items
     <section className="shift-notification-modal notification-summary">
       <h2>{title}</h2><p>{items.length} notificaciones</p>
       <div className="notification-summary-list">
-        {[...grouped].map(([key,group])=><div key={key}><strong>{group.label}</strong><span>{group.count} transferencias · {group.branches.size} sucursales · {group.cashiers.size} cajeros</span><b className={`transaction-amount transaction-amount--${group.out?'out':'in'}`}>{group.out?<ArrowUpRight size={16}/>:<ArrowDownLeft size={16}/>} {formatCashCountMoney(group.amount,group.currency)}</b></div>)}
+        {grouped.map(group=><div className="notification-summary-branch" key={group.branch}>
+          <h3>{group.branch}</h3>
+          {group.directions.map(direction=><section className="notification-summary-direction" key={String(direction.out)}>
+            <strong>{direction.out?'Egreso':'Ingreso'} ({direction.count})</strong>
+            {direction.rows.map(row=><div className="notification-summary-transfer" key={JSON.stringify([row.cashier,row.bank,row.currency])}>
+              <span>{row.cashier}{row.bank && <> · <strong>{row.bank}</strong></>}</span>
+              <b className={`transaction-amount transaction-amount--${direction.out?'out':'in'}`}>
+                {direction.out?<ArrowUpRight size={16}/>:<ArrowDownLeft size={16}/>} {formatCashCountMoney(row.amount,row.currency)}
+              </b>
+            </div>)}
+          </section>)}
+        </div>)}
         {[...otherGroups].map(([kind,group])=><div key={kind}><strong>{kind==='CLOSE_REQUEST'?'Solicitudes de cierre':kind==='PENDING_PAID'?'Pendientes pagados':'Cierres de turno'}</strong><span>{group.length} registros</span>{kind==='CLOSE_REQUEST'&&<button type="button" className="secondary-button" disabled={busy} onClick={()=>void run(()=>onReview(group[0]))}>Revisar cierre</button>}</div>)}
       </div>
       {error&&<p role="alert" className="login-error">{error}</p>}

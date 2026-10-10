@@ -40,7 +40,7 @@ services:
       - key: NODE_VERSION
         value: 22.14.0
       - key: VITE_API_URL
-        value: https://temo-api.onrender.com/api
+        value: https://api.miscelaneaolivera.com/api
       - key: VITE_APP_ENV
         value: production
       - key: VITE_SESSION_IDLE_MINUTES
@@ -48,7 +48,7 @@ services:
     headers:
       - path: /*
         name: Content-Security-Policy
-        value: "default-src 'none'; base-uri 'none'; object-src 'none'; frame-src 'none'; form-action 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self' https://temo-api.onrender.com; frame-ancestors 'none'"
+        value: "default-src 'none'; base-uri 'none'; object-src 'none'; frame-src 'none'; form-action 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self' https://api.miscelaneaolivera.com https://temo-api.onrender.com; frame-ancestors 'none'"
       - path: /*
         name: X-Frame-Options
         value: DENY
