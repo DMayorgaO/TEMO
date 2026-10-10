@@ -8,6 +8,7 @@ import { PoolClient } from 'pg';
 import { isIP } from 'node:net';
 import { AuthenticatedUser } from '../auth/auth.service';
 import { DatabaseService } from '../database/database.service';
+import { validatePasswordForStorage } from '../../common/password-policy';
 
 type CatalogPayload = Record<string, unknown>;
 
@@ -114,20 +115,40 @@ export class CatalogsService {
           (context.userAgent ?? '').slice(0, 300) || null]);
         return result;
       }
-      switch (resource) {
-        case 'banks':
-          return this.saveBank(client, databaseId, payload);
-        case 'branches':
-          return this.saveBranch(client, databaseId, payload);
-        case 'accounts':
-          return this.saveAccount(client, databaseId, payload);
-        case 'movements':
-          return this.saveMovement(client, databaseId, payload);
-        case 'commissions':
-          return this.saveCommission(client, databaseId, payload, user.id);
-        default:
-          throw new BadRequestException('Catalogo no reconocido.');
+      if (['banks', 'commissions', 'branches', 'accounts', 'movements'].includes(resource)) {
+        await this.lockIdentityAdministration(client, user);
+        const before = databaseId ? await this.financialCatalogSnapshot(client, resource, databaseId) : null;
+        if (databaseId && !before) throw new NotFoundException('El registro seleccionado no existe.');
+        const handlers: Record<string, () => Promise<{ id: string }>> = {
+          banks: () => this.saveBank(client, databaseId, payload),
+          commissions: () => this.saveCommission(client, databaseId, payload, user.id),
+          branches: () => this.saveBranch(client, databaseId, payload),
+          accounts: () => this.saveAccount(client, databaseId, payload),
+          movements: () => this.saveMovement(client, databaseId, payload),
+        };
+        const saved = await handlers[resource]();
+        const after = await this.financialCatalogSnapshot(client, resource, saved.id);
+        if (!after) throw new NotFoundException('El registro guardado no existe.');
+        if (resource === 'accounts') {
+          if (before && before.numero_cuenta_interno !== after.numero_cuenta_interno) {
+            before.numero_cuenta_modificado = false;
+            after.numero_cuenta_modificado = true;
+          }
+          delete before?.numero_cuenta_interno;
+          delete after.numero_cuenta_interno;
+        }
+        const tables: Record<string, string> = { banks: 'entidades_bancarias', commissions: 'reglas_comisiones',
+          branches: 'sucursales', accounts: 'cuentas_bancarias', movements: 'movimientos' };
+        const address = (context.ip ?? '').replace(/^::ffff:/, '');
+        await client.query(`insert into temo.bitacora
+          (id_usuario,accion,tabla,id_registro,datos_anteriores,datos_nuevos,direccion_ip,agente_usuario)
+          values($1,$2::temo.accion_bitacora,$3,$4,$5::jsonb,$6::jsonb,$7::inet,$8)`,
+        [user.id, databaseId ? 'ACTUALIZAR' : 'CREAR', tables[resource],
+          saved.id, before ? JSON.stringify(before) : null, JSON.stringify(after), isIP(address) ? address : null,
+          (context.userAgent ?? '').slice(0, 300) || null]);
+        return saved;
       }
+      throw new BadRequestException('Catalogo no reconocido.');
     });
   }
 
@@ -265,11 +286,52 @@ export class CatalogsService {
     return (await client.query(sql, [id])).rows[0] ?? null;
   }
 
+  private async financialCatalogSnapshot(client: PoolClient, resource: string, id: string) {
+    // Explicit fields only: never persist request bodies or unrelated financial records.
+    const mapping = (condition: string) => `coalesce((select jsonb_agg(jsonb_build_object(
+      'id',cm.id_cuenta_movimiento,'cuenta',cb.alias,'movimiento',linked_mv.nombre,
+      'codigo',cm.codigo_operativo,'nombre',cm.nombre_operativo,'prioridad',cm.prioridad,'estado',cm.estado,
+      'afecta_efectivo',ef.afecta_efectivo,'direccion_efectivo',ef.direccion_efectivo,
+      'afecta_cuenta',ef.afecta_cuenta,'direccion_cuenta',ef.direccion_cuenta,
+      'genera_pendiente',ef.genera_pendiente,'tipo_pendiente',ef.tipo_pendiente,
+      'requiere_contraparte',ef.requiere_contraparte,'permite_conversion',ef.permite_conversion,
+      'permite_credito',ef.permite_credito) order by cm.id_cuenta_movimiento)
+      from temo.cuentas_movimientos cm join temo.cuentas_bancarias cb using(id_cuenta)
+      join temo.movimientos linked_mv using(id_movimiento)
+      left join temo.efectos_movimientos ef using(id_cuenta_movimiento) where ${condition}), '[]'::jsonb)`;
+    const queries: Record<string, string> = {
+      banks: `select codigo,nombre_corto,nombre_largo,tipo,estado from temo.entidades_bancarias where id_entidad=$1 for update`,
+      commissions: `select c.id_entidad,c.id_moneda,c.id_movimiento,c.id_moneda_comision,
+          e.codigo as banco,m.codigo as moneda,mv.nombre as movimiento,mc.codigo as moneda_comision,
+          c.tipo_calculo,c.porcentaje,c.monto_fijo,c.rango_inicio,c.rango_fin,c.estado
+          from temo.reglas_comisiones c join temo.entidades_bancarias e using(id_entidad)
+          join temo.monedas m on m.id_moneda=c.id_moneda join temo.movimientos mv using(id_movimiento)
+          left join temo.monedas mc on mc.id_moneda=c.id_moneda_comision where c.id_comision=$1 for update of c`,
+      branches: `select s.codigo,s.nombre,s.estado,
+        coalesce((select jsonb_agg(jsonb_build_object('id',u.id_usuario,'nombre',u.nombre_completo) order by u.id_usuario)
+          from temo.usuarios_sucursales us join temo.usuarios u using(id_usuario) where us.id_sucursal=s.id_sucursal),'[]'::jsonb) as cajeros,
+        coalesce((select jsonb_agg(jsonb_build_object('id',c.id_cuenta,'nombre',c.alias) order by c.id_cuenta)
+          from temo.cuentas_sucursales cs join temo.cuentas_bancarias c using(id_cuenta) where cs.id_sucursal=s.id_sucursal),'[]'::jsonb) as cuentas
+        from temo.sucursales s where s.id_sucursal=$1 for update of s`,
+      accounts: `select c.alias,e.codigo as banco,m.codigo as moneda,c.id_entidad,c.id_moneda,c.estado,
+        c.numero_cuenta as numero_cuenta_interno,
+        case when c.numero_cuenta is null then null when length(c.numero_cuenta)<=4 then 'Registrado (oculto)'
+          else '****' || right(c.numero_cuenta,4) end as numero_cuenta_enmascarado,
+        coalesce((select jsonb_agg(jsonb_build_object('id',s.id_sucursal,'nombre',s.nombre) order by s.id_sucursal)
+          from temo.cuentas_sucursales cs join temo.sucursales s using(id_sucursal) where cs.id_cuenta=c.id_cuenta),'[]'::jsonb) as sucursales,
+        ${mapping('cm.id_cuenta=c.id_cuenta')} as vinculos
+        from temo.cuentas_bancarias c join temo.entidades_bancarias e using(id_entidad)
+        join temo.monedas m using(id_moneda) where c.id_cuenta=$1 for update of c`,
+      movements: `select mv.codigo,mv.nombre,mv.estado,${mapping('cm.id_movimiento=mv.id_movimiento')} as vinculos
+        from temo.movimientos mv where mv.id_movimiento=$1 for update of mv`,
+    };
+    if (!Object.hasOwn(queries, resource)) throw new BadRequestException('Catalogo no reconocido.');
+    return (await client.query(queries[resource], [id])).rows[0] ?? null;
+  }
+
   // Aplica a claves temporales la misma politica minima usada por autenticacion.
   private validateTemporaryPassword(password: string) {
-    if (password.length < 10 || password.length > 128 || !/[a-z]/.test(password) || !/[A-Z]/.test(password) || !/[0-9]/.test(password)) {
-      throw new BadRequestException('La contraseña temporal debe tener entre 10 y 128 caracteres, una mayúscula, una minúscula y un número.');
-    }
+    validatePasswordForStorage(password);
   }
 
   private async saveBank(client: PoolClient, databaseId: string | undefined, payload: CatalogPayload) {
@@ -585,11 +647,16 @@ export class CatalogsService {
     );
     const mappingIds = this.values(payload.mappingIds ?? payload.mapeo_ids);
     if (mappingIds.length) {
+      const owned = await client.query(`select id_cuenta_movimiento from temo.cuentas_movimientos
+        where id_cuenta_movimiento::text = any($1::text[]) and id_movimiento=$2 for update`, [mappingIds, movementId]);
+      if (owned.rowCount !== new Set(mappingIds).size) {
+        throw new BadRequestException('Los vinculos seleccionados no pertenecen al movimiento.');
+      }
       await client.query(
         `update temo.cuentas_movimientos
          set estado = 'INACTIVO', fecha_modificacion = now()
-         where id_cuenta_movimiento::text = any($1::text[])`,
-        [mappingIds],
+         where id_cuenta_movimiento::text = any($1::text[]) and id_movimiento=$2`,
+        [mappingIds, movementId],
       );
     }
     for (const account of accounts.rows) {

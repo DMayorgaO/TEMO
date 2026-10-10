@@ -1,15 +1,19 @@
-param([Parameter(Mandatory = $true)][string]$BackupPath)
+param([Parameter(Mandatory = $true)][string]$BackupPath, [switch]$VerifyPreview)
 
 $ErrorActionPreference = 'Stop'
 $root = (Resolve-Path (Split-Path -Parent $PSScriptRoot)).Path
 $resolvedBackup = (Resolve-Path -LiteralPath $BackupPath).Path
 $allowedRoot = [IO.Path]::GetFullPath((Join-Path $root 'backups'))
-if (-not $resolvedBackup.StartsWith($allowedRoot, [StringComparison]::OrdinalIgnoreCase)) {
+if (-not $resolvedBackup.StartsWith($allowedRoot + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {
   throw 'La prueba solo admite archivos dentro de backups.'
+}
+if (-not (Test-Path -LiteralPath $resolvedBackup -PathType Leaf) -or [IO.Path]::GetExtension($resolvedBackup) -ne '.dump') {
+  throw 'La prueba requiere un archivo .dump.'
 }
 $checksumPath = "$resolvedBackup.sha256"
 if (-not (Test-Path -LiteralPath $checksumPath)) { throw 'No se encontro el checksum.' }
 $expected = ((Get-Content -LiteralPath $checksumPath -Raw).Trim() -split '\s+')[0]
+if ($expected -notmatch '^[a-fA-F0-9]{64}$') { throw 'El checksum tiene un formato invalido.' }
 $actual = (Get-FileHash -LiteralPath $resolvedBackup -Algorithm SHA256).Hash.ToLowerInvariant()
 if ($expected -ne $actual) { throw 'El checksum no coincide.' }
 
@@ -17,7 +21,7 @@ $pgBin = Get-ChildItem -LiteralPath 'C:\Program Files\PostgreSQL' -Filter initdb
   Where-Object { Test-Path -LiteralPath (Join-Path $_.DirectoryName 'pg_restore.exe') } |
   Sort-Object FullName -Descending | Select-Object -First 1 | ForEach-Object DirectoryName
 if (-not $pgBin) { throw 'No se encontraron las herramientas PostgreSQL.' }
-$runId = "pg-restore-test-$PID"
+$runId = "pg-restore-test-$([Guid]::NewGuid().ToString('N'))"
 $cluster = Join-Path $root "tmp/$runId"
 $log = Join-Path $root "tmp/$runId.log"
 $port = 55439
@@ -25,12 +29,18 @@ $initdb = Join-Path $pgBin 'initdb.exe'
 $pgCtl = Join-Path $pgBin 'pg_ctl.exe'
 $psql = Join-Path $pgBin 'psql.exe'
 $restore = Join-Path $pgBin 'pg_restore.exe'
-$processOutput = Join-Path $root 'tmp/pg-process.out.log'
-$processError = Join-Path $root 'tmp/pg-process.err.log'
+$processOutput = Join-Path $root "tmp/$runId.out.log"
+$processError = Join-Path $root "tmp/$runId.err.log"
+$createdCluster = $false
 
 New-Item -ItemType Directory -Path (Split-Path $cluster -Parent) -Force | Out-Null
 
 try {
+  if (Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue) {
+    throw 'El puerto de restauracion esta ocupado; no se modifico ningun servidor.'
+  }
+  if (Test-Path -LiteralPath $cluster) { throw 'La carpeta temporal ya existe; no se reutilizara.' }
+  $createdCluster = $true
   & $initdb -D $cluster -A trust -U temo_restore --encoding=UTF8 --no-locale *> $null
   if ($LASTEXITCODE -ne 0) { throw 'No se pudo crear el servidor PostgreSQL temporal.' }
   $start = Start-Process -FilePath $pgCtl -ArgumentList @('-D', "`"$cluster`"", '-l', "`"$log`"", '-o', "`"-p $port -h 127.0.0.1`"", '-w', 'start') `
@@ -43,14 +53,26 @@ try {
     Start-Sleep -Milliseconds 250
   } while ((Get-Date) -lt $deadline)
   if (-not $listener) { throw 'PostgreSQL temporal no abrio el puerto dentro del tiempo esperado.' }
+  $pidFile = Join-Path $cluster 'postmaster.pid'
+  if (-not (Test-Path -LiteralPath $pidFile)) { throw 'No se identifico el servidor temporal propio.' }
+  $temporaryPid = [int](Get-Content -LiteralPath $pidFile -TotalCount 1)
+  if (-not ($listener | Where-Object { $_.OwningProcess -eq $temporaryPid })) {
+    throw 'El puerto no pertenece al servidor temporal propio; restauracion cancelada.'
+  }
   & $psql -h 127.0.0.1 -p $port -U temo_restore -d postgres -v ON_ERROR_STOP=1 -c 'CREATE EXTENSION IF NOT EXISTS pgcrypto;' *> $null
+  if ($LASTEXITCODE -ne 0) { throw 'No fue posible preparar las extensiones de restauracion.' }
   & $restore -h 127.0.0.1 -p $port -U temo_restore -d postgres --no-owner --no-acl --exit-on-error $resolvedBackup *> $null
   if ($LASTEXITCODE -ne 0) { throw 'pg_restore detecto un error.' }
   $result = & $psql -h 127.0.0.1 -p $port -U temo_restore -d postgres -At -v ON_ERROR_STOP=1 `
-    -c "select count(*) || ' tablas; ' || (select count(*) from temo.usuarios) || ' usuarios' from information_schema.tables where table_schema = 'temo';"
+    -c "select count(*) || ' tablas/vistas; ' || (select count(*) from temo.usuarios) || ' usuarios' from information_schema.tables where table_schema = 'temo';"
+  if ($LASTEXITCODE -ne 0) { throw 'Fallo la comprobacion del esquema restaurado.' }
+  if ($VerifyPreview) {
+    & node (Join-Path $root 'scripts/preview-recovery.mjs') --verify-restored $resolvedBackup
+    if ($LASTEXITCODE -ne 0) { throw 'Los datos o la estructura no coinciden con el manifiesto de prueba.' }
+  }
   Write-Host "Restauracion verificada: $result" -ForegroundColor Green
 } finally {
-  if (Test-Path -LiteralPath (Join-Path $cluster 'postmaster.pid')) {
+  if ($createdCluster -and (Test-Path -LiteralPath (Join-Path $cluster 'postmaster.pid'))) {
     Start-Process -FilePath $pgCtl -ArgumentList @('-D', "`"$cluster`"", '-m', 'fast', '-w', 'stop') `
       -WindowStyle Hidden -RedirectStandardOutput $processOutput -RedirectStandardError $processError | Out-Null
     $stopDeadline = (Get-Date).AddSeconds(30)
@@ -58,5 +80,16 @@ try {
       Start-Sleep -Milliseconds 250
     } while ((Test-Path -LiteralPath (Join-Path $cluster 'postmaster.pid')) -and (Get-Date) -lt $stopDeadline)
   }
-  if (Test-Path -LiteralPath $cluster) { Remove-Item -LiteralPath $cluster -Recurse -Force }
+  if ($createdCluster -and (Test-Path -LiteralPath $cluster)) {
+    $resolvedCluster = [IO.Path]::GetFullPath($cluster)
+    $temporaryRoot = [IO.Path]::GetFullPath((Join-Path $root 'tmp')) + [IO.Path]::DirectorySeparatorChar
+    if (-not $resolvedCluster.StartsWith($temporaryRoot, [StringComparison]::OrdinalIgnoreCase) -or
+        [IO.Path]::GetFileName($resolvedCluster) -ne $runId) {
+      throw 'Limpieza detenida: ruta temporal inesperada.'
+    }
+    if (Test-Path -LiteralPath (Join-Path $resolvedCluster 'postmaster.pid')) {
+      throw 'El servidor temporal no se detuvo; se conserva la carpeta para revision.'
+    }
+    Remove-Item -LiteralPath $resolvedCluster -Recurse -Force
+  }
 }

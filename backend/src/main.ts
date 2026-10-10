@@ -10,15 +10,15 @@ import { AppExceptionFilter } from './common/errors/app-exception.filter';
 import { DatabaseService } from './modules/database/database.service';
 import { SensitiveReadInterceptor } from './common/errors/sensitive-read.interceptor';
 import { ExportLimitInterceptor } from './common/export-limit.interceptor';
+import { sanitizeBodyParserError } from './common/errors/body-parser-error';
+import { parseCorsOrigins } from './config/cors-origins';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule, { bodyParser: false });
   const config = app.get(ConfigService);
   const port = config.get<number>('PORT') ?? config.get<number>('BACKEND_PORT', 4000);
-  const configuredOrigins = config.get<string>('CORS_ORIGINS', '')
-    .split(',')
-    .map((origin) => origin.trim())
-    .filter(Boolean);
+  const configuredOrigins = parseCorsOrigins(config.get<string>('CORS_ORIGINS', ''),
+    config.get<string>('APP_ENV', 'development') !== 'development');
 
   const server = app.getHttpAdapter().getInstance() as { set: (key: string, value: unknown) => void };
   server.set('trust proxy', 1);
@@ -36,8 +36,6 @@ async function bootstrap() {
     response.setHeader('Pragma', 'no-cache');
     next();
   });
-  app.use(json({ limit: '256kb' }));
-  app.use(urlencoded({ extended: false, limit: '64kb' }));
   app.use('/api/auth/login', rateLimit({
     windowMs: 15 * 60 * 1000,
     limit: 20,
@@ -74,6 +72,10 @@ async function bootstrap() {
     legacyHeaders: false,
     message: { statusCode: 429, message: 'Se alcanzo el limite temporal de consultas de esta conexion. Espere unos minutos; sus datos ingresados no deben descartarse.' },
   }));
+  // Reject excess traffic before allocating and parsing request bodies.
+  app.use(json({ limit: '256kb' }));
+  app.use(urlencoded({ extended: false, limit: '64kb' }));
+  app.use(sanitizeBodyParserError);
   app.setGlobalPrefix('api', {
     exclude: [{ path: '', method: RequestMethod.GET }],
   });

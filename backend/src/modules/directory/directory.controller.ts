@@ -1,9 +1,11 @@
-import { BadRequestException, Body, Controller, Get, Param, Post, Put, Req } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Get, Param, Post, Put, Req, UsePipes } from '@nestjs/common';
+import { RecordIdPipe } from '../../common/record-id.pipe';
 import { AuthenticatedUser } from '../auth/auth.service';
 import { DirectoryService } from './directory.service';
 import { directoryEntrySchema } from './directory.schema';
 
 @Controller('directory')
+@UsePipes(new RecordIdPipe())
 export class DirectoryController {
   constructor(private readonly directory: DirectoryService) {}
 

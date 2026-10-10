@@ -3,6 +3,19 @@ const fields: Record<string, Record<string, string>> = {
   usuarios: { evento: 'Evento', usuario: 'Usuario', nombres: 'Nombres', apellidos: 'Apellidos', correo: 'Correo',
     rol: 'Rol', estado: 'Estado', debe_cambiar_contrasena: 'Cambio de contrasena requerido', version_sesion: 'Version de acceso' },
   roles: { codigo: 'Codigo del rol', nombre: 'Nombre del rol', descripcion: 'Descripcion', estado: 'Estado' },
+  entidades_bancarias: { codigo: 'Codigo del banco', nombre_corto: 'Nombre corto', nombre_largo: 'Nombre del banco', tipo: 'Tipo de entidad', estado: 'Estado' },
+  sucursales: { codigo: 'Codigo', nombre: 'Sucursal', estado: 'Estado' },
+  cuentas_bancarias: { alias: 'Cuenta', banco: 'Banco', moneda: 'Moneda', estado: 'Estado', id_entidad: 'ID del banco', id_moneda: 'ID de moneda',
+    numero_cuenta_enmascarado: 'Numero de cuenta (oculto)', numero_cuenta_modificado: 'Numero de cuenta cambiado' },
+  movimientos: { codigo: 'Codigo', nombre: 'Movimiento', estado: 'Estado' },
+  catalog_link: { nombre: 'Asignacion' },
+  catalog_mapping: { cuenta: 'Cuenta', movimiento: 'Movimiento', codigo: 'Codigo operativo', nombre: 'Nombre operativo', prioridad: 'Prioridad', estado: 'Estado',
+    afecta_efectivo: 'Afecta efectivo', direccion_efectivo: 'Direccion de efectivo', afecta_cuenta: 'Afecta cuenta', direccion_cuenta: 'Direccion de cuenta',
+    genera_pendiente: 'Genera pendiente', tipo_pendiente: 'Tipo de pendiente', requiere_contraparte: 'Requiere contraparte',
+    permite_conversion: 'Permite conversion', permite_credito: 'Permite credito' },
+  reglas_comisiones: { banco: 'Banco', moneda: 'Moneda', movimiento: 'Movimiento', moneda_comision: 'Moneda de comision',
+    tipo_calculo: 'Tipo de calculo', porcentaje: 'Porcentaje', monto_fijo: 'Monto fijo', rango_inicio: 'Inicio del rango', rango_fin: 'Fin del rango', estado: 'Estado',
+    id_entidad: 'ID del banco', id_moneda: 'ID de moneda', id_movimiento: 'ID del movimiento', id_moneda_comision: 'ID de moneda de comision' },
   transacciones: { estado: 'Estado', amount: 'Monto', currencyCode: 'Moneda', entityCode: 'Banco', movementCode: 'Movimiento', 'rates.buy': 'Tasa de compra', 'rates.sell': 'Tasa de venta' },
   pagos_pendientes: { estado: 'Estado', saldo_pendiente: 'Saldo pendiente', monto_original: 'Monto original' },
   abonos_pendientes: { monto: 'Monto', amount: 'Monto solicitado', estado: 'Estado', currencyCode: 'Moneda', entityCode: 'Banco', movementCode: 'Movimiento' },
@@ -52,6 +65,40 @@ export function auditChanges(entity: string, before: unknown, after: unknown) {
             before: oldCount === null ? 'No registrado' : `${oldCount} unidades`,
             after: newCount === null ? 'No registrado' : `${newCount} unidades` });
         }
+      }
+    }
+  }
+  const catalogCollections: Record<string, [string, string, string][]> = {
+    sucursales: [['cajeros', 'Usuario asignado', 'catalog_link'], ['cuentas', 'Cuenta asignada', 'catalog_link']],
+    cuentas_bancarias: [['sucursales', 'Sucursal asignada', 'catalog_link'], ['vinculos', 'Vinculo operativo', 'catalog_mapping']],
+    movimientos: [['vinculos', 'Vinculo operativo', 'catalog_mapping']],
+  };
+  for (const [key, label, childEntity] of catalogCollections[entity] ?? []) {
+    const members = (value: unknown) => {
+      if (!Array.isArray(value) || value.length > 1000) return null;
+      const result = new Map<string, Record<string, unknown>>();
+      for (const row of value) {
+        if (!row || typeof row !== 'object' || Array.isArray(row) || typeof row.id !== 'string'
+          || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(row.id)
+          || result.has(row.id)) return null;
+        result.set(row.id, row);
+      }
+      return result;
+    };
+    const old = members(previous[key]), updated = members(next[key]);
+    if (!old && !updated) continue;
+    if ((!old && before != null) || (!updated && after != null)) {
+      changes.push({ field: label, before: old ? `${old.size} registros` : 'No registrado o no comparable',
+        after: updated ? `${updated.size} registros` : 'No registrado o no comparable' });
+      continue;
+    }
+    for (const id of new Set([...(old?.keys() ?? []), ...(updated?.keys() ?? [])])) {
+      const previousRow = old?.get(id), nextRow = updated?.get(id);
+      if (!previousRow || !nextRow) {
+        changes.push({ field: `${label} (${id})`, before: previousRow ? 'Asignado' : 'Sin asignacion', after: nextRow ? 'Asignado' : 'Sin asignacion' });
+      }
+      for (const change of auditChanges(childEntity, previousRow, nextRow).changes) {
+        changes.push({ ...change, field: `${label} (${id}) - ${change.field}` });
       }
     }
   }

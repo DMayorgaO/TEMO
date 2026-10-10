@@ -24,6 +24,9 @@ test('financial regression in local preview with rollback', { skip: !process.env
   const username = `security_${randomUUID().replaceAll('-', '')}`;
   try {
     await client.query('begin');
+    if (process.env.TEMO_TEST_RESTRICTED_ROLE === '1') {
+      await require('./helpers/restricted-role.cjs').useRestrictedPreviewRole(client);
+    }
     let savepoint = 0;
     const db = { query: (sql, params) => client.query(sql, params), transaction: async (work) => {
       const name = `regression_${++savepoint}`;

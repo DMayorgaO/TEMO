@@ -8,6 +8,7 @@ import {
   Put,
   Query,
   Req,
+  UsePipes,
 } from '@nestjs/common';
 import { DatabaseService } from '../database/database.service';
 import { AuthenticatedUser } from '../auth/auth.service';
@@ -21,8 +22,10 @@ import {
 } from './transaction-batch.schema';
 import { TransactionsService } from './transactions.service';
 import { authorizedExport, parseExportSelection, requireExportRole } from '../../common/export-selection';
+import { RecordIdPipe } from '../../common/record-id.pipe';
 
 @Controller('transactions')
+@UsePipes(new RecordIdPipe())
 export class TransactionsController {
   constructor(
     private readonly db: DatabaseService,

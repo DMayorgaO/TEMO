@@ -4,12 +4,13 @@ import { ConfigService } from '@nestjs/config';
 import { QueryResultRow } from 'pg';
 import { DatabaseService } from '../database/database.service';
 import { MfaService } from './mfa.service';
+import { validatePasswordForStorage } from '../../common/password-policy';
 
 type AuthUserRow = QueryResultRow & {
   id: string; role_id: string; role_code: string; role_name: string;
   full_name: string; username: string; must_change_password: boolean;
   session_version: number; profile_photo?: string | null;
-  password_valid?: boolean; blocked_until?: Date | null;
+  blocked?: boolean;
 };
 type AccessTokenPayload = { sub: string; username: string; version: number; iat: number; exp: number; mfa?: boolean };
 export type AuthenticatedUser = {
@@ -55,32 +56,50 @@ export class AuthService {
     const target = result.rows[0];
     if (result.rows.length !== 1) return genericResponse;
 
-    // Reemplaza códigos anteriores para que sólo el último correo sea válido.
     const code = String(randomInt(0, 1_000_000)).padStart(6, '0');
     const codeHash = this.hashRecoveryCode(target.id, code);
-    const recovery = await this.db.query<{ id: string } & QueryResultRow>(
-      `with invalidated as (
-         update temo.recuperaciones_contrasena set consumido_en = now()
-         where id_usuario = $1 and consumido_en is null
-       )
-       insert into temo.recuperaciones_contrasena
-         (id_usuario, codigo_hash, vence_en, direccion_ip)
-       values ($1, $2, now() + interval '10 minutes', nullif($3, '')::inet)
-       returning id_recuperacion as id`,
-      [target.id, codeHash, this.normalizeIp(ip)],
-    );
+    let recoveryId: string | null;
+    try {
+      recoveryId = await this.db.transaction(async client => {
+        // Serialize requests by account across API instances, not by branch IP.
+        await client.query('select pg_advisory_xact_lock(hashtextextended($1, 741260811))', [target.id]);
+        const recent = await client.query<{ requests: number; cooling_down: boolean }>(
+          `select count(*)::integer as requests,
+                  coalesce(bool_or(fecha_creacion > now() - interval '1 minute'), false) as cooling_down
+           from temo.recuperaciones_contrasena
+           where id_usuario = $1 and fecha_creacion > now() - interval '15 minutes'`, [target.id]);
+        if (recent.rows[0].cooling_down || recent.rows[0].requests >= 3) return null;
+        const recovery = await client.query<{ id: string } & QueryResultRow>(
+          `with invalidated as (
+             update temo.recuperaciones_contrasena set consumido_en = now()
+             where id_usuario = $1 and consumido_en is null
+           )
+           insert into temo.recuperaciones_contrasena
+             (id_usuario, codigo_hash, vence_en, direccion_ip)
+           values ($1, $2, now() + interval '10 minutes', nullif($3, '')::inet)
+           returning id_recuperacion as id`,
+          [target.id, codeHash, this.normalizeIp(ip)],
+        );
+        await client.query(
+          `insert into temo.bitacora
+             (id_usuario, accion, tabla, id_registro, datos_nuevos, direccion_ip, agente_usuario)
+           values ($1, 'CREAR', 'recuperaciones_contrasena', $2,
+                   jsonb_build_object('evento', 'SOLICITUD_RECUPERACION'),
+                   nullif($3, '')::inet, nullif($4, ''))`,
+          [target.id, recovery.rows[0].id, this.normalizeIp(ip), userAgent.slice(0, 1000)],
+        );
+        return recovery.rows[0].id;
+      });
+    } catch {
+      this.logger.error('No fue posible preparar la recuperación.');
+      return genericResponse;
+    }
+    if (!recoveryId) return genericResponse;
     try {
       await this.sendRecoveryEmail(target.email, target.full_name, code);
-      await this.db.query(
-        `insert into temo.bitacora
-           (id_usuario, accion, tabla, id_registro, datos_nuevos, direccion_ip, agente_usuario)
-         values ($1, 'SOLICITAR', 'recuperaciones_contrasena', $2,
-                 jsonb_build_object('evento', 'SOLICITUD_RECUPERACION'),
-                 nullif($3, '')::inet, nullif($4, ''))`,
-        [target.id, recovery.rows[0].id, this.normalizeIp(ip), userAgent.slice(0, 1000)],
-      );
     } catch {
-      await this.db.query(`delete from temo.recuperaciones_contrasena where id_recuperacion = $1`, [recovery.rows[0].id]);
+      // Keep the request timestamp for abuse controls, but never accept an undelivered code.
+      await this.db.query(`update temo.recuperaciones_contrasena set consumido_en = now() where id_recuperacion = $1`, [recoveryId]);
       this.logger.error('No fue posible enviar el correo de recuperación.');
     }
     return genericResponse;
@@ -144,27 +163,29 @@ export class AuthService {
     const safeAgent = userAgent.slice(0, 1000);
     if (!normalizedUsername || !password) throw new UnauthorizedException('Usuario o contrasena incorrectos.');
 
-    const result = await this.db.query<AuthUserRow>(
-      `select u.id_usuario as id, u.id_rol as role_id, r.codigo as role_code,
+    const checked = await this.db.transaction(async (client) => {
+      // Serialize password checks per account, including the decision to block.
+      const result = await client.query<AuthUserRow>(
+        `select u.id_usuario as id, u.id_rol as role_id, r.codigo as role_code,
               r.nombre as role_name, u.nombre_completo as full_name, u.usuario as username,
               u.debe_cambiar_contrasena as must_change_password, u.foto_perfil as profile_photo,
-              u.version_sesion as session_version, u.bloqueado_hasta as blocked_until,
-              u.contrasena_hash = crypt($2, u.contrasena_hash) as password_valid
+              u.version_sesion as session_version, u.bloqueado_hasta > now() as blocked
        from temo.usuarios u join temo.roles r on r.id_rol = u.id_rol
-       where lower(u.usuario) = $1 and u.estado = 'ACTIVO' and r.estado = 'ACTIVO' limit 1`,
-      [normalizedUsername, password],
-    );
-    const userRow = result.rows[0];
-    if (userRow?.blocked_until && new Date(userRow.blocked_until).getTime() > Date.now()) {
-      await this.recordAttempt(normalizedUsername, safeIp, safeAgent, false);
-      throw new HttpException('Acceso bloqueado temporalmente. Intente nuevamente en 15 minutos.', HttpStatus.TOO_MANY_REQUESTS);
-    }
-    if (!userRow?.password_valid) {
-      await this.db.transaction(async (client) => {
-        if (userRow) {
+       where lower(u.usuario) = $1 and u.estado = 'ACTIVO' and r.estado = 'ACTIVO' limit 1 for update of u`,
+        [normalizedUsername],
+      );
+      const userRow = result.rows[0];
+      const valid = userRow && !userRow.blocked ? (await client.query(
+        `select contrasena_hash = crypt($2, contrasena_hash) as password_valid
+         from temo.usuarios where id_usuario = $1`, [userRow.id, password],
+      )).rows[0]?.password_valid === true : false;
+      if (!valid) {
+        if (userRow && !userRow.blocked) {
           await client.query(
-            `update temo.usuarios set intentos_fallidos = intentos_fallidos + 1,
-               bloqueado_hasta = case when intentos_fallidos + 1 >= $2
+            `update temo.usuarios set intentos_fallidos = case when bloqueado_hasta <= now()
+                 then 1 else intentos_fallidos + 1 end,
+               bloqueado_hasta = case when (case when bloqueado_hasta <= now()
+                 then 1 else intentos_fallidos + 1 end) >= $2
                  then now() + make_interval(mins => $3) else null end,
                fecha_modificacion = now() where id_usuario = $1`,
             [userRow.id, MAX_FAILED_ATTEMPTS, BLOCK_MINUTES],
@@ -176,11 +197,15 @@ export class AuthService {
            values ($1, nullif($2, '')::inet, false, nullif($3, ''))`,
           [normalizedUsername, safeIp, safeAgent],
         );
-      });
-      throw new UnauthorizedException('Usuario o contrasena incorrectos.');
+      }
+      return { userRow, valid };
+    });
+    // Throw after committing so failure counters and attempted-access records survive.
+    if (checked.userRow?.blocked) {
+      throw new HttpException('Acceso bloqueado temporalmente. Intente nuevamente en 15 minutos.', HttpStatus.TOO_MANY_REQUESTS);
     }
-
-    const user = await this.buildAuthenticatedUser(userRow);
+    if (!checked.valid || !checked.userRow) throw new UnauthorizedException('Usuario o contrasena incorrectos.');
+    const user = await this.buildAuthenticatedUser(checked.userRow);
     if (user.roleCode === 'JEFA') {
       return this.mfa.begin(user);
     }
@@ -200,10 +225,16 @@ export class AuthService {
   private async completeLogin(user: AuthenticatedUser, safeIp: string, safeAgent: string) {
     const token = this.issueToken(user);
     await this.db.transaction(async (client) => {
-      await client.query(
-        `update temo.usuarios set ultimo_acceso = now(), intentos_fallidos = 0,
-         bloqueado_hasta = null where id_usuario = $1`, [user.id],
+      const current = await client.query(
+        `update temo.usuarios u set ultimo_acceso = now(), intentos_fallidos = 0,
+         bloqueado_hasta = null from temo.roles r
+         where u.id_usuario = $1 and u.version_sesion = $2 and u.id_rol = $3
+           and u.usuario = $4 and u.estado = 'ACTIVO' and r.id_rol = u.id_rol
+           and r.codigo = $5 and r.estado = 'ACTIVO'
+           and (u.bloqueado_hasta is null or u.bloqueado_hasta <= now())
+         returning u.id_usuario`, [user.id, user.sessionVersion, user.roleId, user.username, user.roleCode],
       );
+      if (!current.rowCount) throw new UnauthorizedException('El acceso cambio durante la operacion. Inicie sesion nuevamente.');
       await client.query(
         `insert into temo.intentos_inicio_sesion
            (usuario_normalizado, direccion_ip, exitoso, agente_usuario)
@@ -349,9 +380,7 @@ export class AuthService {
   }
 
   private validateNewPassword(password: string) {
-    if (password.length < 10 || password.length > 128 || !/[a-z]/.test(password) || !/[A-Z]/.test(password) || !/[0-9]/.test(password)) {
-      throw new BadRequestException('La contrasena debe tener entre 10 y 128 caracteres, una mayuscula, una minuscula y un numero.');
-    }
+    validatePasswordForStorage(password);
   }
 
   // Deriva un hash ligado al usuario para que el código nunca se almacene de forma recuperable.
@@ -366,6 +395,8 @@ export class AuthService {
     }
     const response = await fetch('https://api.resend.com/emails', {
       method: 'POST',
+      redirect: 'error',
+      signal: AbortSignal.timeout(10_000),
       headers: {
         Authorization: `Bearer ${this.resendApiKey}`,
         'Content-Type': 'application/json',
@@ -385,14 +416,6 @@ export class AuthService {
   // Escapa el nombre antes de incorporarlo en el contenido HTML del correo.
   private escapeHtml(value: string) {
     return value.replace(/[&<>"']/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character] ?? character);
-  }
-
-  private recordAttempt(username: string, ip: string, agent: string, successful: boolean) {
-    return this.db.query(
-      `insert into temo.intentos_inicio_sesion
-         (usuario_normalizado, direccion_ip, exitoso, agente_usuario)
-       values ($1, nullif($2, '')::inet, $3, nullif($4, ''))`, [username, ip, successful, agent],
-    );
   }
 
   private normalizeIp(ip: string) { return ip.replace(/^::ffff:/, '').trim().slice(0, 45); }

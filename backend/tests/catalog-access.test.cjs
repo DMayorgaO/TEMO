@@ -146,6 +146,21 @@ test('HTTP: anonymous is denied, cashier restricted, administrator allowed', { s
     assert.ok(health.headers.get('content-security-policy').includes("frame-ancestors 'none'"));
     assert.equal(health.headers.get('x-frame-options'), 'DENY');
     assert.equal(health.headers.get('x-content-type-options'), 'nosniff');
+    for (const [route, payload] of [
+      ['login', { username: ['secret-input'], password: 'secret-input' }],
+      ['login', { username: 'x'.repeat(255), password: 'secret-input' }],
+      ['password-recovery/request', { identifier: { secret: 'secret-input' } }],
+      ['password-recovery/confirm', { identifier: 'test', code: 123456, newPassword: 'secret-input' }],
+      ['mfa/verify', { challenge: 'A'.repeat(43), code: '123456', recoveryCode: 'a'.repeat(24) }],
+    ]) {
+      const rejected = await fetch(`${base}/auth/${route}`, { method: 'POST',
+        headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+      assert.equal(rejected.status, 400);
+      assert.equal(rejected.headers.get('cache-control'), 'no-store');
+      const error = await rejected.json();
+      assert.ok(error.requestId);
+      assert.ok(!JSON.stringify(error).includes('secret-input'));
+    }
     const routes = ['usuarios', 'roles', 'reglas-comisiones', 'cuentas-bancarias', 'sucursales'];
     for (const route of routes) assert.equal((await fetch(`${base}/catalogs/${route}`)).status, 401);
     for (const route of ['transactions/export', 'shifts/export', 'catalogs/export/users', 'shifts/dashboard/export']) {
