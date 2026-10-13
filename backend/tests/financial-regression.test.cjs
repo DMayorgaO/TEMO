@@ -376,7 +376,7 @@ test('financial regression in local preview with rollback', { skip: !process.env
         {items:[{amount:100,currencyCode:'USD'}],cash:settlement(3640),expected:0},
         {items:[{amount:100,currencyCode:'USD'}],cash:{...settlement(3700),primaryRateKind:'VENTA'},expected:100},
         {items:[{amount:182,currencyCode:'USD',settlement:{...settlement(),primaryRateKind:'VENTA'}},
-          {amount:25.02,currencyCode:'USD',settlement:{...settlement(400,140),primaryRateKind:'VENTA',changeRateKind:'VENTA',primaryCounts:{...counts(400),USD:[{denomination:100,piles25:0,loose:2}]}}}],cash:settlement(),expected:260/37},
+          {amount:25.02,currencyCode:'USD',settlement:{...settlement(400,140),primaryRateKind:'VENTA',changeRateKind:'VENTA',primaryCounts:{...counts(400),USD:[{denomination:100,piles25:0,loose:2}]}}}],cash:settlement(),expected:7.02},
         {items:[{amount:68.92,currencyCode:'USD',settlement:{...settlement(700),primaryRateKind:'VENTA',primaryCounts:{...counts(700),USD:[{denomination:50,piles25:0,loose:1}]}}}],cash:settlement(),expected:700/37},
         {items:[{amount:100,currencyCode:'USD'}],cash:{...settlement(400,400),primaryRateKind:'VENTA'},expected:0},
         {items:[{amount:10,currencyCode:'USD'},{amount:10,currencyCode:'USD'}],cash:{...settlement(740),primaryRateKind:'VENTA'},expected:20},
@@ -408,6 +408,30 @@ test('financial regression in local preview with rollback', { skip: !process.env
       near(stored.tasa_venta_usada, 37);
       await transactions.void(group.transactions[0].id, cashier);
       near((await summary()).expectedCash.NIO, before.expectedCash.NIO);
+    });
+    await t.test('Retained NIO withdrawals fund USD deposit and report matches shift purchase breakdown', async () => {
+      const before=await summary();
+      const cash={...settlement(100),primaryRateKind:'VENTA'};
+      const group=await transactions.createBatch(batch([
+        {movementCode:'RE',amount:4000,settlement:settlement()},
+        {amount:5800,settlement:settlement(1800)},
+        {movementCode:'RE',amount:8600,settlement:settlement()},
+        {amount:235.13,currencyCode:'USD',settlement:cash},
+      ],settlement()),{});
+      const ids=group.transactions.map(row=>row.id);
+      const rows=(await purchases.list(cashier)).filter(row=>ids.includes(row.database_id));
+      assert.equal(rows.length,1);
+      assert.equal(rows[0].database_id,ids[3]);
+      near(rows[0].monto_comprado_usd,235.13);
+      near(rows[0].diferencia_nio,141.078);
+      const after=await summary();
+      near(after.dollarPurchases.usd-before.dollarPurchases.usd,235.13);
+      near(after.dollarPurchases.differenceNio-before.dollarPurchases.differenceNio,141.078);
+      const actualDelta=after.cashCounts.ACTUAL.NIO.total-before.cashCounts.ACTUAL.NIO.total;
+      const expectedDelta=after.expectedCash.NIO-before.expectedCash.NIO;
+      near(actualDelta-expectedDelta,141.078+0.19);
+      await transactions.updateGroup(ids[0],{updates:[],voidIds:ids,preferential:false},cashier);
+      near((await summary()).dollarPurchases.usd,before.dollarPurchases.usd);
     });
     await t.test('Preferential USD withdrawal offsets NIO deposit without fictitious cash deficit', async () => {
       const before = await summary();

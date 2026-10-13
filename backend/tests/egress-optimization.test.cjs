@@ -59,7 +59,7 @@ test('preview: photo survives login and me, lightweight validation still revokes
 });
 
 test('current shift reuses its authorized row but refreshes all operational data on every call', async () => {
-  const shifts = new ShiftsService({});
+  const shifts = new ShiftsService({}, { forAuthorizedShift: async id => { assert.equal(id, shift.database_id); calls.push('purchases'); return { usd: amount, differenceNio: amount * 0.6 }; } });
   const user = { id: randomUUID(), roleCode: 'CAJERO' };
   const shift = { database_id: randomUUID(), id_sucursal: randomUUID() };
   const calls = [];
@@ -79,7 +79,8 @@ test('current shift reuses its authorized row but refreshes all operational data
   assert.equal(second.balances[0].system, 200);
   assert.equal(second.cashCounts.ACTUAL.NIO.total, 200);
   assert.equal(second.expected, 200);
-  assert.deepEqual(calls, Array(2).fill(['authorized', 'ensure', 'counts', 'balances', 'accounts', 'movements', 'summary']).flat());
+  assert.equal(second.dollarPurchases.usd, 200);
+  assert.deepEqual(calls, Array(2).fill(['authorized', 'ensure', 'counts', 'balances', 'accounts', 'movements', 'summary', 'purchases']).flat());
   shifts.findCurrentShift = async () => null;
   assert.equal(await shifts.current(user), null);
 });

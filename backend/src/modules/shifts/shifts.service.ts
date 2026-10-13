@@ -7,6 +7,7 @@ import {
 import { PoolClient, QueryResult, QueryResultRow } from 'pg';
 import { AuthenticatedUser } from '../auth/auth.service';
 import { DatabaseService } from '../database/database.service';
+import { DollarPurchasesService } from '../dollar-purchases/dollar-purchases.service';
 import { authorizedExport, parseExportSelection, requireExportRole, recordAuthorizedExport } from '../../common/export-selection';
 import { preferentialCashAdjustment, preferentialGroupMarker, PreferentialCashRow } from '../../common/preferential-cash';
 import {
@@ -53,7 +54,8 @@ type ShiftRow = QueryResultRow & {
 
 @Injectable()
 export class ShiftsService {
-  constructor(private readonly db: DatabaseService) {}
+  constructor(private readonly db: DatabaseService,
+    private readonly purchases: DollarPurchasesService = new DollarPurchasesService(db)) {}
 
   async exportRows(body: unknown, request: { user: AuthenticatedUser; ip?: string }) {
     requireExportRole(request.user);
@@ -197,6 +199,7 @@ export class ShiftsService {
     const availableAccounts = await this.loadAvailableAccounts(shift.id_sucursal);
     const availableMovements = await this.loadAvailableMovements(shift.id_sucursal);
     const cashSummary = await this.loadCashSummary(shiftId);
+    const dollarPurchases = await this.purchases.forAuthorizedShift(shiftId);
     return {
       ...shift,
       cashCounts,
@@ -204,6 +207,7 @@ export class ShiftsService {
       availableAccounts,
       availableMovements,
       ...cashSummary,
+      dollarPurchases,
     };
   }
 

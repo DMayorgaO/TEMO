@@ -214,6 +214,7 @@ type ShiftDetail = {
   expectedCash: Record<CashCurrency, number>;
   expectedGeneral?: Record<CashCurrency, number>;
   expectedGeneralRate?: number;
+  dollarPurchases?: { usd: number; differenceNio: number };
   pendingCash: Record<CashCurrency, number>;
   balances: Array<{
     account_id: string;
@@ -4035,6 +4036,8 @@ function ShiftClosureModal({
             <div className="cash-count-right-column">
               <TransactionCashCountTable currency="USD" denominations={cashDenominations.USD} focusScope="shift-close" pileDrafts={cashDraft} conversionRate={rate} onPileFieldChange={updateCash} />
               <div className="cash-count-adjustments shift-close-adjustments">
+                <div><strong>Compras de dólares</strong>{formatCashCountMoney(shift.dollarPurchases?.usd ?? 0, 'USD')}</div>
+                <div><strong>Diferencial por compras</strong>{formatCashCountMoney(shift.dollarPurchases?.differenceNio ?? 0, 'NIO')}</div>
                 <div><strong>Diferencia NIO</strong>{renderDifference(differenceNio, 'NIO', { positiveLabel: '' })}</div>
                 <div><strong>Diferencia USD</strong>{renderDifference(differenceUsd, 'USD', { positiveLabel: '' })}</div>
                 <label>
@@ -4942,6 +4945,8 @@ function CashCountScreen({ currentUser }: { currentUser: AuthUser }) {
             onPileFieldChange={updatePileField}
           />
           <div className="cash-count-adjustments">
+            <div><strong>Compras de dólares</strong>{formatCashCountMoney(shift?.dollarPurchases?.usd ?? 0, 'USD')}</div>
+            <div><strong>Diferencial por compras</strong>{formatCashCountMoney(shift?.dollarPurchases?.differenceNio ?? 0, 'NIO')}</div>
             <div><strong>Diferencia NIO</strong>{renderDifference(differenceNio, 'NIO', { positiveLabel: '' })}</div>
             <div><strong>Diferencia USD</strong>{renderDifference(differenceUsd, 'USD', { positiveLabel: '' })}</div>
             <label>
