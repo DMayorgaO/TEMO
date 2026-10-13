@@ -25,7 +25,16 @@
   incluyendo liquidaciones compartidas/individuales, USD fisico, grupos,
   anulacion y aislamiento de usuarios. Compilacion y lint correctos.
 - Validacion del nuevo calculo contra produccion mediante transaccion READ ONLY;
-  despliegue y revision remota se registran despues de la publicacion.
+  sin escrituras financieras.
+
+## Despliegue verificado
+
+- API /api/health: 200, database ok, revision
+  602c46514903b7c99fd05a3972b8eaf99e0dbb77.
+- Web: 200 y recurso index-Bm7chIAP.js de la compilacion productiva.
+- Reporte sin sesion: 401, Cache-Control no-store y origen CORS correcto.
+- Pendiente confirmacion visual de la cajera en su sesion real; no se
+  simularon credenciales ni se alteraron sesiones o avisos leidos.
 
 No se modificaron asignaciones, saldos, arqueos ni transacciones reales.
 Control de gastos y diagnosticos temporales permanecen locales.
