@@ -70,6 +70,7 @@ test('financial regression in local preview with rollback', { skip: !process.env
       const waiting = await shifts.access(cashier);
       assert.equal(waiting.active, null);
       assert.equal(waiting.prepared.database_id, id);
+      assert.equal(waiting.prepared.sucursal, branch.nombre);
       const outsiderAccess = await shifts.access({ id: admin.id, roleCode: 'CAJERO' });
       assert.ok(outsiderAccess.prepared?.database_id !== id);
       await assert.rejects(shifts.openPrepared(id, { id: admin.id, roleCode: 'CAJERO' }), (error) => error.getStatus() === 403);
@@ -78,6 +79,7 @@ test('financial regression in local preview with rollback', { skip: !process.env
       assert.deepEqual(await shifts.current(cashier), shift);
       const access = await shifts.access(cashier);
       assert.equal(access.active.database_id, id);
+      assert.equal(access.active.sucursal, branch.nombre);
       assert.equal(access.prepared, null);
       assert.ok(Buffer.byteLength(JSON.stringify(access)) < Buffer.byteLength(JSON.stringify(shift)) / 5);
       near(shift.expectedCash.NIO, 1000);
@@ -345,6 +347,30 @@ test('financial regression in local preview with rollback', { skip: !process.env
       assert.equal(purchasesForPayment.length,1);
       near(purchasesForPayment[0].monto_comprado_usd,50); near(purchasesForPayment[0].diferencia_nio,30);
       await transactions.reopenPaymentBatch(id,[...ids],cashier);
+      near((await summary()).expectedCash.NIO,before.expectedCash.NIO);
+    });
+    await t.test('USD withdrawals paid in NIO appear once; USD cash and group offsets are not purchases', async () => {
+      const before = await summary();
+      const cases = [
+        {items:[{movementCode:'RE',amount:100,currencyCode:'USD'}],cash:settlement(3640),expected:100},
+        {items:[{movementCode:'RE',amount:100,currencyCode:'USD'}],cash:{...settlement(),primaryCounts:{NIO:[],USD:[{denomination:100,piles25:0,loose:1}]}},expected:0},
+        {items:[{movementCode:'RE',amount:200,currencyCode:'USD'}],cash:{...settlement(3640),primaryCounts:{...counts(3640),USD:[{denomination:100,piles25:0,loose:1}]}},expected:100},
+        {items:[{movementCode:'RE',amount:100,currencyCode:'USD'},{amount:100,currencyCode:'USD'}],cash:settlement(),expected:0},
+        {items:[{movementCode:'RE',amount:100,currencyCode:'USD'},{movementCode:'RE',amount:100,currencyCode:'USD'}],cash:{...settlement(3640),primaryCounts:{...counts(3640),USD:[{denomination:100,piles25:0,loose:1}]}},expected:100},
+        {items:[{amount:100,currencyCode:'USD'}],cash:{...settlement(),primaryCounts:{NIO:[],USD:[{denomination:100,piles25:0,loose:1}]}},expected:0},
+        {items:[{movementCode:'RE',amount:100,currencyCode:'USD',settlement:settlement(3640)}],cash:settlement(),expected:100},
+      ];
+      for (const item of cases) {
+        const group = await transactions.createBatch(batch(item.items,item.cash),{});
+        const ids = group.transactions.map(row=>row.id);
+        const rows = (await purchases.list(cashier)).filter(row=>ids.includes(row.database_id));
+        near(rows.reduce((sum,row)=>sum+Number(row.monto_comprado_usd),0),item.expected);
+        near(rows.reduce((sum,row)=>sum+Number(row.diferencia_nio),0),item.expected*0.6);
+        assert.deepEqual((await purchases.list(admin)).filter(row=>ids.includes(row.database_id)),rows);
+        assert.equal((await purchases.list({id:admin.id,roleCode:'CAJERO'})).filter(row=>ids.includes(row.database_id)).length,0);
+        await transactions.updateGroup(ids[0],{updates:[],voidIds:ids,preferential:false},cashier);
+        assert.equal((await purchases.list(cashier)).filter(row=>ids.includes(row.database_id)).length,0);
+      }
       near((await summary()).expectedCash.NIO,before.expectedCash.NIO);
     });
     await t.test('USD cash deposit uses normal buy rate in consolidated cash', async () => {

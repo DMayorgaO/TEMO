@@ -47,29 +47,26 @@ export class DollarPurchasesService {
             )
           )
       ),
-      group_coverage as (
-        select
-          groups.id_grupo_transacciones,
-          coalesce((
-            select sum(vt.monto)
-            from valid_transactions vt
-            where vt.id_grupo_transacciones = groups.id_grupo_transacciones
-              and vt.moneda = 'USD'
-              and vt.direccion = 'SALE'
-          ), 0) + coalesce((
-            select sum(me.monto)
-            from temo.movimientos_efectivo me
-            join temo.monedas cash_currency on cash_currency.id_moneda = me.id_moneda
-            join temo.transacciones cash_transaction on cash_transaction.id_transaccion = me.id_transaccion
-            left join temo.pagos_pendientes cash_pending on cash_pending.id_transaccion = cash_transaction.id_transaccion
-            where cash_transaction.id_grupo_transacciones = groups.id_grupo_transacciones
-              and cash_transaction.estado <> 'ANULADA'
-              and cash_pending.id_pendiente is null
-              and cash_currency.codigo = 'USD'
-              and me.direccion = 'ENTRA'
-              and me.es_reverso = false
-          ), 0) as usd_coverage
-        from temo.grupos_transacciones groups
+      transaction_usd as (
+        select id_grupo_transacciones,
+          coalesce(sum(monto) filter(where direccion='ENTRA'),0) as income,
+          coalesce(sum(monto) filter(where direccion='SALE'),0) as withdrawal
+        from valid_transactions where moneda='USD' group by id_grupo_transacciones
+      ), cash_usd as (
+        /* Incluye arqueos compartidos y por transaccion; el neto descuenta vuelto en USD. */
+        select coalesce(t.id_grupo_transacciones,me.id_grupo_transacciones) as id_grupo_transacciones,
+          sum(case me.direccion when 'ENTRA' then me.monto else -me.monto end) as net_income
+        from temo.movimientos_efectivo me
+        join temo.monedas m using(id_moneda)
+        left join temo.transacciones t using(id_transaccion)
+        left join temo.pagos_pendientes pp using(id_transaccion)
+        where m.codigo='USD' and me.es_reverso=false and me.id_abono_pendiente is null
+          and (me.id_transaccion is null or t.estado<>'ANULADA') and pp.id_pendiente is null
+        group by coalesce(t.id_grupo_transacciones,me.id_grupo_transacciones)
+      ), group_coverage as (
+        select tu.id_grupo_transacciones,
+          tu.withdrawal+greatest(coalesce(cu.net_income,0),0) as usd_coverage
+        from transaction_usd tu left join cash_usd cu using(id_grupo_transacciones)
       ),
       usd_income as (
         select
@@ -93,7 +90,28 @@ export class DollarPurchasesService {
           ) as purchased_usd
         from usd_income ui
       )
-      , cash_payments as (
+      , withdrawal_coverage as (
+        /* Retiro USD pagado en NIO: descuenta depositos USD y dolares fisicos entregados. */
+        select tu.id_grupo_transacciones,
+          tu.income+greatest(-coalesce(cu.net_income,0),0) as usd_coverage
+        from transaction_usd tu left join cash_usd cu using(id_grupo_transacciones)
+      ), usd_withdrawals as (
+        select vt.*, wc.usd_coverage,
+          coalesce(sum(vt.monto) over (partition by vt.id_grupo_transacciones
+            order by vt.orden_grupo,vt.id_transaccion
+            rows between unbounded preceding and 1 preceding),0) as previous_usd_withdrawal
+        from valid_transactions vt join withdrawal_coverage wc using(id_grupo_transacciones)
+        where vt.moneda='USD' and vt.direccion='SALE'
+      ), withdrawal_purchases as (
+        select uw.*, greatest(uw.monto-greatest(uw.usd_coverage-uw.previous_usd_withdrawal,0),0) as purchased_usd
+        from usd_withdrawals uw
+      ), all_transaction_purchases as (
+        select id_transaccion,id_grupo_transacciones,orden_grupo,fecha_transaccion,
+          tasa_compra_usada,tasa_venta_usada,id_cajero,id_sucursal,purchased_usd from calculated
+        union all
+        select id_transaccion,id_grupo_transacciones,orden_grupo,fecha_transaccion,
+          tasa_compra_usada,tasa_venta_usada,id_cajero,id_sucursal,purchased_usd from withdrawal_purchases
+      ), cash_payments as (
         select ap.*, pp.tipo, t.id_grupo_transacciones, t.orden_grupo,
           t.id_sucursal, s.id_cajero,
           coalesce(ap.id_lote_liquidacion, ap.id_abono) as lot
@@ -136,7 +154,7 @@ export class DollarPurchasesService {
         c.tasa_venta_usada,
         u.nombre_completo as cajero,
         s.nombre as sucursal
-      from calculated c
+      from all_transaction_purchases c
       join temo.grupos_transacciones g on g.id_grupo_transacciones = c.id_grupo_transacciones
       join temo.usuarios u on u.id_usuario = c.id_cajero
       join temo.sucursales s on s.id_sucursal = c.id_sucursal

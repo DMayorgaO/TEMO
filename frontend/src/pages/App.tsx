@@ -255,6 +255,7 @@ type BranchCatalogRow = {
 
 type ShiftNotification = {
   id: string;
+  created_at: string;
   kind: 'CLOSE_REQUEST' | 'SHIFT_CLOSED' | 'PENDING_PAID' | 'TRANSFER_RECORDED';
   shift_id: string;
   shift_code: string;
@@ -3790,6 +3791,7 @@ export function App() {
               {currentUser.roleCode === 'JEFA' && <span className="shift-notification-operator">{visibleNotification.cashier} · {visibleNotification.branch}</span>}
             </> : <>
               <h2>{visibleNotification.cashier}</h2>
+              <strong>{visibleNotification.shift_code} · {new Date(visibleNotification.created_at).toLocaleString('es-NI', { timeZone: 'America/Managua' })}</strong>
               <span>{visibleNotification.kind === 'PENDING_PAID' && visibleNotification.currency ? formatCashCountMoney(Number(visibleNotification.amount || 0), visibleNotification.currency) : `${visibleNotification.branch} · ${visibleNotification.register}`}</span>
             </>}
             {visibleNotificationObservation && <blockquote>{visibleNotificationObservation}</blockquote>}
