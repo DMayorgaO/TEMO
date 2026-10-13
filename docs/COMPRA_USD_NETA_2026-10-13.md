@@ -20,5 +20,7 @@ Esta regla complementa REGLA_COMPRAS_USD_2026-10-13.md.
 Compilacion backend y lint correctos. Bateria secuencial:154/154 correctas.
 La primera ejecucion paralela fallo en revocacion HTTP (500 en vez de201);
 la repeticion completa secuencial paso, sin modificar esa implementacion.
-Despliegue por registrar.
+Despliegue verificado: /api/health200, database ok, revision
+2491eeacca3eef632a16bf983ac9c2ad5d3219ca. Reporte sin sesion401 y CORS correcto.
+Validacion visual con sesion real del usuario pendiente. Sin migraciones.
 Control de gastos excluido y local.
