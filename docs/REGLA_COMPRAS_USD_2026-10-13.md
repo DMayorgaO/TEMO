@@ -18,4 +18,7 @@ en cordobas a tasa VENTA (37 actualmente); excluye salidas/remesas a COMPRA
   caso mixto independiente, anulacion y aislamiento de usuarios.
 - Compilacion backend y lint correctos. No hay migraciones ni cambios web.
 
-Verificacion del despliegue pendiente de registrar. Control de gastos local.
+Despliegue verificado: /api/health 200, database ok, revision
+abcff9c8d5339975727ac9289c7e6eb662010eed. Reporte anonimo 401 y CORS correcto.
+Pendiente confirmacion visual del usuario con su sesion real.
+Control de gastos local.
