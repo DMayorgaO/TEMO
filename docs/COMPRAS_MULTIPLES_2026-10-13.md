@@ -38,5 +38,7 @@ TRA-003899-02 conserva compra USD130 y diferencial NIO78.
   con rollback del grupo completo, coincidencia listado/arqueo y anulacion.
 - Verificacion READ ONLY contra datos productivos. Sin migraciones ni
   escrituras a transacciones, saldos, arqueos o diferencias registradas.
-- QA visual con sesion administrativa real y despliegue pendientes de registrar.
+- Produccion verificada: /api/health200, database ok, revision
+  6425e6d9e0a0bbc94530959926b094a916d582c4. Web200, index-CEf-diKC.js.
+  Reporte sin sesion401. QA visual con sesion administrativa real pendiente.
 - Control de gastos y diagnosticos temporales permanecen locales.
