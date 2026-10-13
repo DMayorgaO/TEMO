@@ -3765,6 +3765,10 @@ export function App() {
         setDismissedNotifications(current=>[...current,...adminBatch.map(item=>item.id)]);
         await acceptCloseRequest(notification);
       }}
+      onReject={async notification => {
+        if (!await rejectShiftClose(notification.shift_id)) return;
+        setNotifications(current => current.filter(item => item.id !== notification.id));
+      }}
     />}
     {visibleNotification && adminBatch.length === 0 && (
       <div className="modal-backdrop shift-notification-backdrop" role="dialog" aria-modal="true">
@@ -3823,6 +3827,7 @@ export function App() {
     {closingShift && (
       <ShiftClosureModal
         shift={closingShift}
+        isAdministrator={currentUser.roleCode === 'JEFA'}
         onCancel={() => setClosingShift(null)}
         onClosed={() => {
           setClosingShift(null);
@@ -3834,7 +3839,15 @@ export function App() {
   );
 }
 
-function NotificationSummary({title,items,onAccept,onReview}:{title:string;items:ShiftNotification[];onAccept:()=>Promise<void>;onReview:(item:ShiftNotification)=>Promise<void>}) {
+async function rejectShiftClose(shiftId: string) {
+  if (!await requestSystemConfirm('La solicitud se rechazara y el turno volvera a estar abierto para el cajero.',
+    { title: 'Rechazar cierre de turno', confirmLabel: 'Rechazar cierre', tone: 'danger' })) return false;
+  await apiRequest(`/shifts/${shiftId}/reject-close`, { method: 'POST' });
+  announceOperationalDataChange();
+  return true;
+}
+
+function NotificationSummary({title,items,onAccept,onReview,onReject}:{title:string;items:ShiftNotification[];onAccept:()=>Promise<void>;onReview:(item:ShiftNotification)=>Promise<void>;onReject:(item:ShiftNotification)=>Promise<void>}) {
   const [busy,setBusy]=useState(false);
   const [error,setError]=useState('');
   const grouped = summarizeTransferNotifications(items);
@@ -3860,7 +3873,7 @@ function NotificationSummary({title,items,onAccept,onReview}:{title:string;items
             </div>)}
           </section>)}
         </div>)}
-        {[...otherGroups].map(([kind,group])=><div key={kind}><strong>{kind==='CLOSE_REQUEST'?'Solicitudes de cierre':kind==='PENDING_PAID'?'Pendientes pagados':'Cierres de turno'}</strong><span>{group.length} registros</span>{kind==='CLOSE_REQUEST'&&<button type="button" className="secondary-button" disabled={busy} onClick={()=>void run(()=>onReview(group[0]))}>Revisar cierre</button>}</div>)}
+        {[...otherGroups].map(([kind,group])=><div key={kind}><strong>{kind==='CLOSE_REQUEST'?'Solicitudes de cierre':kind==='PENDING_PAID'?'Pendientes pagados':'Cierres de turno'}</strong><span>{group.length} registros</span>{kind==='CLOSE_REQUEST'&&group.map(item=><div key={item.id}><span>{item.cashier} · {item.branch} · {item.shift_code}</span><button type="button" className="secondary-button" disabled={busy} onClick={()=>void run(()=>onReview(item))}>Revisar cierre</button><button type="button" className="secondary-button danger-button" disabled={busy} onClick={()=>void run(()=>onReject(item))}><X size={17}/>Rechazar cierre</button></div>)}</div>)}
       </div>
       {error&&<p role="alert" className="login-error">{error}</p>}
       <button type="button" className="primary-button" disabled={busy} onClick={()=>void run(onAccept)}>{busy?'Procesando...':'Aceptar resumen'}</button>
@@ -3870,10 +3883,12 @@ function NotificationSummary({title,items,onAccept,onReview}:{title:string;items
 
 function ShiftClosureModal({
   shift,
+  isAdministrator,
   onCancel,
   onClosed,
 }: {
   shift: ShiftDetail;
+  isAdministrator: boolean;
   onCancel: () => void;
   onClosed: () => void;
 }) {
@@ -3991,6 +4006,17 @@ function ShiftClosureModal({
     }
   }
 
+  async function rejectClose() {
+    if (saving) return;
+    setSaving(true);
+    setError('');
+    try {
+      if (await rejectShiftClose(shift.database_id)) onClosed();
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : 'No fue posible rechazar el cierre.');
+    } finally { setSaving(false); }
+  }
+
   return (
     <div className="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="close-shift-title">
       <section className="shift-close-modal">
@@ -4068,6 +4094,7 @@ function ShiftClosureModal({
         </div>
         <footer className="modal-footer">
           <button type="button" className="secondary-button danger-button" onClick={onCancel}><X size={17} />Cancelar</button>
+          {isAdministrator && shift.estado === 'PENDIENTE_APROBACION' && <button type="button" className="secondary-button danger-button" disabled={saving} onClick={() => void rejectClose()}><X size={17}/>Rechazar cierre</button>}
           <button type="button" className="primary-button" onClick={() => void closeShift()} disabled={saving}><Save size={17} />{saving ? 'Guardando...' : 'Guardar'}</button>
         </footer>
       </section>

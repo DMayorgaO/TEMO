@@ -46,9 +46,9 @@ test('financial regression in local preview with rollback', { skip: !process.env
     const transfers = new TransfersService(db);
     const catalogs = new CatalogsController(db, {});
     const purchases = new DollarPurchasesService(db);
-    const adminRow = (await client.query("select u.id_usuario as id from temo.usuarios u join temo.roles r using(id_rol) where r.codigo='JEFA' and u.estado='ACTIVO' limit 1")).rows[0];
+    const adminRow = (await client.query("select u.id_usuario as id,u.version_sesion from temo.usuarios u join temo.roles r using(id_rol) where r.codigo='JEFA' and u.estado='ACTIVO' limit 1")).rows[0];
     assert.ok(adminRow);
-    const admin = { id: adminRow.id, roleCode: 'JEFA' };
+    const admin = { id: adminRow.id, roleCode: 'JEFA', sessionVersion: adminRow.version_sesion };
     const userRow = (await client.query(`insert into temo.usuarios (id_rol,nombres,apellidos,usuario,contrasena_hash,estado)
       select id_rol,'Security','Regression',$1,'not-a-login-credential','ACTIVO' from temo.roles where codigo='CAJERO'
       returning id_usuario as id`, [username])).rows[0];
@@ -103,6 +103,37 @@ test('financial regression in local preview with rollback', { skip: !process.env
       const newBank = after.balances.find((row) => row.account_id === movement.id_cuenta);
       near(newBank.calculated, Number(oldBank.calculated) + (movement.direccion === 'ENTRA' ? 100 : -100));
       near(newBank.system, newBank.calculated);
+    });
+    await t.test('Only current administrator rejects pending closure atomically, preserving money and restoring cashier edit access', async () => {
+      const id = deposit.transactions[0].id;
+      const before = await summary();
+      await shifts.requestClose(shiftId, cashier);
+      await assert.rejects(transactions.loadEditableTransaction(client, id, cashier), e => e.getStatus() === 403);
+      await assert.rejects(shifts.rejectClose(shiftId, cashier), e => e.getStatus() === 403);
+      await assert.rejects(shifts.rejectClose(shiftId, { ...admin, sessionVersion: admin.sessionVersion + 1 }), e => e.getStatus() === 403);
+      const failing = new ShiftsService({ ...db, transaction: work => db.transaction(c => work({ query: (sql, params) => {
+        if (sql.includes('insert into temo.bitacora')) throw new Error('audit unavailable');
+        return c.query(sql, params);
+      } })) });
+      await assert.rejects(failing.rejectClose(shiftId, admin), /audit unavailable/);
+      assert.equal((await summary()).estado, 'PENDIENTE_APROBACION');
+      assert.equal((await client.query('select estado from temo.solicitudes_cierre_turno where id_turno=$1',[shiftId])).rows[0].estado, 'PENDIENTE');
+      await shifts.rejectClose(shiftId, admin);
+      const after = await summary();
+      assert.equal(after.estado, 'ABIERTO');
+      assert.equal(after.solicitud_estado, 'CANCELADA');
+      assert.deepEqual(after.expectedCash, before.expectedCash);
+      assert.deepEqual(after.balances, before.balances);
+      assert.deepEqual(after.cashCounts, before.cashCounts);
+      assert.ok(await transactions.loadEditableTransaction(client, id, cashier));
+      await assert.rejects(shifts.rejectClose(shiftId, admin), e => e.getStatus() === 409);
+      const audit = (await client.query("select datos_anteriores,datos_nuevos from temo.bitacora where id_registro=$1 and datos_nuevos->>'evento'='RECHAZAR_CIERRE_TURNO'", [shiftId])).rows;
+      assert.equal(audit.length, 1);
+      assert.equal(audit[0].datos_anteriores.estado, 'PENDIENTE_APROBACION');
+      assert.equal(audit[0].datos_nuevos.estado, 'ABIERTO');
+      await client.query("update temo.turnos set estado='CERRADO' where id_turno=$1", [shiftId]);
+      await assert.rejects(shifts.rejectClose(shiftId, admin), e => e.getStatus() === 409);
+      await client.query("update temo.turnos set estado='ABIERTO' where id_turno=$1", [shiftId]);
     });
     await t.test('Individual update stores comparable before/after atomically and preserves balances', async () => {
       const before = await summary();

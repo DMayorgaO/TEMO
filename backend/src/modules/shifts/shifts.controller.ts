@@ -143,6 +143,11 @@ export class ShiftsController {
     return this.shifts.close(id, this.parse(closeShiftSchema, body), request.user);
   }
 
+  @Post(':id/reject-close')
+  rejectClose(@Param('id') id: string, @Req() request: AuthenticatedRequest) {
+    return this.shifts.rejectClose(id, request.user);
+  }
+
   // Traduce rutas técnicas de Zod a un mensaje que identifica el campo rechazado.
   private parse<T>(schema: { safeParse(value: unknown): { success: true; data: T } | { success: false; error: { issues: Array<{ path?: PropertyKey[]; message?: string }> } } }, value: unknown) {
     const parsed = schema.safeParse(value);

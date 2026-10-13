@@ -515,7 +515,12 @@ export class ShiftsService {
     if (shift.id_cajero !== user.id) {
       throw new ForbiddenException('Solo el cajero del turno puede solicitar su cierre.');
     }
-    const result = await this.db.query(
+    return this.db.transaction(async client => {
+    const locked = await client.query('select estado from temo.turnos where id_turno=$1 for update', [shiftId]);
+    if (!['ABIERTO', 'PENDIENTE_APROBACION'].includes(locked.rows[0]?.estado)) {
+      throw new ConflictException('El turno ya no admite solicitudes de cierre.');
+    }
+    const result = await client.query(
       `insert into temo.solicitudes_cierre_turno (
          id_turno, id_usuario_solicitud, estado, fecha_solicitud,
          id_usuario_revision, fecha_revision, fecha_notificacion_cajero_leida,
@@ -532,13 +537,14 @@ export class ShiftsService {
        returning id_solicitud_cierre as id`,
       [shiftId, user.id],
     );
-    await this.db.query(
+    await client.query(
       `update temo.turnos
        set estado = 'PENDIENTE_APROBACION', fecha_modificacion = now()
        where id_turno = $1`,
       [shiftId],
     );
     return result.rows[0];
+    });
   }
 
   async notifications(user: AuthenticatedUser) {
@@ -703,6 +709,10 @@ export class ShiftsService {
     this.requireBoss(user);
     const shift = await this.findAuthorizedShift(shiftId, user, true);
     await this.db.transaction(async (client) => {
+      const locked = await client.query('select estado from temo.turnos where id_turno=$1 for update', [shiftId]);
+      if (!['ABIERTO', 'PENDIENTE_APROBACION'].includes(locked.rows[0]?.estado)) {
+        throw new ConflictException('El turno ya no admite cierre. Actualice la pantalla.');
+      }
       const totals = this.cashTotals(input.counts);
       await this.persistCashCounts(client, shiftId, shift.id_caja, user.id, 'CIERRE_CONTADO', input.counts);
       await this.persistClosingBalances(client, shiftId, input.balances);
@@ -741,6 +751,34 @@ export class ShiftsService {
       );
     });
     return this.detail(shiftId, user);
+  }
+
+  async rejectClose(shiftId: string, user: AuthenticatedUser) {
+    this.requireBoss(user);
+    await this.db.transaction(async client => {
+      await client.query('select pg_advisory_xact_lock(741260810)');
+      const actor = await client.query(`select 1 from temo.usuarios u join temo.roles r using(id_rol)
+        where u.id_usuario=$1 and u.estado='ACTIVO' and r.estado='ACTIVO'
+          and r.codigo='JEFA' and u.version_sesion=$2`, [user.id, user.sessionVersion]);
+      if (!actor.rowCount) throw new ForbiddenException('La sesion administrativa ya no es valida.');
+      const shift = await client.query('select estado from temo.turnos where id_turno=$1 for update', [shiftId]);
+      if (!shift.rowCount) throw new NotFoundException('El turno seleccionado no existe.');
+      if (shift.rows[0].estado !== 'PENDIENTE_APROBACION') {
+        throw new ConflictException('Solo se puede rechazar un cierre pendiente de aprobacion.');
+      }
+      const request = await client.query(`update temo.solicitudes_cierre_turno
+        set estado='CANCELADA', id_usuario_revision=$2, fecha_revision=now(),
+          observaciones_cierre='Cierre rechazado; turno abierto nuevamente.'
+        where id_turno=$1 and estado='PENDIENTE' returning id_solicitud_cierre`, [shiftId, user.id]);
+      if (request.rowCount !== 1) throw new ConflictException('La solicitud de cierre ya no esta pendiente.');
+      await client.query(`update temo.turnos set estado='ABIERTO', fecha_modificacion=now()
+        where id_turno=$1`, [shiftId]);
+      await client.query(`insert into temo.bitacora(id_usuario,accion,tabla,id_registro,datos_anteriores,datos_nuevos)
+        values($1,'RECHAZAR','turnos',$2,
+          jsonb_build_object('estado','PENDIENTE_APROBACION','solicitud_estado','PENDIENTE'),
+          jsonb_build_object('evento','RECHAZAR_CIERRE_TURNO','estado','ABIERTO','solicitud_estado','CANCELADA'))`, [user.id, shiftId]);
+    });
+    return { success: true, message: 'Cierre rechazado. El turno esta abierto nuevamente.' };
   }
 
   private async resolveAvailableRegister(

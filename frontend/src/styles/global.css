@@ -3119,6 +3119,7 @@ tbody tr:hover td {
   background: #fff;
   border-top: 1px solid var(--line);
   display: flex;
+  flex-wrap: wrap;
   gap: 10px;
   justify-content: flex-end;
   padding: 14px 18px;

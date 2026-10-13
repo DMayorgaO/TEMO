@@ -110,7 +110,7 @@ test('HTTP: every record route in four operational controllers rejects bad IDs b
   const calls = [];
   const methods = ['detail', 'groupDetail', 'pendingPaymentDetail', 'acknowledgeNotification', 'openPrepared',
     'requestClose', 'void', 'reopenPendingPayment', 'update', 'updateGroup', 'payPending', 'reopenPaymentBatch',
-    'updateClosed', 'saveCashCount', 'saveBalances', 'close'];
+    'updateClosed', 'saveCashCount', 'saveBalances', 'close', 'rejectClose'];
   const stub = Object.fromEntries(methods.map(method => [method, async (...args) => {
     calls.push({ method, args }); return { ok: true };
   }]));
@@ -133,7 +133,7 @@ test('HTTP: every record route in four operational controllers rejects bad IDs b
       .map(key => controller.prototype[key]).filter(handler => String(Reflect.getMetadata(PATH_METADATA, handler)).includes(':id'))
       .map(handler => ({ path: `/api/${Reflect.getMetadata(PATH_METADATA, controller)}/${Reflect.getMetadata(PATH_METADATA, handler)}`,
         method: RequestMethod[Reflect.getMetadata(METHOD_METADATA, handler)] })));
-    assert.equal(routes.length, 23, 'all existing record routes remain covered');
+    assert.equal(routes.length, 24, 'all existing record routes remain covered');
     for (const route of routes) {
       const request = (id, token) => fetch(base + route.path.replace(':id', encodeURIComponent(id)), {
         method: route.method, headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}), 'Content-Type': 'application/json' },
@@ -153,7 +153,7 @@ test('HTTP: every record route in four operational controllers rejects bad IDs b
     assert.equal(calls.length, 0, 'no service called by rejected requests');
     let validCalls = 0;
     for (const route of routes) {
-      const noBody = route.method === 'GET' || /\/(reopen|open-prepared|close-request|acknowledge)$/.test(route.path)
+      const noBody = route.method === 'GET' || /\/(reopen|open-prepared|close-request|reject-close|acknowledge)$/.test(route.path)
         || route.path === '/api/transactions/:id/void';
       const response = await fetch(base + route.path.replace(':id', uuid), {
         method: route.method, headers: { Authorization: 'Bearer cashier', 'Content-Type': 'application/json' },
