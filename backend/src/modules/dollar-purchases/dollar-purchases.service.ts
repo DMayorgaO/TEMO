@@ -52,13 +52,13 @@ export class DollarPurchasesService {
       ),
       transaction_usd as (
         select settlement_id,
-          coalesce(sum(monto) filter(where direccion='SALE'),0) as withdrawal
-        from valid_transactions where moneda='USD' group by settlement_id
+          coalesce(sum(monto) filter(where moneda='USD' and direccion='SALE'),0) as withdrawal,
+          coalesce(sum(case direccion when 'ENTRA' then monto else -monto end)
+            filter(where moneda='NIO'),0) as nominal_nio
+        from valid_transactions group by settlement_id
       ), cash_usd as (
-        /* Incluye arqueos compartidos y por transaccion; el neto descuenta vuelto en USD. */
+        /* El ingreso NIO neto descuenta vuelto; USD fisicos pueden cubrir otras pestanas. */
         select coalesce(me.id_transaccion,me.id_grupo_transacciones) as settlement_id,
-          coalesce(sum(case me.direccion when 'ENTRA' then me.monto else -me.monto end)
-            filter(where m.codigo='USD'),0) as net_income,
           coalesce(sum(case me.direccion when 'ENTRA' then me.monto else -me.monto end)
             filter(where m.codigo='NIO'),0) as nio_income
         from temo.movimientos_efectivo me
@@ -69,8 +69,8 @@ export class DollarPurchasesService {
           and (me.id_transaccion is null or t.estado<>'ANULADA') and pp.id_pendiente is null
         group by coalesce(me.id_transaccion,me.id_grupo_transacciones)
       ), group_coverage as (
-        select tu.settlement_id, coalesce(cu.nio_income,0) as nio_income,
-          tu.withdrawal+greatest(coalesce(cu.net_income,0),0) as usd_coverage
+        select tu.settlement_id, greatest(coalesce(cu.nio_income,0)-tu.nominal_nio,0) as nio_income,
+          tu.withdrawal as usd_coverage
         from transaction_usd tu left join cash_usd cu using(settlement_id)
       ),
       usd_income as (
@@ -90,10 +90,11 @@ export class DollarPurchasesService {
       calculated as (
         select
           ui.*,
-          greatest(
+          greatest(least(
             ui.monto - greatest(ui.usd_coverage - ui.previous_usd_income, 0),
-            0
-          ) as purchased_usd
+            ui.nio_income / nullif(ui.tasa_venta_usada,0)
+              - greatest(ui.previous_usd_income-ui.usd_coverage,0)
+          ),0) as purchased_usd
         from usd_income ui
       )
       , cash_payments as (
@@ -118,17 +119,17 @@ export class DollarPurchasesService {
           )
       ), pending_purchases as (
         select cp.*,
-          greatest(cp.monto - greatest(coalesce((
+          greatest(least(cp.monto, coalesce((
             select sum(case me.direccion when 'ENTRA' then me.monto else -me.monto end)
             from temo.movimientos_efectivo me
             join temo.abonos_pendientes owner on owner.id_abono = me.id_abono_pendiente
             join temo.monedas m on m.id_moneda = me.id_moneda
             where coalesce(owner.id_lote_liquidacion, owner.id_abono) = cp.lot
-              and m.codigo = 'USD' and me.es_reverso = false
-          ), 0) - coalesce(sum(cp.monto) over (
+              and m.codigo = 'NIO' and me.es_reverso = false
+          ), 0) / nullif(cp.tasa_venta_usada,0) - coalesce(sum(cp.monto) over (
             partition by cp.lot order by cp.fecha_abono, cp.id_abono
             rows between unbounded preceding and 1 preceding
-          ), 0), 0), 0) as purchased_usd
+          ), 0)), 0) as purchased_usd
         from cash_payments cp
       )
       select

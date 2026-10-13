@@ -318,6 +318,20 @@ test('financial regression in local preview with rollback', { skip: !process.env
       await transactions.reopenPaymentBatch(ids[0],[...paymentIds],cashier);
       near((await summary()).expectedCash.NIO,before.expectedCash.NIO);
     });
+    await t.test('Pending USD purchase uses NIO received minus NIO change, not gross cash', async () => {
+      const g=await transactions.createBatch(batch([{amount:25.02,currencyCode:'USD',pendingName:'USD NET CHANGE'}],settlement()),{});
+      const id=(await client.query('select id_pendiente as id from temo.pagos_pendientes where id_transaccion=$1',[g.transactions[0].id])).rows[0].id;
+      const cash={...settlement(400,140),primaryRateKind:'VENTA',changeRateKind:'VENTA',primaryCounts:{...counts(400),USD:[{denomination:100,piles25:0,loose:2}]}};
+      await transactions.payPendingBatch(payPendingBatchSchema.parse({pendingIds:[id],method:'EFECTIVO',rates,settlement:cash}),cashier);
+      const detail=await transactions.pendingPaymentDetail(id,cashier);
+      const ids=detail.compensations.map(row=>row.id_abono);
+      const rows=(await purchases.list(cashier)).filter(row=>ids.includes(row.database_id));
+      assert.equal(rows.length,1);
+      near(rows[0].monto_comprado_usd,260/37);
+      near(rows[0].diferencia_nio,(260/37)*0.6);
+      await transactions.reopenPaymentBatch(id,ids,cashier);
+      assert.equal((await purchases.list(cashier)).filter(row=>ids.includes(row.database_id)).length,0);
+    });
     await t.test('Legacy single USD payment with USD cash is not a dollar purchase', async () => {
       const g=await transactions.createBatch(batch([{amount:84,currencyCode:'USD',pendingName:'USD LEGACY'}],settlement()),{});
       const id=(await client.query('select id_pendiente as id from temo.pagos_pendientes where id_transaccion=$1',[g.transactions[0].id])).rows[0].id;
@@ -361,6 +375,12 @@ test('financial regression in local preview with rollback', { skip: !process.env
         {items:[{movementCode:'RE',amount:100,currencyCode:'USD',settlement:settlement(3640)}],cash:settlement(),expected:0},
         {items:[{amount:100,currencyCode:'USD'}],cash:settlement(3640),expected:0},
         {items:[{amount:100,currencyCode:'USD'}],cash:{...settlement(3700),primaryRateKind:'VENTA'},expected:100},
+        {items:[{amount:182,currencyCode:'USD',settlement:{...settlement(),primaryRateKind:'VENTA'}},
+          {amount:25.02,currencyCode:'USD',settlement:{...settlement(400,140),primaryRateKind:'VENTA',changeRateKind:'VENTA',primaryCounts:{...counts(400),USD:[{denomination:100,piles25:0,loose:2}]}}}],cash:settlement(),expected:260/37},
+        {items:[{amount:68.92,currencyCode:'USD',settlement:{...settlement(700),primaryRateKind:'VENTA',primaryCounts:{...counts(700),USD:[{denomination:50,piles25:0,loose:1}]}}}],cash:settlement(),expected:700/37},
+        {items:[{amount:100,currencyCode:'USD'}],cash:{...settlement(400,400),primaryRateKind:'VENTA'},expected:0},
+        {items:[{amount:10,currencyCode:'USD'},{amount:10,currencyCode:'USD'}],cash:{...settlement(740),primaryRateKind:'VENTA'},expected:20},
+        {items:[{amount:100,currencyCode:'NIO'},{amount:10,currencyCode:'USD'}],cash:{...settlement(470),primaryRateKind:'VENTA'},expected:10},
         {items:[{movementCode:'RE',amount:150,currencyCode:'USD',settlement:{...settlement(),primaryCounts:{NIO:[],USD:[{denomination:50,piles25:0,loose:3}]}}},
           {amount:131,currencyCode:'USD',settlement:{...settlement(5000,190),primaryRateKind:'VENTA',changeRateKind:'VENTA',primaryCounts:{...counts(5000),USD:[{denomination:1,piles25:0,loose:1}]}}}],cash:settlement(),expected:130},
       ];
