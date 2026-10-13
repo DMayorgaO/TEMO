@@ -1,5 +1,9 @@
 # Reporte de compras USD y contexto de notificaciones
 
+> Rectificacion: el criterio de retiros incluido en 602c465 fue incorrecto.
+> Queda sustituido por REGLA_COMPRAS_USD_2026-10-13.md. Las remesas de
+> salida a tasa de compra no pertenecen al reporte de compras USD.
+
 ## Diagnostico
 
 - Consulta productiva de solo lectura: turno actual de Cristina TUR-000085

@@ -17,6 +17,9 @@ export class DollarPurchasesService {
         select
           t.id_transaccion,
           t.id_grupo_transacciones,
+          case when exists(select 1 from temo.arqueos a where a.id_transaccion=t.id_transaccion
+            and a.tipo in ('TRANSACCION_RECIBIDO','TRANSACCION_ENTREGADO'))
+            then t.id_transaccion else t.id_grupo_transacciones end as settlement_id,
           t.orden_grupo,
           t.fecha_transaccion,
           t.tasa_compra_usada,
@@ -48,37 +51,40 @@ export class DollarPurchasesService {
           )
       ),
       transaction_usd as (
-        select id_grupo_transacciones,
-          coalesce(sum(monto) filter(where direccion='ENTRA'),0) as income,
+        select settlement_id,
           coalesce(sum(monto) filter(where direccion='SALE'),0) as withdrawal
-        from valid_transactions where moneda='USD' group by id_grupo_transacciones
+        from valid_transactions where moneda='USD' group by settlement_id
       ), cash_usd as (
         /* Incluye arqueos compartidos y por transaccion; el neto descuenta vuelto en USD. */
-        select coalesce(t.id_grupo_transacciones,me.id_grupo_transacciones) as id_grupo_transacciones,
-          sum(case me.direccion when 'ENTRA' then me.monto else -me.monto end) as net_income
+        select coalesce(me.id_transaccion,me.id_grupo_transacciones) as settlement_id,
+          coalesce(sum(case me.direccion when 'ENTRA' then me.monto else -me.monto end)
+            filter(where m.codigo='USD'),0) as net_income,
+          coalesce(sum(case me.direccion when 'ENTRA' then me.monto else -me.monto end)
+            filter(where m.codigo='NIO'),0) as nio_income
         from temo.movimientos_efectivo me
         join temo.monedas m using(id_moneda)
         left join temo.transacciones t using(id_transaccion)
         left join temo.pagos_pendientes pp using(id_transaccion)
-        where m.codigo='USD' and me.es_reverso=false and me.id_abono_pendiente is null
+        where me.es_reverso=false and me.id_abono_pendiente is null
           and (me.id_transaccion is null or t.estado<>'ANULADA') and pp.id_pendiente is null
-        group by coalesce(t.id_grupo_transacciones,me.id_grupo_transacciones)
+        group by coalesce(me.id_transaccion,me.id_grupo_transacciones)
       ), group_coverage as (
-        select tu.id_grupo_transacciones,
+        select tu.settlement_id, coalesce(cu.nio_income,0) as nio_income,
           tu.withdrawal+greatest(coalesce(cu.net_income,0),0) as usd_coverage
-        from transaction_usd tu left join cash_usd cu using(id_grupo_transacciones)
+        from transaction_usd tu left join cash_usd cu using(settlement_id)
       ),
       usd_income as (
         select
           vt.*,
           gc.usd_coverage,
+          gc.nio_income,
           coalesce(sum(vt.monto) over (
-            partition by vt.id_grupo_transacciones
+            partition by vt.settlement_id
             order by vt.orden_grupo, vt.id_transaccion
             rows between unbounded preceding and 1 preceding
           ), 0) as previous_usd_income
         from valid_transactions vt
-        join group_coverage gc on gc.id_grupo_transacciones = vt.id_grupo_transacciones
+        join group_coverage gc using(settlement_id)
         where vt.moneda = 'USD' and vt.direccion = 'ENTRA'
       ),
       calculated as (
@@ -90,28 +96,7 @@ export class DollarPurchasesService {
           ) as purchased_usd
         from usd_income ui
       )
-      , withdrawal_coverage as (
-        /* Retiro USD pagado en NIO: descuenta depositos USD y dolares fisicos entregados. */
-        select tu.id_grupo_transacciones,
-          tu.income+greatest(-coalesce(cu.net_income,0),0) as usd_coverage
-        from transaction_usd tu left join cash_usd cu using(id_grupo_transacciones)
-      ), usd_withdrawals as (
-        select vt.*, wc.usd_coverage,
-          coalesce(sum(vt.monto) over (partition by vt.id_grupo_transacciones
-            order by vt.orden_grupo,vt.id_transaccion
-            rows between unbounded preceding and 1 preceding),0) as previous_usd_withdrawal
-        from valid_transactions vt join withdrawal_coverage wc using(id_grupo_transacciones)
-        where vt.moneda='USD' and vt.direccion='SALE'
-      ), withdrawal_purchases as (
-        select uw.*, greatest(uw.monto-greatest(uw.usd_coverage-uw.previous_usd_withdrawal,0),0) as purchased_usd
-        from usd_withdrawals uw
-      ), all_transaction_purchases as (
-        select id_transaccion,id_grupo_transacciones,orden_grupo,fecha_transaccion,
-          tasa_compra_usada,tasa_venta_usada,id_cajero,id_sucursal,purchased_usd from calculated
-        union all
-        select id_transaccion,id_grupo_transacciones,orden_grupo,fecha_transaccion,
-          tasa_compra_usada,tasa_venta_usada,id_cajero,id_sucursal,purchased_usd from withdrawal_purchases
-      ), cash_payments as (
+      , cash_payments as (
         select ap.*, pp.tipo, t.id_grupo_transacciones, t.orden_grupo,
           t.id_sucursal, s.id_cajero,
           coalesce(ap.id_lote_liquidacion, ap.id_abono) as lot
@@ -128,6 +113,8 @@ export class DollarPurchasesService {
             join temo.arqueos a on a.id_abono_pendiente = owner.id_abono
             where coalesce(owner.id_lote_liquidacion, owner.id_abono) = coalesce(ap.id_lote_liquidacion, ap.id_abono)
               and a.tipo = 'PENDIENTE_RECIBIDO'
+              and a.tipo_tasa = 'VENTA' and a.tasa_usada = ap.tasa_venta_usada
+              and a.tasa_usada > ap.tasa_compra_usada
           )
       ), pending_purchases as (
         select cp.*,
@@ -154,11 +141,17 @@ export class DollarPurchasesService {
         c.tasa_venta_usada,
         u.nombre_completo as cajero,
         s.nombre as sucursal
-      from all_transaction_purchases c
+      from calculated c
       join temo.grupos_transacciones g on g.id_grupo_transacciones = c.id_grupo_transacciones
       join temo.usuarios u on u.id_usuario = c.id_cajero
       join temo.sucursales s on s.id_sucursal = c.id_sucursal
       where c.purchased_usd > 0
+        and c.nio_income > 0
+        and exists(select 1 from temo.arqueos a
+          where (a.id_transaccion=c.id_transaccion or
+            (a.id_transaccion is null and a.id_grupo_transacciones=c.settlement_id))
+            and a.tipo='TRANSACCION_RECIBIDO' and a.tipo_tasa='VENTA'
+            and a.tasa_usada=c.tasa_venta_usada and a.tasa_usada>c.tasa_compra_usada)
       union all
       select p.id_abono as database_id,
         concat('TRA-', lpad(g.codigo_operacion::text, 6, '0'), '-', lpad(p.orden_grupo::text, 2, '0')) as id,

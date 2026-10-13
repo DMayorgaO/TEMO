@@ -349,16 +349,20 @@ test('financial regression in local preview with rollback', { skip: !process.env
       await transactions.reopenPaymentBatch(id,[...ids],cashier);
       near((await summary()).expectedCash.NIO,before.expectedCash.NIO);
     });
-    await t.test('USD withdrawals paid in NIO appear once; USD cash and group offsets are not purchases', async () => {
+    await t.test('Only USD income settled in NIO at sale rate counts; remittances and independent tabs stay separate', async () => {
       const before = await summary();
       const cases = [
-        {items:[{movementCode:'RE',amount:100,currencyCode:'USD'}],cash:settlement(3640),expected:100},
+        {items:[{movementCode:'RE',amount:100,currencyCode:'USD'}],cash:settlement(3640),expected:0},
         {items:[{movementCode:'RE',amount:100,currencyCode:'USD'}],cash:{...settlement(),primaryCounts:{NIO:[],USD:[{denomination:100,piles25:0,loose:1}]}},expected:0},
-        {items:[{movementCode:'RE',amount:200,currencyCode:'USD'}],cash:{...settlement(3640),primaryCounts:{...counts(3640),USD:[{denomination:100,piles25:0,loose:1}]}},expected:100},
+        {items:[{movementCode:'RE',amount:200,currencyCode:'USD'}],cash:{...settlement(3640),primaryCounts:{...counts(3640),USD:[{denomination:100,piles25:0,loose:1}]}},expected:0},
         {items:[{movementCode:'RE',amount:100,currencyCode:'USD'},{amount:100,currencyCode:'USD'}],cash:settlement(),expected:0},
-        {items:[{movementCode:'RE',amount:100,currencyCode:'USD'},{movementCode:'RE',amount:100,currencyCode:'USD'}],cash:{...settlement(3640),primaryCounts:{...counts(3640),USD:[{denomination:100,piles25:0,loose:1}]}},expected:100},
+        {items:[{movementCode:'RE',amount:100,currencyCode:'USD'},{movementCode:'RE',amount:100,currencyCode:'USD'}],cash:{...settlement(3640),primaryCounts:{...counts(3640),USD:[{denomination:100,piles25:0,loose:1}]}},expected:0},
         {items:[{amount:100,currencyCode:'USD'}],cash:{...settlement(),primaryCounts:{NIO:[],USD:[{denomination:100,piles25:0,loose:1}]}},expected:0},
-        {items:[{movementCode:'RE',amount:100,currencyCode:'USD',settlement:settlement(3640)}],cash:settlement(),expected:100},
+        {items:[{movementCode:'RE',amount:100,currencyCode:'USD',settlement:settlement(3640)}],cash:settlement(),expected:0},
+        {items:[{amount:100,currencyCode:'USD'}],cash:settlement(3640),expected:0},
+        {items:[{amount:100,currencyCode:'USD'}],cash:{...settlement(3700),primaryRateKind:'VENTA'},expected:100},
+        {items:[{movementCode:'RE',amount:150,currencyCode:'USD',settlement:{...settlement(),primaryCounts:{NIO:[],USD:[{denomination:50,piles25:0,loose:3}]}}},
+          {amount:131,currencyCode:'USD',settlement:{...settlement(5000,190),primaryRateKind:'VENTA',changeRateKind:'VENTA',primaryCounts:{...counts(5000),USD:[{denomination:1,piles25:0,loose:1}]}}}],cash:settlement(),expected:130},
       ];
       for (const item of cases) {
         const group = await transactions.createBatch(batch(item.items,item.cash),{});
