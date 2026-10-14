@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { flushSync } from 'react-dom';
 import { buildSafeExportTable, escapeExportHtml } from '../utils/export-html';
 import { downloadExport, exportFilename } from '../utils/export-download';
 import { createTemporaryPassword } from '../utils/temporary-password';
@@ -543,9 +544,6 @@ const navGroups: NavGroup[] = [
   },
   {
     item: { id: 'transactions', label: 'Transacciones', route: '/transacciones', icon: ReceiptText },
-  },
-  {
-    item: { id: 'general-consolidation', label: 'Saldos', route: '/saldos', icon: Scale },
   },
   {
     item: { id: 'pending', label: 'Pendientes', route: '/pendientes', icon: CheckCircle2 },
@@ -1414,6 +1412,7 @@ function getScreenFromHash(): ScreenId {
   if (currentRoute === '/login') {
     return 'login';
   }
+  if (currentRoute === '/saldos') return 'cash-count';
   return navItems.find((item) => item.route === currentRoute)?.id ?? 'dashboard';
 }
 
@@ -3616,7 +3615,7 @@ export function App() {
 
   return (
     <>
-    <main className={`app-shell ${isSidebarOpen ? 'app-shell--sidebar-open' : ''} ${isSidebarCollapsed ? 'app-shell--sidebar-collapsed' : ''}`}>
+    <main className={`app-shell ${activeScreen === 'cash-count' ? 'app-shell--cash-workspace' : ''} ${isSidebarOpen ? 'app-shell--sidebar-open' : ''} ${isSidebarCollapsed ? 'app-shell--sidebar-collapsed' : ''}`}>
       {/* Fondo mobile para cerrar el menu al tocar fuera de la barra lateral. */}
       <button
         type="button"
@@ -4036,8 +4035,6 @@ function ShiftClosureModal({
             <div className="cash-count-right-column">
               <TransactionCashCountTable currency="USD" denominations={cashDenominations.USD} focusScope="shift-close" pileDrafts={cashDraft} conversionRate={rate} onPileFieldChange={updateCash} />
               <div className="cash-count-adjustments shift-close-adjustments">
-                <div><strong>Compras de dólares</strong>{formatCashCountMoney(shift.dollarPurchases?.usd ?? 0, 'USD')}</div>
-                <div><strong>Diferencial por compras</strong>{formatCashCountMoney(shift.dollarPurchases?.differenceNio ?? 0, 'NIO')}</div>
                 <div><strong>Diferencia NIO</strong>{renderDifference(differenceNio, 'NIO', { positiveLabel: '' })}</div>
                 <div><strong>Diferencia USD</strong>{renderDifference(differenceUsd, 'USD', { positiveLabel: '' })}</div>
                 <label>
@@ -4846,12 +4843,12 @@ function CashCountScreen({ currentUser }: { currentUser: AuthUser }) {
   }
 
   return (
-    <section className="screen-stack">
+    <section className="screen-stack cash-workspace">
       <article className="panel">
         <div className="panel__header table-panel-header cash-count-header">
           <div className="cash-count-title-row">
             <div>
-              <p>Conteo fisico</p>
+              <p>{shift?.estado === 'CERRADO' ? 'Solo lectura' : 'Conteo fisico'}</p>
               <h2>Arqueo por denominacion</h2>
             </div>
             <div className="cash-rate-chip" aria-label="Tasa de cambio global">
@@ -4899,10 +4896,7 @@ function CashCountScreen({ currentUser }: { currentUser: AuthUser }) {
               <LockKeyhole size={17} />
               {shift?.solicitud_estado === 'PENDIENTE' ? 'Cierre solicitado' : 'Cierre'}
             </button>}
-          </div>
-        </div>
-
-        {isBoss && <fieldset className="consolidation-history-filters">
+        {isBoss && <details className="cash-history"><summary title={shift?.estado === 'CERRADO' ? `${shift.id} · ${shift.cajero} · ${shift.sucursal}` : 'Historial de turnos'}>{shift?.estado === 'CERRADO' ? shift.id : 'Historial de turnos'}</summary><fieldset className="consolidation-history-filters">
           <legend>Arqueos históricos</legend>
           <select aria-label="Sucursal histórica" value={historyBranch} onChange={event => { setHistoryBranch(event.target.value); setHistoryCashier(''); }}>
             <option value="">Sucursal</option>
@@ -4917,11 +4911,13 @@ function CashCountScreen({ currentUser }: { currentUser: AuthUser }) {
             <option value="">{historicalMatches.length ? 'Seleccionar turno' : 'Sin coincidencias'}</option>
             {historicalMatches.map(item => <option key={item.database_id} value={item.database_id}>{item.id} · {item.cajero} · {item.fecha_apertura ? new Date(item.fecha_apertura).toLocaleString('es-NI', { timeZone: 'America/Managua' }) : ''}</option>)}
           </select>
-        </fieldset>}
-        {isBoss && shift?.estado === 'CERRADO' && <p className="cash-count-status">{shift.id} · {shift.cajero} · {shift.sucursal} · Cerrado · Solo lectura</p>}
+        </fieldset></details>}
+          </div>
+        </div>
         {!shift && isLoaded && <p className="cash-count-status">No tiene un turno abierto. El arqueo se habilitará al abrir su siguiente turno.</p>}
         {message && <p className="cash-count-status" role="status">{message}</p>}
 
+        {shift && <ShiftConsolidation key={shift.database_id} shift={shift} onSaved={updated => setShift(current => current?.database_id === updated.database_id ? updated : current)} />}
         <div className="transaction-cash-count-grid cash-count-live-grid">
           <TransactionCashCountTable
             currency="NIO"
@@ -4945,8 +4941,6 @@ function CashCountScreen({ currentUser }: { currentUser: AuthUser }) {
             onPileFieldChange={updatePileField}
           />
           <div className="cash-count-adjustments">
-            <div><strong>Compras de dólares</strong>{formatCashCountMoney(shift?.dollarPurchases?.usd ?? 0, 'USD')}</div>
-            <div><strong>Diferencial por compras</strong>{formatCashCountMoney(shift?.dollarPurchases?.differenceNio ?? 0, 'NIO')}</div>
             <div><strong>Diferencia NIO</strong>{renderDifference(differenceNio, 'NIO', { positiveLabel: '' })}</div>
             <div><strong>Diferencia USD</strong>{renderDifference(differenceUsd, 'USD', { positiveLabel: '' })}</div>
             <label>
@@ -5141,8 +5135,10 @@ function AnalogTimePicker({ value, label, onChange, onClose }: { value: string; 
 function PeriodFilterControl({ value, onChange, includeDates }: { value: PeriodFilter; onChange: (value: PeriodFilter) => void; includeDates: boolean }) {
   const [clockField, setClockField] = useState<'startTime' | 'endTime' | null>(null);
   const active = Object.values(value).some(Boolean);
+  const today = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Managua' });
+  const todaySelected = value.startDate === today && value.endDate === today;
   return <div className="period-filter" aria-label="Filtro por periodo">
-    {includeDates && <><label><span>Desde</span><input name="period-start-date" type="date" value={value.startDate} onChange={(event) => onChange({ ...value, startDate: event.target.value })}/></label><label><span>Hasta</span><input name="period-end-date" type="date" value={value.endDate} min={value.startDate} onChange={(event) => onChange({ ...value, endDate: event.target.value })}/></label><button type="button" className="secondary-button period-filter__today" onClick={() => { const today = new Date().toLocaleDateString('en-CA', { timeZone:'America/Managua' }); onChange({ ...value, startDate:today, endDate:today }); }}><CalendarDays size={16}/>Hoy</button></>}
+    {includeDates && <><label><span>Desde</span><input name="period-start-date" type="date" value={value.startDate} onChange={(event) => onChange({ ...value, startDate: event.target.value })}/></label><label><span>Hasta</span><input name="period-end-date" type="date" value={value.endDate} min={value.startDate} onChange={(event) => onChange({ ...value, endDate: event.target.value })}/></label><button type="button" className="secondary-button period-filter__today" aria-pressed={todaySelected} onClick={() => onChange({ ...value, startDate:today, endDate:today })}><CalendarDays size={16}/>Hoy</button></>}
     <button type="button" className="period-filter__time" onClick={() => setClockField('startTime')}><Clock3 size={16}/><span>Hora inicial</span><strong>{value.startTime || '--:--'}</strong></button>
     <button type="button" className="period-filter__time" onClick={() => setClockField('endTime')}><Clock3 size={16}/><span>Hora final</span><strong>{value.endTime || '--:--'}</strong></button>
     {active && <button type="button" className="icon-button" title="Limpiar periodo" onClick={() => onChange(emptyPeriodFilter)}><X size={16}/></button>}
@@ -6308,6 +6304,79 @@ function PendingScreen({ currentUser }: { currentUser: AuthUser }) {
   );
 }
 
+function ShiftConsolidation({ shift, onSaved }: { shift: ShiftDetail; onSaved: (shift: ShiftDetail) => void }) {
+  const [drafts, setDrafts] = useState<Record<string, ConsolidationBalance>>({});
+  const draftsRef = useRef(drafts);
+  const writes = useRef(new Map<string, Promise<void>>());
+  const queued = useRef(new Map<string, ConsolidationBalance>());
+  const activeShift = useRef(shift.database_id);
+  const [error, setError] = useState('');
+  useEffect(() => {
+    activeShift.current = shift.database_id;
+    draftsRef.current = {};
+    setDrafts({});
+    setError('');
+    return () => { activeShift.current = ''; };
+  }, [shift.database_id]);
+  const source = mapApiShiftBalancesToConsolidation(shift.balances);
+  const accounts = mapApiShiftBalanceAccounts(shift.balances);
+  const balances = Object.fromEntries(Object.entries(source).map(([key, row]) => [key, { ...row, ...drafts[key] }]));
+  const readOnly = shift.estado === 'CERRADO';
+  function update(currency: CashCurrency, entity: string, field: 'initial' | 'system' | 'systemIncome' | 'systemExpense', value: string) {
+    if (readOnly || field === 'initial') return;
+    const key = getConsolidationKey(currency, entity);
+    const next = { ...draftsRef.current, [key]: { ...draftsRef.current[key], [field]: field === 'system' ? normalizeSignedAccountingMoneyRaw(value) : normalizeAccountingMoneyRaw(value) } };
+    draftsRef.current = next;
+    setDrafts(next);
+  }
+  function commit(currency: CashCurrency, entity: string) {
+    const key = getConsolidationKey(currency, entity);
+    const snapshot = draftsRef.current[key];
+    if (readOnly || !snapshot || queued.current.get(key) === snapshot || !accounts[key]) return;
+    queued.current.set(key, snapshot);
+    const row = { ...source[key], ...snapshot };
+    const teledolar = normalizeLookupValue(entity) === 'teledolar';
+    const target = shift.database_id;
+    const request = (writes.current.get(key) ?? Promise.resolve()).then(async () => {
+      if (activeShift.current !== target) return;
+      const others = shift.balances.filter(item => item.currency === currency && item.entity === entity && item.account !== accounts[key]);
+      const income = parseMoneyValue(row.systemIncome) - others.reduce((sum, item) => sum + Number(item.system_income ?? 0), 0);
+      const expense = parseMoneyValue(row.systemExpense) - others.reduce((sum, item) => sum + Number(item.system_expense ?? 0), 0);
+      if (teledolar && (income < 0 || expense < 0)) throw new Error('El total es menor que los valores de las otras cuentas de esta entidad. Revise las cuentas antes de guardar.');
+      // La celda resume el banco; conserva las otras cuentas al ajustar la primera.
+      const amount = teledolar ? income - expense : parseMoneyValue(row.system) - others.reduce((sum, item) => sum + Number(item.system ?? item.calculated ?? item.initial ?? 0), 0);
+      const updated = await apiRequest<ShiftDetail>(`/shifts/${target}/account-balances`, { method: 'PUT', body: JSON.stringify({ balances: [{
+        account: accounts[key], amount, income: teledolar ? income : undefined, expense: teledolar ? expense : undefined,
+      }] }) });
+      if (activeShift.current !== target) return;
+      onSaved(updated);
+      setError('');
+      if (draftsRef.current[key] === snapshot) {
+        const next = { ...draftsRef.current }; delete next[key];
+        draftsRef.current = next; setDrafts(next);
+      }
+    }).catch(failure => {
+      if (activeShift.current === target) setError(failure instanceof Error ? failure.message : 'No fue posible guardar el saldo.');
+    }).finally(() => { if (queued.current.get(key) === snapshot) queued.current.delete(key); });
+    writes.current.set(key, request);
+  }
+  return <div className="consolidation-stack cash-workspace-balances">
+    {(['NIO', 'USD'] as CashCurrency[]).map(currency => <ConsolidationTable key={currency}
+      balances={balances} currency={currency} entities={[...new Set(shift.balances.filter(row => row.currency === currency).map(row => row.entity))]}
+      summary={summarizeShiftBalancesByEntity(shift.balances, currency)} title={`Consolidado en ${currency === 'NIO' ? 'Cordobas (NIO)' : 'Dolares (USD)'}`}
+      readOnly={readOnly} onBalanceChange={update} onCommit={commit}
+      onMoneyInputPaste={(event, money, entity, field) => { event.preventDefault(); update(money, entity, field, event.clipboardData.getData('text')); }}
+      onMoneyInputKeyDown={(event, money, entity, field, value) => {
+        if (event.key === 'Enter') { event.preventDefault(); event.currentTarget.blur(); return; }
+        const next = field === 'system' ? getSignedAccountingMoneyKeyValue(event, value) : getAccountingMoneyKeyValue(event, value);
+        if (next === undefined) return;
+        event.preventDefault();
+        if (next !== null) { update(money, entity, field, next); queueAccountingMoneyCaret(event, next); }
+      }} />)}
+    {error && <p role="alert" className="login-error">{error}</p>}
+  </div>;
+}
+
 function GeneralConsolidationScreen() {
   const authenticatedUser = readAuthenticatedUser();
   const isCashier = authenticatedUser?.roleCode === 'CAJERO';
@@ -6647,6 +6716,7 @@ function ConsolidationTable({
   onBalanceChange,
   onMoneyInputKeyDown,
   onMoneyInputPaste,
+  onCommit,
 }: {
   balances: Record<string, ConsolidationBalance>;
   currency: CashCurrency;
@@ -6654,6 +6724,7 @@ function ConsolidationTable({
   summary: Record<string, { income: number; expense: number }>;
   title: string;
   readOnly?: boolean;
+  onCommit?: (currency: CashCurrency, entity: string) => void;
   onBalanceChange: (currency: CashCurrency, entity: string, field: 'initial' | 'system' | 'systemIncome' | 'systemExpense', value: string) => void;
   onMoneyInputKeyDown: (
     event: KeyboardEvent<HTMLInputElement>,
@@ -6669,6 +6740,23 @@ function ConsolidationTable({
     field: 'initial' | 'system' | 'systemIncome' | 'systemExpense',
   ) => void;
 }) {
+  const [editingField, setEditingField] = useState('');
+  function inputValue(key: string, value?: string) {
+    return onCommit && editingField === key ? String(value ?? '').replace(/,/g, '') : formatConsolidationInput(value);
+  }
+  function inputFocus(event: React.FocusEvent<HTMLInputElement>, key: string) {
+    // Cambia a texto editable antes de seleccionar; evita mover la seleccion al reformatear.
+    if (onCommit) flushSync(() => setEditingField(key));
+    event.currentTarget.select();
+  }
+  function inputBlur(entity: string) {
+    setEditingField('');
+    onCommit?.(currency, entity);
+  }
+  function inputKeyDown(event: KeyboardEvent<HTMLInputElement>, entity: string, field: 'system' | 'systemIncome' | 'systemExpense', value?: string) {
+    if (!onCommit) { onMoneyInputKeyDown(event, currency, entity, field, value); return; }
+    if (event.key === 'Enter') { event.preventDefault(); event.currentTarget.blur(); }
+  }
   const totals = entities.reduce(
     (acc, entity) => {
       const key = getConsolidationKey(currency, entity);
@@ -6757,24 +6845,26 @@ function ConsolidationTable({
                       <label>Pagos
                         <span className="consolidation-input-wrap"><span>{getCurrencySymbol(currency)}</span><input
                           className="consolidation-input" inputMode="decimal"
-                          value={formatConsolidationInput(rowBalance.systemIncome)} readOnly={readOnly}
+                          value={inputValue(`${key}:income`, rowBalance.systemIncome)} readOnly={readOnly}
                           onChange={(event) => onBalanceChange(currency, entity, 'systemIncome', event.target.value)}
-                          onKeyDown={(event) => onMoneyInputKeyDown(event, currency, entity, 'systemIncome', rowBalance.systemIncome)}
+                          onKeyDown={(event) => inputKeyDown(event, entity, 'systemIncome', rowBalance.systemIncome)}
                           onPaste={(event) => onMoneyInputPaste(event, currency, entity, 'systemIncome')}
-                          onFocus={(event) => event.currentTarget.select()}
+                          onFocus={(event) => inputFocus(event, `${key}:income`)}
                           aria-label={`Saldo sistema Pagos ${entity} ${currency}`}
+                          onBlur={() => inputBlur(entity)}
                           placeholder="0.00"
                         /></span>
                       </label>
                       <label>Envíos
                         <span className="consolidation-input-wrap"><span>{getCurrencySymbol(currency)}</span><input
                           className="consolidation-input" inputMode="decimal"
-                          value={formatConsolidationInput(rowBalance.systemExpense)} readOnly={readOnly}
+                          value={inputValue(`${key}:expense`, rowBalance.systemExpense)} readOnly={readOnly}
                           onChange={(event) => onBalanceChange(currency, entity, 'systemExpense', event.target.value)}
-                          onKeyDown={(event) => onMoneyInputKeyDown(event, currency, entity, 'systemExpense', rowBalance.systemExpense)}
+                          onKeyDown={(event) => inputKeyDown(event, entity, 'systemExpense', rowBalance.systemExpense)}
                           onPaste={(event) => onMoneyInputPaste(event, currency, entity, 'systemExpense')}
-                          onFocus={(event) => event.currentTarget.select()}
+                          onFocus={(event) => inputFocus(event, `${key}:expense`)}
                           aria-label={`Saldo sistema Envíos ${entity} ${currency}`}
+                          onBlur={() => inputBlur(entity)}
                           placeholder="0.00"
                         /></span>
                       </label>
@@ -6783,13 +6873,15 @@ function ConsolidationTable({
                       <input
                         className="consolidation-input"
                         inputMode="decimal"
-                        value={formatConsolidationInput(rowBalance.system)}
+                        aria-label={`Saldo sistema ${entity} ${currency}`}
+                        onBlur={() => inputBlur(entity)}
+                        value={inputValue(`${key}:system`, rowBalance.system)}
                         readOnly={readOnly}
                         onChange={(event) => onBalanceChange(currency, entity, 'system', event.target.value)}
-                        onKeyDown={(event) => onMoneyInputKeyDown(event, currency, entity, 'system', rowBalance.system)}
+                        onKeyDown={(event) => inputKeyDown(event, entity, 'system', rowBalance.system)}
                         onPaste={(event) => onMoneyInputPaste(event, currency, entity, 'system')}
-                        onFocus={(event) => event.currentTarget.select()}
-                        onClick={(event) => event.currentTarget.select()}
+                        onFocus={(event) => inputFocus(event, `${key}:system`)}
+                        onClick={(event) => { if (!onCommit) event.currentTarget.select(); }}
                         placeholder="0.00"
                       />
                     </div>}

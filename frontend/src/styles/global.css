@@ -24,6 +24,165 @@
   --danger: #b42318;
 }
 
+.period-filter__today[aria-pressed="true"],
+.period-filter__today[aria-pressed="true"]:hover,
+.report-today-button[aria-pressed="true"],
+.report-today-button[aria-pressed="true"]:hover {
+  background: #0f766e;
+  border-color: #0f766e;
+  box-shadow: inset 0 0 0 1px #075e58;
+  color: #fff;
+  font-weight: 750;
+}
+
+.app-shell--cash-workspace .workspace { padding: 10px 14px; }
+.app-shell--cash-workspace .topbar { margin-bottom: 5px; min-height: 36px; }
+.app-shell--cash-workspace .topbar h1 { font-size: 19px; letter-spacing: 0; }
+.cash-workspace > .panel { gap: 5px; padding: 8px; }
+.cash-workspace .cash-count-header { gap: 8px; margin-bottom: 6px; padding: 0; }
+.cash-workspace .cash-count-title-row { flex: 1; grid-template-columns: minmax(95px,.7fr) 112px repeat(3,minmax(0,1fr)); gap: 6px; min-width: 0; }
+.cash-workspace .cash-count-title-row h2 { font-size: 14px; }
+.cash-workspace .cash-count-title-row p { font-size: 11px; }
+.cash-workspace .cash-rate-chip { font-size: 11px; min-width: 108px; padding: 4px 6px; }
+.cash-workspace .cash-rate-chip span { font-size: 10px; white-space: nowrap; }
+.cash-workspace .cash-rate-chip strong { font-size: 12px; white-space: nowrap; }
+.app-shell--cash-workspace .profile-menu-trigger { min-height: 36px; padding: 3px 5px; }
+.app-shell--cash-workspace .topbar > .icon-button { min-height: 34px; height: 34px; }
+.app-shell--cash-workspace .profile-avatar { height: 32px; width: 32px; }
+.app-shell--cash-workspace .topbar p { font-size: 11px; }
+.cash-workspace .cash-opening-chip { font-size: 11px; grid-template-columns: minmax(0,1fr); gap: 0; min-width: 0; padding: 2px 5px; }
+.cash-workspace .cash-opening-chip div { grid-row: auto; }
+.cash-workspace .cash-opening-chip span { font-size: 10px; line-height: 12px; white-space: nowrap; }
+.cash-workspace .cash-opening-chip small { font-size: 9px; line-height: 11px; }
+.cash-workspace .cash-opening-chip strong { font-size: 12px; line-height: 13px; white-space: nowrap; }
+.cash-workspace .cash-count-header .action-row { gap: 5px; }
+.cash-workspace .cash-count-header button { font-size: 12px; min-height: 30px; padding: 4px 8px; }
+.cash-workspace .cash-shift-selector { font-size: 11px; }
+.cash-workspace .cash-shift-selector select { max-width: 170px; min-height: 27px; padding: 3px; }
+.cash-workspace .consolidation-history-filters { gap: 6px; margin: 3px 0 6px; padding: 3px 6px; }
+.cash-workspace .consolidation-history-filters legend { font-size: 11px; }
+.cash-workspace .consolidation-history-filters select,
+.cash-workspace .consolidation-history-filters input { font-size: 12px; min-height: 25px; padding: 2px 4px; }
+.cash-workspace .cash-count-status { font-size: 12px; margin: 3px 0; }
+.cash-workspace .cash-workspace-balances { gap: 6px; margin: 0 auto; max-width: 1040px; width: 100%; }
+.cash-history { position: relative; font-size: 12px; }
+.cash-history summary { cursor: pointer; width: max-content; padding: 2px 4px; }
+.cash-history[open] > fieldset { background: #fff; box-shadow: 0 5px 16px #17212b20; position: absolute; right: 0; top: 22px; width: min(720px,calc(100vw - 64px)); z-index: 5; }
+.cash-workspace .consolidation-card { border-radius: 4px; }
+.cash-workspace .consolidation-card__header { min-height: 22px; padding: 2px 6px; }
+.cash-workspace .consolidation-card__header h3 { font-size: 12px; line-height: 16px; margin: 0; }
+.cash-workspace .consolidation-table { min-width: 0; }
+.cash-workspace .consolidation-col-bank { width: 10%; }
+.cash-workspace .consolidation-col-money { width: 14%; }
+.cash-workspace .consolidation-col-money:nth-child(6) { width: 18%; }
+.cash-workspace .consolidation-col-difference { width: 16%; }
+.cash-workspace .consolidation-table th { font-size: 11px; line-height: 15px; padding: 1px 3px; }
+.cash-workspace .consolidation-table td,
+.cash-workspace .consolidation-table tfoot td { font-size: 12px; height: 19px; line-height: 16px; padding: 1px 4px; }
+.cash-workspace .money-split { gap: 3px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.cash-workspace .consolidation-input-wrap { gap: 3px; min-height: 17px; padding: 0 2px; }
+.cash-workspace .consolidation-input { font-size: 12px; height: 17px; min-height: 17px; padding: 0; }
+.cash-workspace .teledolar-system-inputs { gap: 1px; }
+.cash-workspace .teledolar-system-inputs label { font-size: 10px; grid-template-columns: 32px minmax(0,1fr); gap: 2px; }
+.cash-workspace .teledolar-differences { gap: 1px; }
+.cash-workspace .difference-badge { font-size: 11px; min-height: 16px; padding: 0 4px; }
+.cash-workspace .cash-count-live-grid { gap: 10px; grid-template-columns: repeat(2,minmax(0,1fr)); margin: 0 auto; max-width: 900px; padding: 0; }
+.cash-workspace .cash-workspace-balances + .cash-count-live-grid { margin-top: 30px; }
+.cash-workspace .consolidation-table td,
+.cash-workspace .consolidation-table td *,
+.cash-workspace .transaction-cash-table__row *,
+.cash-workspace .transaction-cash-table__footer-row *,
+.cash-workspace .transaction-cash-card__total { font-weight: 700; }
+.cash-workspace .cash-count-right-column { gap: 5px; }
+.cash-workspace .transaction-cash-card__header { font-size: 12px; min-height: 21px; padding: 2px 5px; }
+.cash-workspace .transaction-cash-card__header strong,
+.cash-workspace .transaction-cash-card__total { font-size: 12px; }
+.cash-workspace .transaction-cash-table__header-row,
+.cash-workspace .transaction-cash-table__row { grid-template-columns: 38px 55px minmax(56px,1fr) 115px 115px; }
+.cash-workspace .transaction-cash-table__header-row > *,
+.cash-workspace .transaction-cash-table__row > * { font-size: 12px; line-height: 16px; padding: 0 3px; }
+.cash-workspace .transaction-cash-table__header-row > * { font-size: 10px; }
+.cash-workspace .transaction-cash-entry-wrap .transaction-cash-entry { font-size: 12px; height: 16px; min-height: 16px; padding: 0 2px; }
+.cash-workspace .transaction-cash-table__footer-row { font-size: 12px; min-height: 18px; }
+.cash-workspace .transaction-cash-table__footer-row > * { font-size: 12px; line-height: 16px; padding: 1px 4px; }
+.cash-workspace .cash-count-adjustments { max-width: none; }
+.cash-workspace .cash-count-adjustments > div { font-size: 12px; min-height: 21px; padding: 2px 6px; }
+.cash-workspace .cash-count-adjustments > label { font-size: 11px; min-height: 40px; padding: 2px 6px; }
+.cash-workspace .cash-count-adjustments button { font-size: 11px; min-height: 25px; padding: 3px 5px; }
+.cash-workspace .cash-change-entry input { font-size: 12px; min-height: 23px; padding: 2px 4px; }
+.cash-workspace .cash-change-entry span { padding: 2px 4px; }
+.cash-workspace .difference-badge { vertical-align: middle; line-height: 14px; }
+
+@media (min-width: 1100px) and (min-height: 900px) {
+  .cash-workspace .consolidation-table td,
+  .cash-workspace .consolidation-table tfoot td { font-size: 13px; height: 23px; }
+  .cash-workspace .consolidation-input { font-size: 13px; height: 20px; }
+  .cash-workspace .transaction-cash-table__row > * { font-size: 13px; line-height: 20px; }
+  .cash-workspace .transaction-cash-entry-wrap .transaction-cash-entry { font-size: 13px; height: 22px; }
+}
+
+@media (max-width: 1050px) {
+  .cash-workspace .cash-count-title-row { grid-template-columns: repeat(2,minmax(0,1fr)); }
+  .cash-workspace .cash-count-title-row > div:first-child { grid-column: 1 / -1; }
+  .cash-workspace .cash-count-header { display: grid; }
+  .cash-workspace .cash-count-live-grid { grid-template-columns: 1fr; max-width: 470px; }
+  .cash-workspace .consolidation-table thead { position: absolute; clip-path: inset(50%); width: 1px; height: 1px; overflow: hidden; }
+  .cash-workspace .consolidation-table colgroup { display: none; }
+  .cash-workspace .consolidation-table tbody,
+  .cash-workspace .consolidation-table tfoot { display: block; }
+  .cash-workspace .consolidation-table tr { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); border-bottom: 1px solid var(--line); }
+  .cash-workspace .consolidation-table td { height: auto; min-width: 0; padding: 4px 6px; }
+  .cash-workspace .consolidation-table td:first-child { grid-column: 1 / -1; }
+  .cash-workspace .consolidation-table td:not(:first-child)::before { display: block; font-size: 11px; font-weight: 500; color: #475569; }
+  .cash-workspace .consolidation-table td:nth-child(2)::before { content: 'Saldo inicial'; }
+  .cash-workspace .consolidation-table td:nth-child(3)::before { content: 'Ingresos'; }
+  .cash-workspace .consolidation-table td:nth-child(4)::before { content: 'Egresos'; }
+  .cash-workspace .consolidation-table td:nth-child(5)::before { content: 'Saldo final'; }
+  .cash-workspace .consolidation-table td:nth-child(6)::before { content: 'Saldo sistema'; }
+  .cash-workspace .consolidation-table td:nth-child(7)::before { content: 'Diferencia'; }
+  .cash-workspace .transaction-cash-table__header-row,
+  .cash-workspace .transaction-cash-table__row { grid-template-columns: 32px 45px minmax(48px,1fr) 95px 95px; }
+}
+
+@media (min-width: 1100px) and (max-height: 850px) {
+  .app-shell--cash-workspace .workspace { padding-block: 4px; }
+  .app-shell--cash-workspace .topbar h1 { line-height: 22px; }
+  .app-shell--cash-workspace .topbar p { line-height: 12px; }
+  .app-shell--cash-workspace .profile-menu-trigger { padding-block: 1px; }
+  .cash-workspace > .panel { gap: 3px; padding-block: 4px; }
+  .cash-workspace .cash-count-title-row h2 { line-height: 17px; }
+  .cash-workspace .cash-rate-chip { gap: 1px; }
+  .cash-workspace .cash-rate-chip span { line-height: 11px; }
+  .cash-workspace .cash-rate-chip strong { line-height: 13px; }
+  .cash-workspace .cash-workspace-balances { gap: 4px; margin-bottom: 0; }
+  .cash-workspace .consolidation-card__header { min-height: 18px; padding-block: 1px; }
+  .cash-workspace .consolidation-table th { line-height: 13px; }
+  .cash-workspace .consolidation-table td,
+  .cash-workspace .consolidation-table tfoot td { height: 17px; line-height: 14px; padding-block: 0; }
+  .cash-workspace .consolidation-input-wrap { min-height: 15px; }
+  .cash-workspace .consolidation-input { height: 15px; min-height: 15px; }
+  .cash-workspace .consolidation-table .difference-badge { display: flex; justify-content: center; height: 14px; min-height: 14px; line-height: 14px; }
+  .cash-workspace .transaction-cash-card__header { min-height: 20px; padding-block: 1px; }
+  .cash-workspace .transaction-cash-table__header-row > *,
+  .cash-workspace .transaction-cash-table__row > * { line-height: 14px; }
+  .cash-workspace .transaction-cash-entry-wrap .transaction-cash-entry { height: 15px; min-height: 15px; }
+  .cash-workspace .transaction-cash-table__footer-row { min-height: 15px; }
+  .cash-workspace .transaction-cash-table__footer-row > * { line-height: 14px; padding-block: 0; }
+  .cash-workspace .cash-count-right-column { gap: 3px; }
+  .cash-workspace .cash-count-adjustments > div { min-height: 18px; padding-block: 0; }
+  .cash-workspace .cash-count-adjustments > label { min-height: 36px; padding-block: 1px; }
+}
+
+@media (min-width: 1100px) and (max-height: 680px) {
+  .cash-workspace .consolidation-table td,
+  .cash-workspace .consolidation-table tfoot td { height: 15px; line-height: 13px; }
+  .cash-workspace .consolidation-input-wrap { min-height: 13px; }
+  .cash-workspace .consolidation-input { height: 13px; min-height: 13px; }
+  .cash-workspace .consolidation-table .difference-badge { height: 12px; min-height: 12px; line-height: 12px; }
+  .cash-workspace .transaction-cash-table__row > * { line-height: 13px; }
+  .cash-workspace .transaction-cash-entry-wrap .transaction-cash-entry { height: 13px; min-height: 13px; }
+}
+
 * {
   /* Evita calculos inesperados de ancho cuando los paneles tienen borde y padding. */
   box-sizing: border-box;

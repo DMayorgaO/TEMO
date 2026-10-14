@@ -213,7 +213,7 @@ export function AdminDashboard({ request }: { request: Request }) {
       </div>
       <div className="report-top">
         <section className="report-section"><header><h2>Transacciones del día <span>{daily.reduce((sum, row) => sum + row.total, 0)}</span></h2></header>
-          <div className="report-day-filter"><label>Día<input type="date" aria-label="Día de transacciones" value={day || data.tableDay} onChange={e => setDay(e.target.value)} /></label><button className="report-today-button" onClick={() => setDay('')}><CalendarDays size={14} />Hoy</button></div>
+          <div className="report-day-filter"><label>Día<input type="date" aria-label="Día de transacciones" value={day || data.tableDay} onChange={e => setDay(e.target.value)} /></label><button className="report-today-button" aria-pressed={(day || data.tableDay) === data.today} onClick={() => setDay('')}><CalendarDays size={14} />Hoy</button></div>
           <ReportTable headers={['Sucursal', 'Cajero', 'C$', '$', 'Total']} rows={daily.map(row => ({ id: `${row.branch_id}:${row.cashier_id}`, values: [row.branch, row.cashier, row.nio, row.usd, row.total] }))} selected={filter?.cashier ? `${filter.branch}:${filter.cashier}` : undefined} onSelect={(id, column) => {
             const row = daily.find(row => `${row.branch_id}:${row.cashier_id}` === id)!;
             setFilter({ branch: row.branch_id, cashier: column === 1 ? row.cashier_id : undefined, label: column === 1 ? `${row.branch} · ${row.cashier}` : row.branch });
