@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { MouseEvent, ReactNode } from 'react';
-import { CalendarDays, Download, RefreshCw, X } from 'lucide-react';
-import { bankBalances, cashierCounts, filterCounts, reconciliationRows, reconciliationTotal } from './admin-dashboard-data';
+import type { PointerEvent, ReactNode } from 'react';
+import { CalendarDays, Download, RefreshCw, SquareCheckBig, X } from 'lucide-react';
+import { bankBalances, cashierCounts, filterCounts, reconciliationRows, reconciliationTotal, selectDayRange, weekdayLabel } from './admin-dashboard-data';
 import type { Currency, DashboardData, ReconciliationRow } from './admin-dashboard-data';
 import './admin-dashboard.css';
 import { downloadExport, exportFilename } from '../utils/export-download';
@@ -61,6 +61,10 @@ export function AdminDashboard({ request }: { request: Request }) {
   const [data, setData] = useState<DashboardData | null>(null);
   const [range, setRange] = useState({ from: '', to: '' });
   const [day, setDay] = useState('');
+  const [selectedDays, setSelectedDays] = useState<string[]>([]);
+  const [hoveredDay, setHoveredDay] = useState<{ day: string; count: number; x: number } | null>(null);
+  const drag = useRef<{ start: number; base: string[] } | null>(null);
+  const keyboardIndex = useRef(0);
   const [banks, setBanks] = useState<string[]>([]);
   const [selectedCurrencies, setSelectedCurrencies] = useState<Currency[]>([]);
   const [filter, setFilter] = useState<{ branch: string; cashier?: string; label: string } | null>(null);
@@ -99,7 +103,10 @@ export function AdminDashboard({ request }: { request: Request }) {
   }, [refresh]);
 
   const filteredCounts = data ? filterCounts(data.counts, banks, selectedCurrencies) : [];
-  const daily = data ? cashierCounts(data, filteredCounts, data.tableDay) : [];
+  const visibleSelection = selectedDays.filter(value => data && value >= data.from && value <= data.to);
+  const tableDays = visibleSelection.length ? visibleSelection : data ? [day || data.tableDay] : [];
+  const selectionKey = JSON.stringify(tableDays);
+  const daily = data ? cashierCounts(data, filteredCounts, tableDays) : [];
   const points: { day: string; count: number }[] = [];
   if (data) {
     for (let date = data.from; date <= data.to;) {
@@ -112,7 +119,7 @@ export function AdminDashboard({ request }: { request: Request }) {
   useEffect(() => {
     const element = canvas.current; if (!element || !data) return;
     const draw = (target = element, outputWidth = element.clientWidth) => {
-      const width = Math.max(280, outputWidth), height = 170, scale = 2;
+      const width = Math.max(280, outputWidth), height = Math.max(250, element.clientHeight), scale = 2;
       target.width = width * scale; target.height = height * scale;
       const ctx = target.getContext('2d'); if (!ctx) return;
       ctx.scale(scale, scale); ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, width, height);
@@ -124,8 +131,9 @@ export function AdminDashboard({ request }: { request: Request }) {
       fitText(`${filter?.label || 'Todas las sucursales'} · ${dateLabel(data.from)} - ${dateLabel(data.to)}`, 16);
       ctx.font = '10px sans-serif'; fitText(chartFilter, 30);
       const values = JSON.parse(chartKey) as typeof points;
+      const selection = new Set(JSON.parse(selectionKey) as string[]);
       const top = Math.ceil(Math.max(4, ...values.map(p => p.count)) / 4) * 4;
-      const left = 38, right = width - 12, bottom = 140, chartHeight = 95;
+      const left = 38, right = width - 12, bottom = height - 30, chartHeight = bottom - 45;
       ctx.textAlign = 'right'; ctx.font = '11px sans-serif';
       for (let tick = 0; tick <= 4; tick++) {
         const y = bottom - chartHeight * tick / 4; ctx.strokeStyle = '#e1e9e9'; ctx.beginPath(); ctx.moveTo(left, y); ctx.lineTo(right, y); ctx.stroke();
@@ -134,26 +142,35 @@ export function AdminDashboard({ request }: { request: Request }) {
       const step = (right - left) / Math.max(1, values.length);
       values.forEach((point, index) => {
         const x = left + step * index + step * .2, h = point.count / top * chartHeight;
-        ctx.fillStyle = point.day === data.tableDay ? '#1875a1' : '#138477'; ctx.fillRect(x, bottom - h, step * .6, h);
+        if (selection.has(point.day)) {
+          ctx.fillStyle = '#e3eff9'; ctx.fillRect(left + step * index, bottom + 3, step, 24);
+          ctx.fillStyle = '#1875a1'; ctx.fillRect(left + step * index + 2, bottom + 27, Math.max(1, step - 4), 2);
+        }
+        if (point.count > 0) {
+          ctx.fillStyle = selection.has(point.day) ? '#1875a1' : '#138477'; ctx.fillRect(x, bottom - h, step * .6, h);
+        }
         ctx.textAlign = 'center'; ctx.fillStyle = '#203c3c';
         if (point.day <= data.today && step >= 24) ctx.fillText(String(point.count), x + step * .3, bottom - h - 6);
-        if (index % Math.max(1, Math.ceil(values.length / 12)) === 0) {
-          ctx.font = '10px sans-serif'; ctx.fillText(values.length <= 7 ? new Date(`${point.day}T12:00:00Z`).toLocaleDateString('es-NI', { weekday: 'short', timeZone: 'UTC' }) : dateLabel(point.day), x + step * .3, 158); ctx.font = '11px sans-serif';
-        }
+        ctx.font = '9px sans-serif'; ctx.fillText(weekdayLabel(point.day), x + step * .3, bottom + 13);
+        ctx.fillText(point.day.slice(8), x + step * .3, bottom + 25); ctx.font = '11px sans-serif';
       });
     };
     exportChart.current = () => { const target = document.createElement('canvas'); draw(target, Math.max(900, JSON.parse(chartKey).length * 44)); return target; };
     draw(); const observer = new ResizeObserver(() => draw()); observer.observe(element);
     return () => { observer.disconnect(); exportChart.current = null; };
-  }, [chartKey, chartFilter, data, filter]);
+  }, [chartKey, chartFilter, data, filter, selectionKey]);
 
-  const selectChartDay = (event: MouseEvent<HTMLCanvasElement>) => {
+  const chartIndex = (event: PointerEvent<HTMLCanvasElement>, clamp = false) => {
     const rectangle = event.currentTarget.getBoundingClientRect();
     const x = event.clientX - rectangle.left;
-    if (x < 38 || x >= rectangle.width - 12) return;
+    if (!points.length || (!clamp && (x < 38 || x >= rectangle.width - 12 || event.clientY < rectangle.top + 42 || event.clientY > rectangle.bottom))) return -1;
     const index = Math.floor((x - 38) / ((rectangle.width - 50) / points.length));
-    if (points[index]) setDay(points[index].day);
+    return Math.max(0, Math.min(points.length - 1, index));
   };
+  const selectRange = (start: number, end: number, base: string[] = []) => {
+    setSelectedDays([...new Set([...base, ...selectDayRange(points.map(point => point.day), start, end)])].sort());
+  };
+  const selectSingleDay = (value: string) => { setSelectedDays([]); setDay(value); };
   useEffect(() => {
     const pending = pendingPng.current;
     if (!pending) return;
@@ -212,16 +229,47 @@ export function AdminDashboard({ request }: { request: Request }) {
         {(banks.length > 0 || selectedCurrencies.length > 0) && <button className="icon-button" title="Limpiar filtros de banco y moneda" aria-label="Limpiar filtros de banco y moneda" onClick={() => { setBanks([]); setSelectedCurrencies([]); }}><X size={16} /></button>}
       </div>
       <div className="report-top">
-        <section className="report-section"><header><h2>Transacciones del día <span>{daily.reduce((sum, row) => sum + row.total, 0)}</span></h2></header>
-          <div className="report-day-filter"><label>Día<input type="date" aria-label="Día de transacciones" value={day || data.tableDay} onChange={e => setDay(e.target.value)} /></label><button className="report-today-button" aria-pressed={(day || data.tableDay) === data.today} onClick={() => setDay('')}><CalendarDays size={14} />Hoy</button></div>
+        <section className="report-section"><header><h2>{tableDays.length > 1 ? `Transacciones de ${tableDays.length} días` : 'Transacciones del día'} <span>{daily.reduce((sum, row) => sum + row.total, 0)}</span></h2></header>
+          <div className="report-day-filter"><label>Día<input type="date" aria-label="Día de transacciones" value={tableDays.length === 1 ? tableDays[0] : ''} onChange={e => selectSingleDay(e.target.value)} /></label><button className="report-today-button" aria-pressed={tableDays.length === 1 && tableDays[0] === data.today} onClick={() => selectSingleDay('')}><CalendarDays size={14} />Hoy</button>{tableDays.length > 1 && <span className="report-selection-summary" role="status">{dateLabel(tableDays[0])} - {dateLabel(tableDays[tableDays.length - 1])}</span>}</div>
           <ReportTable headers={['Sucursal', 'Cajero', 'C$', '$', 'Total']} rows={daily.map(row => ({ id: `${row.branch_id}:${row.cashier_id}`, values: [row.branch, row.cashier, row.nio, row.usd, row.total] }))} selected={filter?.cashier ? `${filter.branch}:${filter.cashier}` : undefined} onSelect={(id, column) => {
             const row = daily.find(row => `${row.branch_id}:${row.cashier_id}` === id)!;
             setFilter({ branch: row.branch_id, cashier: column === 1 ? row.cashier_id : undefined, label: column === 1 ? `${row.branch} · ${row.cashier}` : row.branch });
           }} />
         </section>
-        <section className="report-section report-chart"><header><h2>Transacciones por día</h2><button className="icon-button" title="Exportar en PNG" aria-label="Exportar en PNG" disabled={exporting || loading} onClick={() => void download()}><Download size={17} /></button></header>
-          <div className="report-range"><label>Desde<input type="date" aria-label="Gráfica desde" value={range.from || data.from} onChange={e => setRange({ from: e.target.value, to: range.to || data.to })} /></label><label>Hasta<input type="date" aria-label="Gráfica hasta" value={range.to || data.to} onChange={e => setRange({ from: range.from || data.from, to: e.target.value })} /></label><button className="icon-button" title="Semana actual" aria-label="Semana actual" onClick={() => setRange({ from: '', to: '' })}><CalendarDays size={17} /></button>{filter && <button className="icon-button" title="Quitar filtro de cajero o sucursal" aria-label="Quitar filtro" onClick={() => setFilter(null)}><X size={17} /></button>}</div>
-          <canvas ref={canvas} className="report-selectable-chart" onClick={selectChartDay} aria-label={`Transacciones: ${points.map(p => `${p.day}: ${p.count}`).join('; ')}`} role="img" />
+        <section className="report-section report-chart"><header><h2>Transacciones por día</h2><div className="report-chart-actions"><button className="icon-button" title="Seleccionar todos los días mostrados" aria-label="Seleccionar todos los días mostrados" aria-pressed={points.length > 0 && points.every(point => tableDays.includes(point.day))} disabled={loading || !points.length} onClick={() => setSelectedDays(points.map(point => point.day))}><SquareCheckBig size={17} /></button><button className="icon-button" title="Exportar en PNG" aria-label="Exportar en PNG" disabled={exporting || loading} onClick={() => void download()}><Download size={17} /></button></div></header>
+          <div className="report-range"><label>Desde<input type="date" aria-label="Gráfica desde" value={range.from || data.from} onChange={e => { setSelectedDays([]); setHoveredDay(null); setRange({ from: e.target.value, to: range.to || data.to }); }} /></label><label>Hasta<input type="date" aria-label="Gráfica hasta" value={range.to || data.to} onChange={e => { setSelectedDays([]); setHoveredDay(null); setRange({ from: range.from || data.from, to: e.target.value }); }} /></label><button className="icon-button" title="Semana actual" aria-label="Semana actual" onClick={() => { setSelectedDays([]); setHoveredDay(null); setRange({ from: '', to: '' }); }}><CalendarDays size={17} /></button>{filter && <button className="icon-button" title="Quitar filtro de cajero o sucursal" aria-label="Quitar filtro" onClick={() => setFilter(null)}><X size={17} /></button>}</div>
+          <div className="report-chart-scroll"><div className="report-chart-surface" style={{ minWidth: Math.max(280, points.length * 14 + 50) }}>
+          <canvas ref={canvas} className="report-selectable-chart" tabIndex={0}
+            onPointerDown={event => {
+              if (loading || event.button !== 0) return;
+              const index = chartIndex(event); if (index < 0) return;
+              const base = event.ctrlKey || event.metaKey ? tableDays : [];
+              drag.current = { start: index, base }; keyboardIndex.current = index;
+              event.currentTarget.setPointerCapture(event.pointerId); event.preventDefault(); event.currentTarget.focus();
+              selectRange(index, index, base);
+            }}
+            onPointerMove={event => {
+              const index = chartIndex(event, !!drag.current);
+              if (index < 0) { setHoveredDay(null); return; }
+              const rectangle = event.currentTarget.getBoundingClientRect();
+              setHoveredDay({ ...points[index], x: Math.max(75, Math.min(rectangle.width - 75, event.clientX - rectangle.left)) });
+              if (drag.current) selectRange(drag.current.start, index, drag.current.base);
+            }}
+            onPointerUp={event => { if (drag.current) { const index = chartIndex(event, true); if (index >= 0) selectRange(drag.current.start, index, drag.current.base); } drag.current = null; if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId); }}
+            onPointerCancel={() => { drag.current = null; setHoveredDay(null); }} onLostPointerCapture={() => { drag.current = null; }}
+            onPointerLeave={() => { if (!drag.current) setHoveredDay(null); }}
+            onKeyDown={event => {
+              if (loading || !points.length) return;
+              if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
+                event.preventDefault(); const previous = keyboardIndex.current;
+                const index = Math.max(0, Math.min(points.length - 1, previous + (event.key === 'ArrowRight' ? 1 : -1)));
+                keyboardIndex.current = index; selectRange(index, index, event.shiftKey ? tableDays : []);
+              } else if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); const index = Math.min(keyboardIndex.current, points.length - 1); selectRange(index, index); }
+              else if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'a') { event.preventDefault(); setSelectedDays(points.map(point => point.day)); }
+            }}
+            aria-label={`Transacciones: ${points.map(p => `${weekdayLabel(p.day)} ${p.day}: ${p.count}${tableDays.includes(p.day) ? ', seleccionado' : ''}`).join('; ')}`} role="img" />
+          {hoveredDay && <div className="report-chart-tooltip" role="tooltip" style={{ left: hoveredDay.x }}>{weekdayLabel(hoveredDay.day)} · {hoveredDay.day.split('-').reverse().join('/')}<strong>{hoveredDay.count} transacciones</strong></div>}
+          </div></div>
         </section>
       </div>
       <div className="report-bottom">

@@ -1,5 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { flushSync } from 'react-dom';
+import { ShiftHandovers } from '../components/ShiftHandovers';
+import { HandoverIdentity } from '../components/HandoverIdentity';
+import type { HandoverIdentityData } from '../components/HandoverIdentity';
+import { nioCentCoins } from '../utils/nio-cent-coins';
+import { createFinancialRequestId } from '../utils/financial-request-id';
 import { buildSafeExportTable, escapeExportHtml } from '../utils/export-html';
 import { downloadExport, exportFilename } from '../utils/export-download';
 import { createTemporaryPassword } from '../utils/temporary-password';
@@ -25,6 +30,7 @@ import {
   Camera,
   CalendarDays,
   Clock3,
+  ClipboardCheck,
   CheckCircle2,
   ChevronDown,
   ChevronLeft,
@@ -194,6 +200,10 @@ type ExchangeRateKind = 'Compra' | 'Venta';
 type ShiftCashLine = { denomination: number; piles25: number; loose: number };
 type ShiftCashCount = { total: number; lines: ShiftCashLine[] };
 type ShiftDetail = {
+  write_locked?: boolean;
+  closure_requested?: boolean;
+  closure_version?: string | null;
+  handover?: HandoverIdentityData | null;
   database_id: string;
   id: string;
   fecha_apertura?: string;
@@ -209,6 +219,7 @@ type ShiftDetail = {
   efectivo_final_usd: string | null;
   cambio_nio: string;
   solicitud_estado: string | null;
+  solicitud_observaciones?: string | null;
   observaciones_apertura?: string;
   observaciones_cierre?: string;
   cashCounts: Record<string, Partial<Record<CashCurrency, ShiftCashCount>>>;
@@ -256,9 +267,14 @@ type BranchCatalogRow = {
 };
 
 type ShiftNotification = {
+  handover_sender?: string;
+  handover_receiver?: string;
+  handover_destination?: string;
+  handover_mode?: string;
+  shift_state?: string;
   id: string;
   created_at: string;
-  kind: 'CLOSE_REQUEST' | 'SHIFT_CLOSED' | 'PENDING_PAID' | 'TRANSFER_RECORDED';
+  kind: 'CLOSE_REQUEST' | 'SHIFT_CLOSED' | 'PENDING_PAID' | 'TRANSFER_RECORDED' | 'SHIFT_HANDOVER';
   shift_id: string;
   shift_code: string;
   cashier: string;
@@ -274,6 +290,8 @@ type ShiftNotification = {
 };
 
 type TransactionApiRow = {
+  edit_version?:string;
+  shift_id?: string;
   historicalCorrection?: boolean;
   closedShift?: boolean;
   digitalsettlement?: boolean;
@@ -307,6 +325,7 @@ type TransactionCashCountApiLine = {
 };
 
 type TransactionDetailApi = {
+  editVersion?:string;
   transaction: TransactionApiRow;
   rates: { buy: number; sell: number };
   settlement: {
@@ -321,6 +340,7 @@ type TransactionDetailApi = {
 };
 
 type TransactionGroupDetailApi = {
+  editVersion?:string;
   details: TransactionDetailApi[];
   compensations: Array<{ codigo_pendiente: string; monto: string; moneda: CashCurrency; contraparte?: string; observaciones?: string; id_transaccion?: string; id_abono?: string; pending_database_id?: string }>;
 };
@@ -450,6 +470,15 @@ async function apiRequest<T>(path: string, init?: RequestInit): Promise<T> {
   return performApiRequest<T>(path, token, init);
 }
 
+class ApiRequestError extends Error {
+  constructor(message:string,readonly code?:string){super(message);this.name='ApiRequestError';}
+}
+
+function requireEditVersion(version?:string) {
+  if(!version||!/^(0|[1-9][0-9]{0,18})$/.test(version))throw new Error('No fue posible verificar la version del registro. Actualice la pantalla y vuelva a abrirlo antes de corregirlo.');
+  return version;
+}
+
 async function performApiRequest<T>(path: string, token: string | null, init?: RequestInit): Promise<T> {
   const response = await fetch(`${apiBaseUrl}${path}`, {
     ...init,
@@ -483,7 +512,7 @@ async function performApiRequest<T>(path: string, token: string | null, init?: R
     const reference = payload && typeof payload === 'object' && 'code' in payload && payload.code
       ? ` Código: ${payload.code}${payload.requestId ? ` · Ref: ${payload.requestId}` : ''}`
       : '';
-    throw new Error(`${readableMessage}${reference}`);
+    throw new ApiRequestError(`${readableMessage}${reference}`,payload&&typeof payload==='object'&&'code' in payload?payload.code:undefined);
   }
   if (token !== window.sessionStorage.getItem(authTokenStorageKey)) {
     throw new Error('La sesion cambio durante la operacion. Inicie sesion nuevamente; si estaba guardando, compruebe el registro antes de repetirlo.');
@@ -1218,7 +1247,7 @@ function auditEntityLabel(entity: string) {
     usuarios: 'Usuario', roles: 'Rol', transacciones: 'Transaccion',
     grupos_transacciones: 'Grupo de transacciones', pagos_pendientes: 'Pendiente',
     correcciones_transacciones_cerradas: 'Correccion de transaccion cerrada',
-    abonos_pendientes: 'Liquidacion de pendiente', turnos: 'Turno',
+    abonos_pendientes: 'Liquidacion de pendiente', turnos: 'Turno', traspasos_turno: 'Traspaso de turno',
     transferencias: 'Transferencia', transferencias_efectivo: 'Transferencia de efectivo',
     transferencias_digitales: 'Transferencia digital', sucursales: 'Sucursal',
     cuentas_bancarias: 'Cuenta bancaria', entidades_bancarias: 'Banco',
@@ -1387,6 +1416,7 @@ const cashDenominations: Record<CashCurrency, CashDenomination[]> = {
     { id: 'nio-10', value: 10, label: 'C$ 10.00' },
     { id: 'nio-5', value: 5, label: 'C$ 5.00' },
     { id: 'nio-1', value: 1, label: 'C$ 1.00' },
+    ...nioCentCoins,
   ],
   USD: [
     { id: 'usd-100', value: 100, label: '$ 100.00' },
@@ -2067,6 +2097,7 @@ function buildTransactionBatchPayload(rows: CrudRow[]) {
 
 function mapApiTransactionRow(row: TransactionApiRow): CrudRow {
   return normalizeTransactionRow({
+    editVersion:row.edit_version??'',
     id: row.id,
     databaseId: row.database_id,
     transactionGroupId: row.id_grupo_transacciones,
@@ -2145,6 +2176,7 @@ function mapApiTransactionDetail(detail: TransactionDetailApi): CrudRow {
   const row = mapApiTransactionRow(detail.transaction);
   return normalizeTransactionRow({
     ...row,
+    editVersion:detail.editVersion??'',
     historicalCorrection: detail.transaction.historicalCorrection ? '1' : '',
     closedShift: detail.transaction.closedShift ? '1' : '',
     digitalSettlement: detail.transaction.digitalsettlement ? '1' : '',
@@ -2198,7 +2230,6 @@ type TransactionCustomerBalanceStep = {
 };
 
 // Permite residuos menores a la moneda fisica minima sin descartar su valor contable.
-const transactionRoundingToleranceNio = 0.05;
 
 // Calcula en secuencia cuánto efectivo se debe entregar o recibir del cliente en todo el grupo.
 function calculateTransactionCustomerBalanceSteps(
@@ -2741,10 +2772,18 @@ function shiftDetailToCrudRow(shift: ShiftDetail): CrudRow {
     status:
       shift.estado === 'CERRADO'
         ? 'Cerrado'
-        : shift.estado === 'PENDIENTE_APERTURA'
+        : shift.estado === 'EN_REVISION' ? 'En revisión' : shift.estado === 'PENDIENTE_APERTURA'
           ? 'Pendiente de abrir'
           : 'Abierto',
   });
+}
+
+function closingUserObservations(shift:ShiftDetail) {
+  const raw=shift.estado==='CERRADO'?shift.observaciones_cierre||'':shift.solicitud_observaciones||shift.observaciones_cierre||'';
+  if(!shift.handover)return raw;
+  if(raw.startsWith('Traspaso del turno '))return raw.includes('\nObservaciones: ')?raw.split('\nObservaciones: ').slice(1).join('\nObservaciones: '):shift.handover.observations||'';
+  const heading=`${shift.handover.sender} → ${shift.handover.receiver}\n`;
+  return raw.startsWith(heading)?raw.split('\n').slice(2).join('\n'):raw;
 }
 
 function shiftDetailToEditableRow(shift: ShiftDetail): CrudRow {
@@ -2779,7 +2818,11 @@ function shiftDetailToEditableRow(shift: ShiftDetail): CrudRow {
     openingBankBalances: serializeShiftBankBalances(openingBalances),
     closingBankBalances: serializeShiftBankBalances(closingBalances),
     openingNotes: shift.observaciones_apertura ?? '',
-    closingNotes: shift.observaciones_cierre ?? '',
+    closingNotes: closingUserObservations(shift),
+    handoverSender:shift.handover?.sender||'',handoverReceiver:shift.handover?.receiver||'',
+    handoverSource:shift.handover?.source||'',handoverDestination:shift.handover?.destination||'',
+    handoverMode:shift.handover?.mode||'',handoverState:shift.estado,
+    dollarPurchaseDifferenceNio: String(shift.dollarPurchases?.differenceNio ?? 0),
   };
 }
 
@@ -3228,6 +3271,7 @@ function CashierShiftWaiting({ user, preparedShift, onOpen, onLogout }: { user: 
       <span>{preparedShift ? `${preparedShift.sucursal} · ${preparedShift.caja}` : 'El Administrador todavía no ha preparado un turno para tu usuario.'}</span>
       {error && <p className="login-error" role="alert">{error}</p>}
       <div className="shift-waiting-actions">
+        <ShiftHandovers userId={user.id} request={apiRequest} onChanged={announceOperationalDataChange}/>
         {preparedShift && <button type="button" className="primary-button" disabled={opening} onClick={() => void openPrepared()}><LogIn size={18}/>{opening ? 'Abriendo...' : 'Abrir turno'}</button>}
         <button type="button" className="secondary-button" onClick={onLogout}><LogOut size={18}/>Cerrar sesión</button>
       </div>
@@ -3561,11 +3605,12 @@ export function App() {
     }
   }
 
-  const visibleNotification = notifications.find((item) => !dismissedNotifications.includes(item.id));
+  const notificationKey = (item: ShiftNotification) => item.kind==='CLOSE_REQUEST'?`${item.id}:${item.created_at}`:item.id;
+  const visibleNotification = notifications.find((item) => !dismissedNotifications.includes(notificationKey(item)));
   const notificationCategory = (item: ShiftNotification) => item.kind === 'TRANSFER_RECORDED'
     ? item.transfer_type === 'EFECTIVO' ? 'Transferencia de Efectivo' : 'Transferencia Digital' : 'Cierres y otros avisos';
   const adminBatch = currentUser?.roleCode === 'JEFA' && visibleNotification
-    ? notifications.filter(item => !dismissedNotifications.includes(item.id) && notificationCategory(item) === notificationCategory(visibleNotification)) : [];
+    ? notifications.filter(item => !dismissedNotifications.includes(notificationKey(item)) && notificationCategory(item) === notificationCategory(visibleNotification)) : [];
   const visibleNotificationObservation = cleanNotificationObservation(visibleNotification?.observations);
 
   async function openShiftClosure(shiftId: string) {
@@ -3574,7 +3619,7 @@ export function App() {
   }
 
   async function acceptCloseRequest(notification: ShiftNotification) {
-    setDismissedNotifications((current) => [...current, notification.id]);
+    setDismissedNotifications((current) => [...current, notificationKey(notification)]);
     const shiftsItem = navItems.find((item) => item.id === 'shifts');
     if (shiftsItem) {
       navigateTo(shiftsItem);
@@ -3760,10 +3805,10 @@ export function App() {
       items={adminBatch}
       onAccept={async () => {
         for (const notification of adminBatch) if (notification.kind !== 'CLOSE_REQUEST') await acknowledgeNotification(notification);
-        setDismissedNotifications(current=>[...current,...adminBatch.map(item=>item.id)]);
+        setDismissedNotifications(current=>[...current,...adminBatch.map(notificationKey)]);
       }}
       onReview={async (notification) => {
-        setDismissedNotifications(current=>[...current,...adminBatch.map(item=>item.id)]);
+        setDismissedNotifications(current=>[...current,...adminBatch.map(notificationKey)]);
         await acceptCloseRequest(notification);
       }}
       onReject={async notification => {
@@ -3778,7 +3823,7 @@ export function App() {
             {visibleNotification.kind === 'TRANSFER_RECORDED' ? (visibleNotification.transfer_direction === 'SALE' ? <ArrowUpRight size={24}/> : <ArrowDownLeft size={24}/>) : <Banknote size={24} />}
           </div>
           <div className="shift-notification-content">
-            <p>{visibleNotification.kind === 'CLOSE_REQUEST' ? 'Solicitud de cierre de caja' : visibleNotification.kind === 'PENDING_PAID' ? 'Pendiente pagado' : visibleNotification.kind === 'TRANSFER_RECORDED' ? 'Transferencia registrada' : 'Caja cerrada exitosamente'}</p>
+            <p>{visibleNotification.kind === 'SHIFT_HANDOVER' ? 'Traspaso de turno realizado' : visibleNotification.kind === 'CLOSE_REQUEST' ? 'Solicitud de cierre de caja' : visibleNotification.kind === 'PENDING_PAID' ? 'Pendiente pagado' : visibleNotification.kind === 'TRANSFER_RECORDED' ? 'Transferencia registrada' : 'Caja cerrada exitosamente'}</p>
             {visibleNotification.kind === 'TRANSFER_RECORDED' ? <>
               <h2 className={`shift-notification-amount shift-notification-amount--${visibleNotification.transfer_direction === 'SALE' ? 'out' : 'in'}`}>
                 {visibleNotification.transfer_direction === 'SALE' ? <ArrowUpRight size={21}/> : <ArrowDownLeft size={21}/>}
@@ -3799,7 +3844,7 @@ export function App() {
           <div className="modal-footer">
             {visibleNotification.kind === 'CLOSE_REQUEST' ? (
               <>
-                <button type="button" className="secondary-button danger-button" onClick={() => setDismissedNotifications((current) => [...current, visibleNotification.id])}>Cancelar</button>
+                <button type="button" className="secondary-button danger-button" onClick={() => setDismissedNotifications((current) => [...current, notificationKey(visibleNotification)])}>Cancelar</button>
                 <button type="button" className="primary-button" onClick={() => void acceptCloseRequest(visibleNotification)}>Aceptar</button>
               </>
             ) : (
@@ -3842,7 +3887,7 @@ export function App() {
 }
 
 async function rejectShiftClose(shiftId: string) {
-  if (!await requestSystemConfirm('La solicitud se rechazara y el turno volvera a estar abierto para el cajero.',
+  if (!await requestSystemConfirm('Se habilitaran las correcciones del cajero. Un turno en revision conservara ese estado y no afectara al receptor.',
     { title: 'Rechazar cierre de turno', confirmLabel: 'Rechazar cierre', tone: 'danger' })) return false;
   await apiRequest(`/shifts/${shiftId}/reject-close`, { method: 'POST' });
   announceOperationalDataChange();
@@ -3875,7 +3920,20 @@ function NotificationSummary({title,items,onAccept,onReview,onReject}:{title:str
             </div>)}
           </section>)}
         </div>)}
-        {[...otherGroups].map(([kind,group])=><div key={kind}><strong>{kind==='CLOSE_REQUEST'?'Solicitudes de cierre':kind==='PENDING_PAID'?'Pendientes pagados':'Cierres de turno'}</strong><span>{group.length} registros</span>{kind==='CLOSE_REQUEST'&&group.map(item=><div key={item.id}><span>{item.cashier} · {item.branch} · {item.shift_code}</span><button type="button" className="secondary-button" disabled={busy} onClick={()=>void run(()=>onReview(item))}>Revisar cierre</button><button type="button" className="secondary-button danger-button" disabled={busy} onClick={()=>void run(()=>onReject(item))}><X size={17}/>Rechazar cierre</button></div>)}</div>)}
+        {[...otherGroups].map(([kind,group])=><div key={kind}>
+          <strong>{kind==='SHIFT_HANDOVER'?'Traspasos de turno':kind==='CLOSE_REQUEST'?'Solicitudes de cierre':kind==='PENDING_PAID'?'Pendientes pagados':'Cierres de turno'} ({group.length})</strong>
+          {kind==='SHIFT_HANDOVER'&&group.map(item=><div className="notification-handover" key={item.id}>
+            {item.handover_receiver?<HandoverIdentity value={{sender:item.handover_sender||item.cashier,receiver:item.handover_receiver,source:item.shift_code,destination:item.handover_destination||'---',mode:item.handover_mode||'CON_CIERRE',state:item.shift_state}}/>:<p>{item.observations}</p>}
+            <div className="notification-location"><Building2 size={15}/><span>{item.branch} · {item.register}</span></div>
+            <small className="notification-time"><Clock3 size={14}/>{new Date(item.created_at).toLocaleString('es-NI',{timeZone:'America/Managua'})}</small>
+          </div>)}
+          {kind==='CLOSE_REQUEST'&&group.map(item=><div className="notification-close-request" key={item.id}>
+            <strong className="notification-cashier"><UserRound size={17}/>{item.cashier}</strong>
+            <span className="notification-location"><Building2 size={15}/>{item.branch} · {item.shift_code}{item.shift_state==='EN_REVISION'?' · En revisión':''}</span>
+            <div className="notification-close-actions"><button type="button" className="primary-button notification-review-close" disabled={busy} onClick={()=>void run(()=>onReview(item))}><ClipboardCheck size={18}/>Revisar cierre</button>
+            <button type="button" className="secondary-button danger-button" disabled={busy} onClick={()=>void run(()=>onReject(item))}><X size={17}/>Rechazar cierre</button></div>
+          </div>)}
+        </div>)}
       </div>
       {error&&<p role="alert" className="login-error">{error}</p>}
       <button type="button" className="primary-button" disabled={busy} onClick={()=>void run(onAccept)}>{busy?'Procesando...':'Aceptar resumen'}</button>
@@ -3906,7 +3964,7 @@ function ShiftClosureModal({
         expense: balance.system_expense == null ? '' : formatAccountingMoneyRaw(balance.system_expense),
       }]),
   ));
-  const [observations, setObservations] = useState('');
+  const [observations, setObservations] = useState(()=>closingUserObservations(shift));
   const [changeNio, setChangeNio] = useState(() => formatAccountingMoneyRaw(shift.cambio_nio));
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
@@ -3983,6 +4041,7 @@ function ShiftClosureModal({
       await apiRequest(`/shifts/${shift.database_id}/close`, {
         method: 'POST',
         body: JSON.stringify({
+          expectedCloseRequest:shift.closure_version||undefined,
           counts: cashCountPayload(cashDraft),
           balances: shift.balances.map((balance) => {
             const daily = teledolarBalances[balance.account];
@@ -4023,7 +4082,7 @@ function ShiftClosureModal({
     <div className="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="close-shift-title">
       <section className="shift-close-modal">
         <header className="modal-header">
-          <div><p>Cierre solicitado</p><h2 id="close-shift-title">Cerrar turno</h2></div>
+          <div><p>{shift.id} · {shift.cajero} · {shift.sucursal}</p><h2 id="close-shift-title">Cerrar turno</h2></div>
           <button type="button" className="icon-button close-button" onClick={onCancel} aria-label="Cerrar"><X size={18} /></button>
         </header>
         <div className="shift-close-body">
@@ -4042,6 +4101,7 @@ function ShiftClosureModal({
                   <span className="cash-change-entry"><span>C$</span><input value={changeNio} inputMode="decimal" onChange={(event) => setChangeNio(normalizeSignedAccountingMoneyRaw(event.target.value))} /></span>
                   <button type="button" className="secondary-button" onClick={() => setChangeNio(formatAccountingMoneyRaw(parseMoneyValue(changeNio) + differenceNio))}>Agregar cambio</button>
                 </label>
+                <div className="shift-purchase-difference"><strong>Diferencia por compra de dólares</strong><span>{formatCashCountMoney(shift.dollarPurchases?.differenceNio ?? 0,'NIO')}</span></div>
               </div>
             </div>
           </div>
@@ -4066,10 +4126,10 @@ function ShiftClosureModal({
                               <td colSpan={2}>
                                 <div className="shift-close-teledolar-grid">
                                   <strong>Movimiento</strong><strong>Saldo del sistema</strong><strong>Diferencia</strong>
-                                  <span>Ingresos</span>
+                                  <span>Pagos</span>
                                   <span className="consolidation-input-wrap"><span>{getCurrencySymbol(currency)}</span><input value={formatConsolidationInput(daily.income)} inputMode="decimal" onChange={(event) => setTeledolarBalances((current) => ({ ...current, [balance.account]: { ...daily, income: normalizeAccountingMoneyRaw(event.target.value) } }))} onFocus={(event) => event.currentTarget.select()} onClick={(event) => event.currentTarget.select()} /></span>
                                   {renderDifference(parseMoneyValue(daily.income) - parseMoneyValue(balance.income), currency, { positiveLabel: '' })}
-                                  <span>Egresos</span>
+                                  <span>Envíos</span>
                                   <span className="consolidation-input-wrap"><span>{getCurrencySymbol(currency)}</span><input value={formatConsolidationInput(daily.expense)} inputMode="decimal" onChange={(event) => setTeledolarBalances((current) => ({ ...current, [balance.account]: { ...daily, expense: normalizeAccountingMoneyRaw(event.target.value) } }))} onFocus={(event) => event.currentTarget.select()} onClick={(event) => event.currentTarget.select()} /></span>
                                   {renderDifference(parseMoneyValue(daily.expense) - parseMoneyValue(balance.expense), currency, { positiveLabel: '' })}
                                 </div>
@@ -4091,12 +4151,13 @@ function ShiftClosureModal({
               ))}
             </div>
           </section>
-          <label className="form-field">Observaciones de cierre<textarea data-shift-close-observations value={observations} onChange={(event) => setObservations(event.target.value)} /></label>
+          {shift.handover&&<HandoverIdentity value={shift.handover}/>}
+          <label className="form-field">Observaciones de cierre<textarea rows={2} data-shift-close-observations value={observations} onChange={(event) => setObservations(event.target.value)} /></label>
           {error && <p className="login-error">{error}</p>}
         </div>
         <footer className="modal-footer">
           <button type="button" className="secondary-button danger-button" onClick={onCancel}><X size={17} />Cancelar</button>
-          {isAdministrator && shift.estado === 'PENDIENTE_APROBACION' && <button type="button" className="secondary-button danger-button" disabled={saving} onClick={() => void rejectClose()}><X size={17}/>Rechazar cierre</button>}
+          {isAdministrator && shift.solicitud_estado==='PENDIENTE' && <button type="button" className="secondary-button danger-button" disabled={saving} onClick={() => void rejectClose()}><X size={17}/>Rechazar cierre</button>}
           <button type="button" className="primary-button" onClick={() => void closeShift()} disabled={saving}><Save size={17} />{saving ? 'Guardando...' : 'Guardar'}</button>
         </footer>
       </section>
@@ -4700,9 +4761,17 @@ function ExchangeRateScreen() {
 }
 
 function CashCountScreen({ currentUser }: { currentUser: AuthUser }) {
+  const balanceFlush=useRef<()=>Promise<void>>(async()=>{});
+  const closeRequestBusy=useRef(false);
+  const [requestingClose,setRequestingClose]=useState(false);
+  const [handoverOpen,setHandoverOpen]=useState(false);
+  const handoverVisible=useRef(false);handoverVisible.current=handoverOpen;
+  const cashRevision=useRef(0);
+  const cashSave=useRef<Promise<unknown>>(Promise.resolve());
   const [pileDrafts, setPileDrafts] = useState<Record<string, CashPileDraft>>({});
   const [exchangeRate] = useState<ExchangeRate>(() => readExchangeRate());
   const [shift, setShift] = useState<ShiftDetail | null>(null);
+  const submitted=Boolean(shift?.write_locked||shift?.estado==='PENDIENTE_APROBACION');
   const [changeNio, setChangeNio] = useState('0.00');
   const [isLoaded, setIsLoaded] = useState(false);
   const [message, setMessage] = useState('');
@@ -4743,14 +4812,18 @@ function CashCountScreen({ currentUser }: { currentUser: AuthUser }) {
     let isMounted = true;
     const request = isBoss
       ? apiRequest<ShiftDetail[]>('/shifts').then((shifts) => {
-          const openShifts = shifts.filter((item) => ['ABIERTO', 'PENDIENTE_APROBACION'].includes(item.estado));
+          const openShifts = shifts.filter((item) => ['ABIERTO', 'PENDIENTE_APROBACION','EN_REVISION'].includes(item.estado));
           setActiveShifts(openShifts);
           setClosedShifts(shifts.filter(item => item.estado === 'CERRADO'));
           const targetId = selectedShiftId || openShifts[0]?.database_id || '';
           setSelectedShiftId(targetId);
           return targetId ? apiRequest<ShiftDetail>(`/shifts/${targetId}`) : null;
         })
-      : apiRequest<ShiftDetail | null>('/shifts/current');
+      : apiRequest<ShiftDetail | null>('/shifts/current').then(async current=>{
+          const own=await apiRequest<ShiftDetail[]>('/shifts');
+          if(isMounted)setActiveShifts(own.filter(item=>['ABIERTO','PENDIENTE_APROBACION','EN_REVISION'].includes(item.estado)));
+          return current;
+        });
     request.then((currentShift) => {
         if (!isMounted) {
           return;
@@ -4767,7 +4840,7 @@ function CashCountScreen({ currentUser }: { currentUser: AuthUser }) {
   }, [currentUser.id, isBoss]);
 
   useEffect(() => {
-    if (!isBoss || !selectedShiftId) return;
+    if (!selectedShiftId) return;
     let cancelled = false;
     setIsLoaded(false);
     apiRequest<ShiftDetail>(`/shifts/${selectedShiftId}`)
@@ -4783,30 +4856,40 @@ function CashCountScreen({ currentUser }: { currentUser: AuthUser }) {
   }, [isBoss, selectedShiftId]);
 
   useOperationalRefresh(async () => {
-    const latestShift = isBoss
+    const revision=cashRevision.current;
+    const latestShift = isBoss||selectedShiftId
       ? selectedShiftId ? await apiRequest<ShiftDetail>(`/shifts/${selectedShiftId}`) : null
       : await apiRequest<ShiftDetail | null>('/shifts/current');
-    if (!latestShift) return;
+    if (!latestShift||handoverVisible.current||closeRequestBusy.current||revision!==cashRevision.current) return;
     setShift(latestShift);
     const editingCash = document.activeElement instanceof HTMLElement
       && Boolean(document.activeElement.closest('[data-cash-scope="general-cash-count"]'));
-    if (!editingCash) setPileDrafts(cashDraftFromShiftCounts(latestShift.cashCounts.ACTUAL));
-  }, Boolean((isBoss && selectedShiftId && shift?.estado !== 'CERRADO') || (!isBoss && shift)), 3000);
+    if (!editingCash) {
+      setPileDrafts(current=>{
+        const next=cashDraftFromShiftCounts(latestShift.cashCounts.ACTUAL);
+        return JSON.stringify(current)===JSON.stringify(next)?current:next;
+      });
+      setChangeNio(formatAccountingMoneyRaw(latestShift.cambio_nio));
+    }
+  }, !handoverOpen&&Boolean((isBoss && selectedShiftId && shift?.estado !== 'CERRADO') || (!isBoss && shift)), 3000);
 
   useEffect(() => {
-    if (isBoss || !isLoaded || !shift || shift.estado === 'CERRADO') {
+    if (handoverOpen || requestingClose || submitted || isBoss || !isLoaded || !shift || shift.estado === 'CERRADO') {
       return;
     }
+    if(JSON.stringify(cashCountPayload(pileDrafts))===JSON.stringify(cashCountPayload(cashDraftFromShiftCounts(shift.cashCounts.ACTUAL)))
+      &&parseMoneyValue(changeNio)===Number(shift.cambio_nio))return;
     const timer = window.setTimeout(() => {
-      void apiRequest<ShiftDetail>(`/shifts/${shift.database_id}/cash-count`, {
+      cashSave.current=apiRequest<ShiftDetail>(`/shifts/${shift.database_id}/cash-count`, {
         method: 'PUT',
         body: JSON.stringify({ counts: cashCountPayload(pileDrafts), changeNio: parseMoneyValue(changeNio) }),
       }).then(setShift).catch((error) => setMessage(error instanceof Error ? error.message : 'No fue posible guardar el arqueo.'));
     }, 500);
     return () => window.clearTimeout(timer);
-  }, [pileDrafts, changeNio, isBoss, isLoaded, shift?.database_id]);
+  }, [pileDrafts, changeNio, isBoss, isLoaded, shift?.database_id,handoverOpen,requestingClose,submitted]);
 
   function updatePileField(denominationId: string, field: 'groups' | 'loose', value: string) {
+    cashRevision.current++;
     const cleanValue = value.replace(/\D/g, '');
     const nextPile = {
       ...pileDrafts[denominationId],
@@ -4815,30 +4898,43 @@ function CashCountScreen({ currentUser }: { currentUser: AuthUser }) {
     setPileDrafts((current) => ({ ...current, [denominationId]: nextPile }));
   }
 
-  async function clearCount() {
-    if (!shift || !await requestSystemConfirm('Se colocaran en cero todas las cantidades del arqueo actual.', { title:'Limpiar arqueo', confirmLabel:'Limpiar', tone:'danger' })) {
-      return;
+  async function requestClose() {
+    if (!shift || closeRequestBusy.current) return;
+    closeRequestBusy.current=true;
+    setRequestingClose(true);
+    try {
+      const reviewing=shift.estado==='EN_REVISION';
+      if (!await requestSystemConfirm(reviewing
+        ? 'Se avisara al Administrador que las correcciones estan listas para revisar el cierre. El turno seguira en revision hasta su aprobacion.'
+        : 'El Administrador recibira una solicitud para revisar y cerrar esta caja.', { title:'Solicitar cierre de caja', confirmLabel:'Enviar solicitud' })) return;
+      await cashSave.current;
+      await balanceFlush.current();
+      await apiRequest(`/shifts/${shift.database_id}/cash-count`,{method:'PUT',body:JSON.stringify({counts:cashCountPayload(pileDrafts),changeNio:parseMoneyValue(changeNio)})});
+      await apiRequest(`/shifts/${shift.database_id}/close-request`, { method: 'POST' });
+      announceOperationalDataChange();
+      setShift((current) => current?.database_id===shift.database_id ? { ...current, estado: reviewing?'EN_REVISION':'PENDIENTE_APROBACION', solicitud_estado: 'PENDIENTE',write_locked:true,closure_requested:true } : current);
+      setMessage(reviewing?'Correcciones listas. Solicitud enviada al Administrador para revisar el cierre.':'Solicitud enviada al Administrador.');
+    } catch(error) {
+      setMessage(error instanceof Error?error.message:'No fue posible solicitar el cierre.');
+    } finally {
+      closeRequestBusy.current=false;
+      setRequestingClose(false);
     }
-    setPileDrafts({});
-    setChangeNio('0.00');
-    await apiRequest(`/shifts/${shift.database_id}/cash-count`, {
-      method: 'PUT',
-      body: JSON.stringify({ counts: cashCountPayload({}), changeNio: 0 }),
-    });
   }
 
-  async function requestClose() {
-    if (!shift || !await requestSystemConfirm('El Administrador recibira una solicitud para revisar y cerrar esta caja.', { title:'Solicitar cierre de caja', confirmLabel:'Enviar solicitud' })) {
-      return;
-    }
-    await apiRequest(`/shifts/${shift.database_id}/close-request`, { method: 'POST' });
-    announceOperationalDataChange();
-    setShift((current) => current ? { ...current, estado: 'PENDIENTE_APROBACION', solicitud_estado: 'PENDIENTE' } : current);
-    setMessage('Solicitud enviada al Administrador.');
+  async function cancelCloseRequest() {
+    if(!shift||closeRequestBusy.current)return;
+    closeRequestBusy.current=true;setRequestingClose(true);
+    try{
+      if(!await requestSystemConfirm('Se retirara la solicitud de cierre para corregir este turno.',{title:'Cancelar solicitud',confirmLabel:'Habilitar correcciones'}))return;
+      setShift(await apiRequest<ShiftDetail>(`/shifts/${shift.database_id}/cancel-close-request`,{method:'POST'}));
+      announceOperationalDataChange();setMessage('Solicitud cancelada. Puede corregir este turno.');
+    }catch(error){setMessage(error instanceof Error?error.message:'No se pudo cancelar la solicitud.');}
+    finally{closeRequestBusy.current=false;setRequestingClose(false);}
   }
 
   function openNewTransaction() {
-    window.sessionStorage.setItem(openTransactionRequestKey, '1');
+    window.sessionStorage.setItem(openTransactionRequestKey, shift?.database_id||'1');
     window.location.hash = '/transacciones';
   }
 
@@ -4848,7 +4944,7 @@ function CashCountScreen({ currentUser }: { currentUser: AuthUser }) {
         <div className="panel__header table-panel-header cash-count-header">
           <div className="cash-count-title-row">
             <div>
-              <p>{shift?.estado === 'CERRADO' ? 'Solo lectura' : 'Conteo fisico'}</p>
+              <p>{shift?.estado === 'CERRADO' ? 'Solo lectura' : shift?.estado==='EN_REVISION'?'En revisión · Cierre administrativo pendiente':'Conteo fisico'}</p>
               <h2>Arqueo por denominacion</h2>
             </div>
             <div className="cash-rate-chip" aria-label="Tasa de cambio global">
@@ -4876,25 +4972,27 @@ function CashCountScreen({ currentUser }: { currentUser: AuthUser }) {
             </div>
           </div>
           <div className="action-row">
-            {isBoss && (
+            {currentUser.roleCode==='CAJERO'&&shift&&<ShiftHandovers userId={currentUser.id} shiftId={shift.estado==='ABIERTO'?shift.database_id:undefined} request={apiRequest} onChanged={announceOperationalDataChange} onOpenChange={setHandoverOpen} onRegistered={value=>{cashRevision.current++;setChangeNio(formatAccountingMoneyRaw(value));}} prepare={async()=>{
+              await cashSave.current;
+              await balanceFlush.current();
+              await apiRequest(`/shifts/${shift.database_id}/cash-count`,{method:'PUT',body:JSON.stringify({counts:cashCountPayload(pileDrafts),changeNio:parseMoneyValue(changeNio)})});
+            }}/>}
+            {(isBoss||activeShifts.some(item=>item.estado==='EN_REVISION')) && (
               <label className="cash-shift-selector">Turno activo
-                <select value={activeShifts.some(item => item.database_id === selectedShiftId) ? selectedShiftId : ''} onChange={(event) => setSelectedShiftId(event.target.value)}>
+                <select disabled={requestingClose} value={selectedShiftId||shift?.database_id||''} onChange={(event) => setSelectedShiftId(event.target.value)}>
                   <option value="">Seleccionar turno activo</option>
-                  {activeShifts.map((item) => <option key={item.database_id} value={item.database_id}>{item.cajero} - {item.caja}</option>)}
+                  {activeShifts.map((item) => <option key={item.database_id} value={item.database_id}>{item.id} · {item.cajero} - {item.caja}{item.estado==='EN_REVISION'?' · En revisión':''}</option>)}
                 </select>
               </label>
             )}
-            {!isBoss && <button type="button" className="secondary-button" onClick={clearCount}>
-              <X size={17} />
-              Limpiar
-            </button>}
-            {!isBoss && <button type="button" className="primary-button" onClick={openNewTransaction} disabled={!shift}>
+            {!isBoss && <button type="button" className="primary-button" onClick={openNewTransaction} disabled={submitted||!shift||shift.estado==='CERRADO'}>
               <Plus size={17} />
               Agregar transaccion
             </button>}
-            {!isBoss && <button type="button" className="primary-button cash-close-button" onClick={requestClose} disabled={!shift || shift.solicitud_estado === 'PENDIENTE'}>
+            {!isBoss && shift?.closure_requested&&<button type="button" className="secondary-button danger-button" disabled={requestingClose} onClick={()=>void cancelCloseRequest()}><RotateCcw size={17}/>Cancelar solicitud</button>}
+            {!isBoss && <button type="button" className="primary-button cash-close-button" onClick={requestClose} disabled={submitted||requestingClose || !shift || !['ABIERTO','EN_REVISION'].includes(shift.estado)}>
               <LockKeyhole size={17} />
-              {shift?.solicitud_estado === 'PENDIENTE' ? 'Cierre solicitado' : 'Cierre'}
+              {requestingClose?'Enviando...':shift?.estado==='EN_REVISION'?'Solicitar cierre':shift?.solicitud_estado === 'PENDIENTE' ? 'Cierre solicitado' : 'Cierre'}
             </button>}
         {isBoss && <details className="cash-history"><summary title={shift?.estado === 'CERRADO' ? `${shift.id} · ${shift.cajero} · ${shift.sucursal}` : 'Historial de turnos'}>{shift?.estado === 'CERRADO' ? shift.id : 'Historial de turnos'}</summary><fieldset className="consolidation-history-filters">
           <legend>Arqueos históricos</legend>
@@ -4917,7 +5015,8 @@ function CashCountScreen({ currentUser }: { currentUser: AuthUser }) {
         {!shift && isLoaded && <p className="cash-count-status">No tiene un turno abierto. El arqueo se habilitará al abrir su siguiente turno.</p>}
         {message && <p className="cash-count-status" role="status">{message}</p>}
 
-        {shift && <ShiftConsolidation key={shift.database_id} shift={shift} onSaved={updated => setShift(current => current?.database_id === updated.database_id ? updated : current)} />}
+        {submitted&&!isBoss&&<p className="cash-count-status" role="status"><LockKeyhole size={16}/>Solicitud pendiente: cancele el cierre o el traspaso para corregir este turno.</p>}
+        {shift && <ShiftConsolidation key={shift.database_id} shift={shift} locked={!isBoss&&(submitted||requestingClose||handoverOpen)} flushRef={balanceFlush} onSaved={updated => setShift(current => current?.database_id === updated.database_id ? updated : current)} />}
         <div className="transaction-cash-count-grid cash-count-live-grid">
           <TransactionCashCountTable
             currency="NIO"
@@ -4925,7 +5024,7 @@ function CashCountScreen({ currentUser }: { currentUser: AuthUser }) {
             focusScope="general-cash-count"
             pileDrafts={pileDrafts}
             conversionRate={buyRate}
-            readOnly={isBoss}
+            readOnly={isBoss||submitted||requestingClose||handoverOpen}
             nextFocusSelector={'[data-cash-scope="general-cash-count"][data-cash-currency="USD"][data-cash-row="0"][data-cash-column="0"]'}
             onPileFieldChange={updatePileField}
           />
@@ -4936,7 +5035,7 @@ function CashCountScreen({ currentUser }: { currentUser: AuthUser }) {
             focusScope="general-cash-count"
             pileDrafts={pileDrafts}
             conversionRate={buyRate}
-            readOnly={isBoss}
+            readOnly={isBoss||submitted||requestingClose||handoverOpen}
             nextFocusSelector='[data-general-cash-change]'
             onPileFieldChange={updatePileField}
           />
@@ -4946,10 +5045,10 @@ function CashCountScreen({ currentUser }: { currentUser: AuthUser }) {
             <label>
               <strong>Diferencia registrada</strong>
               <span className="cash-change-values">
-                <span className="cash-change-entry"><span>C$</span><input data-general-cash-change value={changeNio} inputMode="decimal" readOnly={isBoss} onChange={(event) => setChangeNio(normalizeSignedAccountingMoneyRaw(event.target.value))} /></span>
+                <span className="cash-change-entry"><span>C$</span><input data-general-cash-change value={changeNio} inputMode="decimal" readOnly={isBoss||submitted||requestingClose||handoverOpen} onChange={(event) => {cashRevision.current++;setChangeNio(normalizeSignedAccountingMoneyRaw(event.target.value));}} /></span>
                 <small>{formatCashCountMoney(parseMoneyValue(changeNio) / 36.4, 'USD')}</small>
               </span>
-              {!isBoss && <button type="button" className="secondary-button" onClick={() => setChangeNio(formatAccountingMoneyRaw(parseMoneyValue(changeNio) + differenceNio))}>Registrar diferencia</button>}
+              {!isBoss && <button type="button" disabled={submitted||requestingClose||handoverOpen} className="secondary-button" onClick={() => {cashRevision.current++;setChangeNio(formatAccountingMoneyRaw(parseMoneyValue(changeNio) + differenceNio));}}>Registrar diferencia</button>}
             </label>
           </div>
           </div>
@@ -5392,6 +5491,8 @@ function formatTransferDate(value: string) {
 }
 
 function TransferModal({ mode, row, context, isBoss, onClose, onSaved, onEdit }: { mode: ModalMode; row?: TransferApiRow; context: TransferContext; isBoss:boolean; onClose:()=>void; onSaved:()=>Promise<void>; onEdit?:()=>void }) {
+  const [requestId]=useState(createFinancialRequestId);
+  const submitting=useRef(false);
   const readOnly = mode === 'view';
   const [shiftId,setShiftId]=useState(row?.id_turno ?? context.shifts[0]?.id ?? '');
   const [type,setType]=useState<'EFECTIVO'|'DIGITAL'>(row?.tipo === 'CUENTA_BANCARIA' ? 'DIGITAL' : 'EFECTIVO');
@@ -5426,9 +5527,19 @@ function TransferModal({ mode, row, context, isBoss, onClose, onSaved, onEdit }:
       queueAccountingMoneyCaret(event, nextValue);
     }
   }
-  async function save(event:FormEvent){event.preventDefault();setSaving(true);setError('');try{const payload={shiftId,type,direction,currency,accountId:type==='DIGITAL'?accountId:null,amount:type==='EFECTIVO'?cashTotal:parseMoneyValue(amount),description,cashLines:type==='EFECTIVO'?cashDenominations[currency].map((item)=>({denomination:item.value,piles25:Number(piles[item.id]?.groups)||0,loose:Number(piles[item.id]?.loose)||0})):[]};await apiRequest(row?`/transfers/${row.database_id}`:'/transfers',{method:row?'PUT':'POST',body:JSON.stringify(payload)});await onSaved();}catch(saveError){setError(saveError instanceof Error?saveError.message:'No fue posible guardar.');}finally{setSaving(false)}}
-  return <div className="modal-backdrop"><form className="modal-panel transfer-modal" onSubmit={save}><div className="modal-header"><div><p>{mode==='create'?'Nuevo registro':'Transferencia'}</p><h2>{mode==='view'?'Detalle de transferencia':mode==='edit'?'Editar transferencia':'Registro de transferencia'}</h2></div><button type="button" className="icon-button icon-button--danger" onClick={onClose}><X size={19}/></button></div>
-    <div className="transfer-form-grid"><label className="form-field">ID<input readOnly value={row?.id ?? 'Automatico'}/></label>{isBoss&&<label className="form-field transfer-form-shift">Turno<select disabled={readOnly} value={shiftId} onChange={(event)=>setShiftId(event.target.value)}>{context.shifts.map((shift)=><option key={shift.id} value={shift.id}>{shift.code} · {shift.cashier} · {shift.branch}</option>)}</select></label>}
+  async function save(event:FormEvent){
+    event.preventDefault();if(submitting.current)return;submitting.current=true;setSaving(true);setError('');
+    try{
+      const payload={requestId:row?undefined:requestId,shiftId,type,direction,currency,accountId:type==='DIGITAL'?accountId:null,
+        amount:type==='EFECTIVO'?cashTotal:parseMoneyValue(amount),description,
+        cashLines:type==='EFECTIVO'?cashDenominations[currency].map(item=>({denomination:item.value,piles25:Number(piles[item.id]?.groups)||0,loose:Number(piles[item.id]?.loose)||0})):[]};
+      await apiRequest(row?`/transfers/${row.database_id}`:'/transfers',{method:row?'PUT':'POST',body:JSON.stringify(payload)});
+      await onSaved();
+    }catch(saveError){setError(saveError instanceof Error?saveError.message:'No fue posible guardar.');}
+    finally{submitting.current=false;setSaving(false);}
+  }
+  return <div className="modal-backdrop"><form className="modal-panel transfer-modal" onSubmit={save}><div className="modal-header"><div><p>{row?.id||'Nuevo registro'}</p><h2>{mode==='view'?'Detalle de transferencia':mode==='edit'?'Editar transferencia':'Registro de transferencia'}</h2></div><strong className="modal-context-amount">{formatCashCountMoney(type==='EFECTIVO'?cashTotal:parseMoneyValue(amount),currency)}</strong><button type="button" className="icon-button icon-button--danger" onClick={onClose}><X size={19}/></button></div>
+    <div className="transfer-form-grid"><label className="form-field">ID<input readOnly value={row?.id ?? 'Automatico'}/></label>{isBoss&&<label className="form-field transfer-form-shift">Turno<select disabled={readOnly||mode!=='create'} value={shiftId} onChange={(event)=>setShiftId(event.target.value)}>{context.shifts.map((shift)=><option key={shift.id} value={shift.id}>{shift.code} · {shift.cashier} · {shift.branch}</option>)}</select></label>}
       <fieldset className="transfer-segment"><legend>Tipo</legend><button type="button" disabled={readOnly||!isBoss} className={type==='EFECTIVO'?'active':''} onClick={()=>setType('EFECTIVO')}><Banknote size={16}/>Efectivo</button><button type="button" disabled={readOnly||!isBoss} className={type==='DIGITAL'?'active':''} onClick={()=>setType('DIGITAL')}><Landmark size={16}/>Digital</button></fieldset>
       <fieldset className="transfer-segment"><legend>Direccion</legend><button type="button" disabled={readOnly||!isBoss} className={direction==='INGRESO'?'active':''} onClick={()=>setDirection('INGRESO')}>Ingreso</button><button type="button" disabled={readOnly||!isBoss} className={direction==='EGRESO'?'active':''} onClick={()=>setDirection('EGRESO')}>Egreso</button></fieldset>
       <fieldset className="transfer-segment"><legend>Moneda</legend><button type="button" disabled={readOnly} className={currency==='NIO'?'active nio':''} onClick={()=>{setCurrency('NIO');setPiles({});setAccountId('')}}>C$</button><button type="button" disabled={readOnly} className={currency==='USD'?'active usd':''} onClick={()=>{setCurrency('USD');setPiles({});setAccountId('')}}>$</button></fieldset>
@@ -5581,6 +5692,8 @@ function DirectoryLookup({ onClose }: { onClose:()=>void }) {
 }
 
 function PendingScreen({ currentUser }: { currentUser: AuthUser }) {
+  const [submissionLocked,setSubmissionLocked]=useState(false);
+  const paymentSubmitting=useRef(false);
   const [rows, setRows] = useState<PendingApiRow[]>([]);
   const [query, setQuery] = useState('');
   const [filters, setFilters] = useState<Record<string, string>>({});
@@ -5593,16 +5706,19 @@ function PendingScreen({ currentUser }: { currentUser: AuthUser }) {
   const [detail, setDetail] = useState<{ pending: PendingApiRow; row: CrudRow; groupRows?: CrudRow[]; payments?: PendingPaymentDetailApi } | null>(null);
   const [payingId, setPayingId] = useState<string | null>(null);
   const [paymentModal, setPaymentModal] = useState<{
+    requestId: string;
     pending: PendingApiRow;
     row: CrudRow;
   } | null>(null);
   const [selectedPendingIds, setSelectedPendingIds] = useState<string[]>([]);
   const [batchCashModal, setBatchCashModal] = useState<{
+    requestId: string;
     pendings: PendingApiRow[];
     row: CrudRow;
     digital?: { entityCode: string; movementCode: string; amount: number };
   } | null>(null);
   const [batchDigitalModal, setBatchDigitalModal] = useState<{
+    requestId: string;
     pendings: PendingApiRow[];
     shift: ShiftDetail;
     entity: string;
@@ -5652,7 +5768,7 @@ function PendingScreen({ currentUser }: { currentUser: AuthUser }) {
       return;
     }
     void apiRequest<ShiftDetail | null>('/shifts/current')
-      .then((shift) => setAvailableCashCounts(shift?.cashCounts.ACTUAL))
+      .then((shift) => {setAvailableCashCounts(shift?.cashCounts.ACTUAL);setSubmissionLocked(Boolean(shift?.write_locked));})
       .catch(() => setAvailableCashCounts(undefined));
   }, [isBoss, currentUser.id]);
 
@@ -5661,6 +5777,7 @@ function PendingScreen({ currentUser }: { currentUser: AuthUser }) {
     if (!isBoss) {
       const shift = await apiRequest<ShiftDetail | null>('/shifts/current');
       setAvailableCashCounts(shift?.cashCounts.ACTUAL);
+      setSubmissionLocked(Boolean(shift?.write_locked));
     }
   }, !detail && !paymentModal && !payingId);
 
@@ -5796,7 +5913,7 @@ function PendingScreen({ currentUser }: { currentUser: AuthUser }) {
     setError('');
     setMessage('');
     try {
-      setPaymentModal({ pending: row, row: await loadPendingPaymentRow(row) });
+      setPaymentModal({ requestId:createFinancialRequestId(),pending: row, row: await loadPendingPaymentRow(row) });
     } catch (payError) {
       setError(payError instanceof Error ? payError.message : 'No fue posible abrir el pago pendiente.');
     } finally {
@@ -5833,7 +5950,8 @@ function PendingScreen({ currentUser }: { currentUser: AuthUser }) {
   }
 
   async function payPending(transactionRows: CrudRow[]) {
-    if (!paymentModal) return;
+    if (!paymentModal || paymentSubmitting.current) return;
+    paymentSubmitting.current=true;
     setPayingId(paymentModal.pending.database_id);
     setError('');
     setMessage('');
@@ -5842,22 +5960,20 @@ function PendingScreen({ currentUser }: { currentUser: AuthUser }) {
       await apiRequest(`/transactions/pending/${paymentModal.pending.database_id}/pay`, {
         method: 'POST',
         body: JSON.stringify({
+          requestId:paymentModal.requestId,
           rates: payload.rates,
           settlement: payload.settlement,
         }),
       });
-      setRows((current) => current.map((item) => item.database_id === paymentModal.pending.database_id ? {
-        ...item,
-        estado: 'PAGADO',
-        saldo_pendiente: '0',
-        fecha_modificacion: new Date().toISOString(),
-      } : item));
+      setRows(await apiRequest<PendingApiRow[]>('/transactions/pending'));
       setShowPaid(true);
       setMessage(`El pendiente de ${paymentModal.pending.contraparte} fue marcado como pagado.`);
       setPaymentModal(null);
+      announceOperationalDataChange();
     } catch (payError) {
       setError(payError instanceof Error ? payError.message : 'No fue posible marcar el pendiente como pagado.');
     } finally {
+      paymentSubmitting.current=false;
       setPayingId(null);
     }
   }
@@ -5890,6 +6006,7 @@ function PendingScreen({ currentUser }: { currentUser: AuthUser }) {
       const baseRow = await loadPendingPaymentRow(selected[0]);
       const total = selected.reduce((sum, row) => sum + Number(row.saldo_pendiente), 0);
       setBatchCashModal({
+        requestId:createFinancialRequestId(),
         pendings: selected,
         row: normalizeTransactionRow({
           ...baseRow,
@@ -5923,6 +6040,7 @@ function PendingScreen({ currentUser }: { currentUser: AuthUser }) {
       }
       const total = selected.reduce((sum, row) => sum + Number(row.saldo_pendiente), 0);
       setBatchDigitalModal({
+        requestId:createFinancialRequestId(),
         pendings: selected,
         shift,
         entity: first.entity,
@@ -5938,7 +6056,10 @@ function PendingScreen({ currentUser }: { currentUser: AuthUser }) {
   }
 
   async function submitBatchCash(transactionRows: CrudRow[]) {
-    if (!batchCashModal) return;
+    if (!batchCashModal || paymentSubmitting.current) return;
+    paymentSubmitting.current=true;
+    setError('');
+    setMessage('');
     setPayingId('batch');
     try {
       const payload = buildTransactionBatchPayload(transactionRows);
@@ -5946,6 +6067,7 @@ function PendingScreen({ currentUser }: { currentUser: AuthUser }) {
       await apiRequest('/transactions/pending/pay-batch', {
         method: 'POST',
         body: JSON.stringify({
+          requestId:batchCashModal.requestId,
           pendingIds: batchCashModal.pendings.map((row) => row.database_id),
           method: isMixed ? 'MIXTO' : 'EFECTIVO',
           rates: payload.rates,
@@ -5953,34 +6075,40 @@ function PendingScreen({ currentUser }: { currentUser: AuthUser }) {
           ...(batchCashModal.digital ? { digital: batchCashModal.digital } : {}),
         }),
       });
-      setBatchCashModal(null);
       await finishBatchPayment(batchCashModal.pendings, isMixed ? 'efectivo y digital' : 'efectivo');
+      setBatchCashModal(null);
     } catch (batchError) {
       setError(batchError instanceof Error ? batchError.message : 'No fue posible liquidar los pendientes.');
     } finally {
+      paymentSubmitting.current=false;
       setPayingId(null);
     }
   }
 
   async function submitBatchDigital() {
-    if (!batchDigitalModal) return;
+    if (!batchDigitalModal || paymentSubmitting.current) return;
+    paymentSubmitting.current=true;
+    setError('');
+    setMessage('');
     setPayingId('batch');
     try {
       const rate = readExchangeRate();
       await apiRequest('/transactions/pending/pay-batch', {
         method: 'POST',
         body: JSON.stringify({
+          requestId:batchDigitalModal.requestId,
           pendingIds: batchDigitalModal.pendings.map((row) => row.database_id),
           method: 'DIGITAL',
           rates: { buy: parseExchangeRate(rate.buy), sell: parseExchangeRate(rate.sell) },
           digital: { entityCode: batchDigitalModal.entity, movementCode: batchDigitalModal.movementCode },
         }),
       });
-      setBatchDigitalModal(null);
       await finishBatchPayment(batchDigitalModal.pendings, 'digital');
+      setBatchDigitalModal(null);
     } catch (batchError) {
       setError(batchError instanceof Error ? batchError.message : 'No fue posible liquidar los pendientes.');
     } finally {
+      paymentSubmitting.current=false;
       setPayingId(null);
     }
   }
@@ -5998,6 +6126,7 @@ function PendingScreen({ currentUser }: { currentUser: AuthUser }) {
       // El resto del total pasa al arqueo para registrar las denominaciones efectivamente usadas.
       const baseRow = await loadPendingPaymentRow(batchDigitalModal.pendings[0]);
       setBatchCashModal({
+        requestId:batchDigitalModal.requestId,
         pendings: batchDigitalModal.pendings,
         row: normalizeTransactionRow({
           ...baseRow,
@@ -6021,8 +6150,7 @@ function PendingScreen({ currentUser }: { currentUser: AuthUser }) {
   }
 
   async function finishBatchPayment(pendings: PendingApiRow[], method: string) {
-    const paidIds = new Set(pendings.map((row) => row.database_id));
-    setRows((current) => current.map((row) => paidIds.has(row.database_id) ? { ...row, estado: 'PAGADO', saldo_pendiente: '0' } : row));
+    setRows(await apiRequest<PendingApiRow[]>('/transactions/pending'));
     setSelectedPendingIds([]);
     setShowPaid(true);
     setMessage(`${pendings.length} pendientes fueron liquidados completamente en ${method}.`);
@@ -6053,13 +6181,13 @@ function PendingScreen({ currentUser }: { currentUser: AuthUser }) {
             </section>
           ))}
           <section className="table-consolidation__actions" aria-label="Acciones de liquidacion">
-            <button type="button" className="secondary-button pending-settlement-button" title="Liquidar en efectivo" disabled={!selectedPendingIds.length || Boolean(payingId)} onClick={() => void openBatchCashPayment()}>
+            <button type="button" className="secondary-button pending-settlement-button" title="Liquidar en efectivo" disabled={submissionLocked||!selectedPendingIds.length || Boolean(payingId)} onClick={() => void openBatchCashPayment()}>
               <Banknote size={17} /> Efectivo
             </button>
-            <button type="button" className="secondary-button pending-settlement-button" title="Liquidar con efectivo y movimiento digital" disabled={!selectedPendingIds.length || Boolean(payingId)} onClick={() => void openBatchDigitalPayment('MIXTO')}>
+            <button type="button" className="secondary-button pending-settlement-button" title="Liquidar con efectivo y movimiento digital" disabled={submissionLocked||!selectedPendingIds.length || Boolean(payingId)} onClick={() => void openBatchDigitalPayment('MIXTO')}>
               <ArrowRightLeft size={17} /> Combinado
             </button>
-            <button type="button" className="primary-button pending-settlement-button" title="Liquidar digitalmente" disabled={!selectedPendingIds.length || Boolean(payingId)} onClick={() => void openBatchDigitalPayment('DIGITAL')}>
+            <button type="button" className="primary-button pending-settlement-button" title="Liquidar digitalmente" disabled={submissionLocked||!selectedPendingIds.length || Boolean(payingId)} onClick={() => void openBatchDigitalPayment('DIGITAL')}>
               <Landmark size={17} /> Digital
             </button>
           </section>
@@ -6158,7 +6286,7 @@ function PendingScreen({ currentUser }: { currentUser: AuthUser }) {
                       type="button"
                       className="icon-action pending-pay-button"
                       title={row.estado === 'PAGADO' ? 'Corregir liquidación' : 'Liquidar en efectivo'}
-                      disabled={row.estado === 'CANCELADO' || payingId === row.database_id}
+                      disabled={submissionLocked||row.estado === 'CANCELADO' || payingId === row.database_id}
                       onClick={(event) => {
                         event.stopPropagation();
                         if (row.estado === 'PAGADO') void correctPayment(row);
@@ -6206,7 +6334,7 @@ function PendingScreen({ currentUser }: { currentUser: AuthUser }) {
           onSave={async () => undefined}
           onEdit={detail.pending.estado === 'PENDIENTE'
             ? () => {
-                setPaymentModal(detail);
+                setPaymentModal({...detail,requestId:createFinancialRequestId()});
                 setDetail(null);
               }
             : undefined}
@@ -6253,12 +6381,12 @@ function PendingScreen({ currentUser }: { currentUser: AuthUser }) {
         const total = batchDigitalModal.pendings.reduce((sum, row) => sum + Number(row.saldo_pendiente), 0);
         return (
           <div className="modal-backdrop" role="dialog" aria-modal="true">
-            <section className="system-dialog pending-batch-dialog">
-              <div className="system-dialog__icon"><Landmark size={24} /></div>
-              <div className="system-dialog__content">
-                <p>Liquidacion multiple</p>
+            <section className="modal-panel pending-batch-dialog">
+              <header className="modal-header"><div><p>Liquidacion multiple</p>
                 <h2>{isMixed ? 'Pago combinado' : 'Pago digital'}</h2>
-                <span>{batchDigitalModal.pendings.length} pendientes por {formatCashCountMoney(total, batchDigitalModal.pendings[0].moneda)}</span>
+                <span>{batchDigitalModal.pendings.length} pendientes · <strong>{formatCashCountMoney(total, batchDigitalModal.pendings[0].moneda)}</strong></span>
+              </div><Landmark size={20}/></header>
+              <div className="system-dialog__content">
                 <label className="form-field">Cuenta bancaria
                   <select value={batchDigitalModal.entity} onChange={(event) => {
                     const entity = event.target.value;
@@ -6284,7 +6412,7 @@ function PendingScreen({ currentUser }: { currentUser: AuthUser }) {
                   </label>
                 )}
               </div>
-              <div className="system-dialog__actions">
+              <div className="modal-actions">
                 <button type="button" className="secondary-button danger-button" disabled={payingId === 'batch'} onClick={() => setBatchDigitalModal(null)}><X size={17} />Cancelar</button>
                 <button
                   type="button"
@@ -6304,13 +6432,19 @@ function PendingScreen({ currentUser }: { currentUser: AuthUser }) {
   );
 }
 
-function ShiftConsolidation({ shift, onSaved }: { shift: ShiftDetail; onSaved: (shift: ShiftDetail) => void }) {
+function ShiftConsolidation({ shift, onSaved, flushRef,locked=false }: { shift: ShiftDetail; onSaved: (shift: ShiftDetail) => void; flushRef?: {current:()=>Promise<void>};locked?:boolean }) {
   const [drafts, setDrafts] = useState<Record<string, ConsolidationBalance>>({});
   const draftsRef = useRef(drafts);
   const writes = useRef(new Map<string, Promise<void>>());
   const queued = useRef(new Map<string, ConsolidationBalance>());
   const activeShift = useRef(shift.database_id);
   const [error, setError] = useState('');
+  useEffect(()=>{
+    if(flushRef)flushRef.current=async()=>{
+      await Promise.all([...writes.current.values()]);
+      if(Object.keys(draftsRef.current).length)throw new Error('Hay saldos sin guardar. Revise los campos antes de traspasar.');
+    };
+  },[flushRef]);
   useEffect(() => {
     activeShift.current = shift.database_id;
     draftsRef.current = {};
@@ -6321,7 +6455,7 @@ function ShiftConsolidation({ shift, onSaved }: { shift: ShiftDetail; onSaved: (
   const source = mapApiShiftBalancesToConsolidation(shift.balances);
   const accounts = mapApiShiftBalanceAccounts(shift.balances);
   const balances = Object.fromEntries(Object.entries(source).map(([key, row]) => [key, { ...row, ...drafts[key] }]));
-  const readOnly = shift.estado === 'CERRADO';
+  const readOnly = locked || shift.estado === 'CERRADO';
   function update(currency: CashCurrency, entity: string, field: 'initial' | 'system' | 'systemIncome' | 'systemExpense', value: string) {
     if (readOnly || field === 'initial') return;
     const key = getConsolidationKey(currency, entity);
@@ -7621,11 +7755,11 @@ function ShiftTable({
                       )}
                       <button
                         type="button"
-                        className={`icon-action ${row.status !== 'Abierto' ? 'icon-action--inactive' : ''}`}
+                        className={`icon-action ${!['Abierto','En revisión'].includes(row.status) ? 'icon-action--inactive' : ''}`}
                         title={row.status === 'Cerrado' ? 'Turno cerrado' : row.status === 'Pendiente de abrir' ? 'Pendiente de abrir' : 'Cerrar turno'}
                         onClick={(event) => {
                           event.stopPropagation();
-                          if (row.status === 'Abierto') {
+                          if (['Abierto','En revisión'].includes(row.status)) {
                             openCloseModal(row);
                           }
                         }}
@@ -7927,7 +8061,7 @@ function ShiftModal({
       <section className="modal-panel transaction-modal-panel" ref={modalRef}>
         <div className="modal-header">
           <div>
-            <p>{isCloseMode ? 'Cierre operativo' : isReadOnly ? 'Vista operativa' : 'Apertura operativa'}</p>
+            <p>{draft.id} · {draft.branch} · {draft.cashier}</p>
             <h2>{title}</h2>
           </div>
           <button type="button" className="icon-button close-button" onClick={onCancel} aria-label="Cerrar">
@@ -8141,13 +8275,14 @@ function ShiftModal({
                         onPileFieldChange={(denominationId, field, value) => updateClosingCashCount('USD', denominationId, field, value)}
                       />
                       <div className="shift-closing-change">
-                        <span>Cambio al cierre</span>
+                        <span>Diferencia registrada</span>
                         {isReadOnly ? (
                           <strong>{formatCashCountMoney(Number.parseFloat(draft.changeNio) || 0, 'NIO')}</strong>
                         ) : (
                           <span className="cash-change-entry"><span>C$</span><input value={formatAccountingMoneyInput(draft.changeNio)} inputMode="decimal" onChange={(event) => updateField('changeNio', normalizeSignedAccountingMoneyRaw(event.target.value))} onFocus={(event) => placeAccountingMoneyCaretBeforeDecimals(event.currentTarget)} onClick={(event) => placeAccountingMoneyCaretBeforeDecimals(event.currentTarget)} /></span>
                         )}
                       </div>
+                      <div className="shift-purchase-difference"><strong>Diferencia por compra de dólares</strong><span>{formatCashCountMoney(parseMoneyValue(draft.dollarPurchaseDifferenceNio),'NIO')}</span></div>
                       <button type="button" className="secondary-button shift-phase-toggle shift-phase-toggle--opening" onClick={() => setViewPhase('opening')}>
                         <ChevronLeft size={18} />
                         Apertura
@@ -8166,6 +8301,7 @@ function ShiftModal({
                     }}
                     onBalanceChange={updateClosingBankBalance}
                   />
+                  {draft.handoverReceiver&&<HandoverIdentity value={{sender:draft.handoverSender,receiver:draft.handoverReceiver,source:draft.handoverSource,destination:draft.handoverDestination,mode:draft.handoverMode,state:draft.handoverState}}/>}
                   {isReadOnly ? draft.closingNotes && <p className="shift-view-note">{draft.closingNotes}</p> : (
                     <label className="form-field shift-form-notes">Observaciones de cierre<textarea data-shift-observations="closing" value={draft.closingNotes} rows={2} onChange={(event) => updateField('closingNotes', event.target.value)} /></label>
                   )}
@@ -8195,7 +8331,8 @@ function ShiftModal({
           {isCloseMode && <div className="cash-count-adjustments">
             <div><strong>Diferencia NIO</strong>{renderDifference(closingDifference.differenceNio,'NIO',{positiveLabel:''})}</div>
             <div><strong>Diferencia USD</strong>{renderDifference(closingDifference.differenceUsd,'USD',{positiveLabel:''})}</div>
-            <label>Cambios registrados<input inputMode="decimal" value={draft.changeNio} onChange={event=>updateField('changeNio',normalizeSignedAccountingMoneyRaw(event.target.value))}/></label>
+            <label>Diferencia registrada<input inputMode="decimal" value={draft.changeNio} onChange={event=>updateField('changeNio',normalizeSignedAccountingMoneyRaw(event.target.value))}/></label>
+            <div className="shift-purchase-difference"><strong>Diferencia por compra de dólares</strong><span>{formatCashCountMoney(parseMoneyValue(draft.dollarPurchaseDifferenceNio),'NIO')}</span></div>
             <button type="button" className="secondary-button" onClick={()=>updateField('changeNio',formatAccountingMoneyRaw(parseMoneyValue(draft.changeNio)+closingDifference.differenceNio))}>Agregar cambio</button>
           </div>}
           {isCloseMode && (
@@ -8381,15 +8518,15 @@ function ShiftBankBalanceTables({
                     )}
                     <td>
                       {normalizeLookupValue(account.entity) === 'teledolar' && phase === 'opening' ? <div className="teledolar-opening-summary">
-                        <span>Ingresos acumulados<strong>{formatCashCountMoney(parseMoneyValue(balances[`${account.id}:income`]), currency)}</strong></span>
-                        <span>Egresos acumulados<strong>{formatCashCountMoney(parseMoneyValue(balances[`${account.id}:expense`]), currency)}</strong></span>
+                        <span>Pagos acumulados<strong>{formatCashCountMoney(parseMoneyValue(balances[`${account.id}:income`]), currency)}</strong></span>
+                        <span>Envíos acumulados<strong>{formatCashCountMoney(parseMoneyValue(balances[`${account.id}:expense`]), currency)}</strong></span>
                       </div> : phase === 'closing' && normalizeLookupValue(account.entity) === 'teledolar' ? <div className="teledolar-system-inputs">
-                        <label>Ingresos<span className="consolidation-input-wrap"><span>{getCurrencySymbol(currency)}</span><input
+                        <label>Pagos<span className="consolidation-input-wrap"><span>{getCurrencySymbol(currency)}</span><input
                           value={formatConsolidationInput(balances[`${account.id}:income`])}
                           readOnly={readOnly} inputMode="decimal"
                           onChange={(event) => onBalanceChange(`${account.id}:income`, event.target.value)}
                         /></span></label>
-                        <label>Egresos<span className="consolidation-input-wrap"><span>{getCurrencySymbol(currency)}</span><input
+                        <label>Envíos<span className="consolidation-input-wrap"><span>{getCurrencySymbol(currency)}</span><input
                           value={formatConsolidationInput(balances[`${account.id}:expense`])}
                           readOnly={readOnly} inputMode="decimal"
                           onChange={(event) => onBalanceChange(`${account.id}:expense`, event.target.value)}
@@ -8441,6 +8578,13 @@ function ShiftBankBalanceTables({
 function TransactionTable({ config, currentUser }: { config: CrudConfig; currentUser: AuthUser }) {
   const [rows, setRows] = useState<CrudRow[]>([]);
   const [currentShift, setCurrentShift] = useState<ShiftDetail | null>(null);
+  const [transactionShiftId,setTransactionShiftId]=useState(()=>{
+    const requested=window.sessionStorage.getItem(openTransactionRequestKey)||'';
+    return /^[a-f0-9-]{36}$/i.test(requested)?requested:'';
+  });
+  const [transactionShifts,setTransactionShifts]=useState<ShiftDetail[]>([]);
+  const transactionShiftPath=transactionShiftId?`/shifts/${transactionShiftId}`:'/shifts/current';
+  const transactionShiftSelection=useRef(transactionShiftId);transactionShiftSelection.current=transactionShiftId;
   const [query, setQuery] = useState('');
   const [showInactive, setShowInactive] = useState(false);
   const [currencyFilter, setCurrencyFilter] = useState<'NIO' | 'USD' | null>(null);
@@ -8454,11 +8598,14 @@ function TransactionTable({ config, currentUser }: { config: CrudConfig; current
   const [markedTransactionIds, setMarkedTransactionIds] = useState<Set<string>>(() => new Set());
   const [groupDetail, setGroupDetail] = useState<TransactionGroupDetailApi | null>(null);
   const detailRequestRef = useRef(0);
-  const [modal, setModal] = useState<{ mode: ModalMode | 'view' | 'pay'; row: CrudRow; groupRows?: CrudRow[]; payments?: TransactionGroupDetailApi['compensations'] } | null>(null);
+  const [modal, setModal] = useState<{ mode: ModalMode | 'view' | 'pay'; row: CrudRow; editVersion?:string;groupRows?: CrudRow[]; payments?: TransactionGroupDetailApi['compensations'] } | null>(null);
   const [showExchangeCalculator, setShowExchangeCalculator] = useState(false);
   const [showDigitalCalculator, setShowDigitalCalculator] = useState(false);
   const [showDirectoryLookup, setShowDirectoryLookup] = useState(false);
   const [isSavingTransactions, setIsSavingTransactions] = useState(false);
+  const batchRequestId=useRef('');
+  const batchSubmitting=useRef(false);
+  const voidRequestIds=useRef(new Map<string,{requestId:string;expectedVersion:string}>());
   const [transactionSaveError, setTransactionSaveError] = useState('');
   const [periodFilter, setPeriodFilter] = useState<PeriodFilter>(emptyPeriodFilter);
   const isBoss = currentUser.roleCode === 'JEFA';
@@ -8483,7 +8630,9 @@ function TransactionTable({ config, currentUser }: { config: CrudConfig; current
 
   async function reloadTransactions() {
     const databaseRows = await loadAllTransactions();
-    setRows(databaseRows.map(mapApiTransactionRow));
+    const latest=databaseRows.map(mapApiTransactionRow);
+    setRows(latest);
+    return latest;
   }
 
   useEffect(() => {
@@ -8491,12 +8640,14 @@ function TransactionTable({ config, currentUser }: { config: CrudConfig; current
     setRows([]);
     Promise.all([
       loadAllTransactions(),
-      apiRequest<ShiftDetail | null>('/shifts/current'),
+      apiRequest<ShiftDetail | null>(transactionShiftPath),
+      currentUser.roleCode==='CAJERO'?apiRequest<ShiftDetail[]>('/shifts'):Promise.resolve([]),
     ])
-      .then(([databaseRows, shift]) => {
+      .then(([databaseRows, shift,shifts]) => {
         if (!cancelled) {
           setRows(databaseRows.map(mapApiTransactionRow));
           setCurrentShift(shift);
+          setTransactionShifts(shifts.filter(item=>['ABIERTO','PENDIENTE_APROBACION','EN_REVISION'].includes(item.estado)));
         }
       })
       .catch(() => {
@@ -8508,13 +8659,14 @@ function TransactionTable({ config, currentUser }: { config: CrudConfig; current
     return () => {
       cancelled = true;
     };
-  }, [currentUser.id]);
+  }, [currentUser.id,transactionShiftId]);
 
   useOperationalRefresh(async () => {
     const [databaseRows, shift] = await Promise.all([
       loadAllTransactions(),
-      apiRequest<ShiftDetail | null>('/shifts/current'),
+      apiRequest<ShiftDetail | null>(transactionShiftPath),
     ]);
+    if(transactionShiftSelection.current!==transactionShiftId)return;
     setRows(databaseRows.map(mapApiTransactionRow));
     setCurrentShift(shift);
   }, !modal && !isSavingTransactions);
@@ -8522,7 +8674,8 @@ function TransactionTable({ config, currentUser }: { config: CrudConfig; current
   // Mantiene las guias de saldo y efectivo al dia sin cerrar el formulario ni
   // reemplazar los borradores que el cajero esta digitando.
   useOperationalRefresh(async () => {
-    const shift = await apiRequest<ShiftDetail | null>('/shifts/current');
+    const shift = await apiRequest<ShiftDetail | null>(transactionShiftPath);
+    if(transactionShiftSelection.current!==transactionShiftId)return;
     setCurrentShift(shift);
   }, Boolean(modal) && !isSavingTransactions, 5000);
 
@@ -8597,6 +8750,8 @@ function TransactionTable({ config, currentUser }: { config: CrudConfig; current
 
   function openCreateModal() {
     const entity = [...new Set(currentShift?.availableAccounts.map((account) => account.entity) ?? [])][0] || '';
+    if(currentUser.roleCode==='CAJERO'&&(!currentShift||currentShift.estado==='CERRADO'||currentShift.write_locked))return;
+    batchRequestId.current=createFinancialRequestId();
     setShowExchangeCalculator(false);
     setTransactionSaveError('');
     setModal({
@@ -8605,6 +8760,7 @@ function TransactionTable({ config, currentUser }: { config: CrudConfig; current
         id: nextReadableId(rows, config.idPrefix),
         registeredAt: '',
         entity,
+        shiftDatabaseId:currentShift?.database_id||'',
         movementCode: '',
         movement: '',
         direction: '',
@@ -8626,7 +8782,8 @@ function TransactionTable({ config, currentUser }: { config: CrudConfig; current
   }
 
   useEffect(() => {
-    if (!currentShift || window.sessionStorage.getItem(openTransactionRequestKey) !== '1') return;
+    const requested=window.sessionStorage.getItem(openTransactionRequestKey);
+    if (!currentShift || !requested || (requested!=='1'&&requested!==currentShift.database_id)) return;
     // Consume la solicitud una sola vez para evitar reabrir el formulario al volver a la pantalla.
     window.sessionStorage.removeItem(openTransactionRequestKey);
     openCreateModal();
@@ -8638,6 +8795,12 @@ function TransactionTable({ config, currentUser }: { config: CrudConfig; current
     try {
       if (mode === 'view' || mode === 'edit') {
         const group = await apiRequest<TransactionGroupDetailApi>(`/transactions/${row.databaseId}/group-detail`);
+        const sourceId=group.details[0]?.transaction.shift_id;
+        if(mode==='edit'&&currentUser.roleCode==='CAJERO'&&sourceId&&sourceId!==currentShift?.database_id&&transactionShifts.some(item=>item.database_id===sourceId)){
+          const source=await apiRequest<ShiftDetail>(`/shifts/${sourceId}`);
+          if(request!==detailRequestRef.current)return;
+          setTransactionShiftId(sourceId);setCurrentShift(source);
+        }
         if (request === detailRequestRef.current) {
           {
             const details = group.details.filter(item => mode === 'view' || item.transaction.estado !== 'ANULADA');
@@ -8651,14 +8814,15 @@ function TransactionTable({ config, currentUser }: { config: CrudConfig; current
                 changeCounts: index === lastIndex ? shared.changeCounts : {NIO:[],USD:[]},
               }}), sharedLegacy: '1' };
             });
-            setModal({mode,row:groupRows.find(item => item.databaseId===row.databaseId) ?? groupRows[0],groupRows,payments:group.compensations});
+            if(mode==='edit')batchRequestId.current=createFinancialRequestId();
+            setModal({mode,row:groupRows.find(item => item.databaseId===row.databaseId) ?? groupRows[0],editVersion:group.editVersion,groupRows,payments:group.compensations});
           }
         }
         return;
       }
       const detail = await apiRequest<TransactionDetailApi>(`/transactions/${row.databaseId}/detail`);
       if (request !== detailRequestRef.current) return;
-      setModal({ mode, row: mapApiTransactionDetail(detail) });
+      setModal({ mode, row: mapApiTransactionDetail(detail),editVersion:detail.editVersion });
     } catch (error) {
       setTransactionSaveError(
         error instanceof Error ? error.message : 'No fue posible cargar la transaccion.',
@@ -8675,6 +8839,7 @@ function TransactionTable({ config, currentUser }: { config: CrudConfig; current
         setTransactionSaveError('La transaccion no tiene un pendiente disponible para liquidar.');
         return;
       }
+      batchRequestId.current=createFinancialRequestId();
       setModal({ mode: 'pay', row: preparePendingPaymentRow(paymentRow) });
     } catch (error) {
       setTransactionSaveError(
@@ -8698,10 +8863,14 @@ function TransactionTable({ config, currentUser }: { config: CrudConfig; current
     });
 
     if (modal?.mode === 'edit' && modal.groupRows) {
+      if(batchSubmitting.current)return;
+      batchSubmitting.current=true;
       setIsSavingTransactions(true);
       setTransactionSaveError('');
       try {
         const payload = {
+          requestId:batchRequestId.current,
+          expectedVersion:requireEditVersion(modal.editVersion),
           updates: rowsToSave.map(row => ({ id: row.databaseId, data: {
             entityCode:row.entity,movementCode:row.movementCode,currencyCode:row.currency,amount:parseMoneyValue(row.amountValue),
             pendingName:row.pendingName,description:row.description,rates:{buy:parseMoneyValue(row.exchangeRateBuy),sell:parseMoneyValue(row.exchangeRateSell)},settlement:transactionSettlementPayload(row),
@@ -8711,22 +8880,24 @@ function TransactionTable({ config, currentUser }: { config: CrudConfig; current
         await apiRequest(`/transactions/${modal.row.databaseId}/group`, {method:'PUT',body:JSON.stringify(payload)});
         await reloadTransactions(); setModal(null); announceOperationalDataChange();
       } catch (error) { setTransactionSaveError(error instanceof Error ? error.message : 'No se pudo guardar el grupo.'); }
-      finally { setIsSavingTransactions(false); }
+      finally { batchSubmitting.current=false;setIsSavingTransactions(false); }
       return;
     }
     if (modal?.mode === 'pay') {
+      if(batchSubmitting.current)return;
       const paymentRow = rowsToSave[0];
       if (!paymentRow.pendingDatabaseId) {
         setTransactionSaveError('La transaccion no tiene un pendiente valido para liquidar.');
         return;
       }
+      batchSubmitting.current=true;
       setIsSavingTransactions(true);
       setTransactionSaveError('');
       try {
         const payload = buildTransactionBatchPayload(rowsToSave);
         await apiRequest(`/transactions/pending/${paymentRow.pendingDatabaseId}/pay`, {
           method: 'POST',
-          body: JSON.stringify({ rates: payload.rates, settlement: payload.settlement }),
+          body: JSON.stringify({ requestId:batchRequestId.current,rates: payload.rates, settlement: payload.settlement }),
         });
         await reloadTransactions();
         setModal(null);
@@ -8736,17 +8907,20 @@ function TransactionTable({ config, currentUser }: { config: CrudConfig; current
           error instanceof Error ? error.message : 'No fue posible liquidar el pendiente.',
         );
       } finally {
+        batchSubmitting.current=false;
         setIsSavingTransactions(false);
       }
       return;
     }
 
     if (modal?.mode !== 'create') {
+      if(batchSubmitting.current)return;
       const rowToSave = rowsToSave[0];
       if (!rowToSave.databaseId) {
         setTransactionSaveError('La transaccion no tiene un identificador valido para guardar los cambios.');
         return;
       }
+      batchSubmitting.current=true;
       setIsSavingTransactions(true);
       setTransactionSaveError('');
       try {
@@ -8754,6 +8928,8 @@ function TransactionTable({ config, currentUser }: { config: CrudConfig; current
         await apiRequest(`/transactions/${rowToSave.databaseId}`, {
           method: 'PUT',
           body: JSON.stringify({
+            requestId:batchRequestId.current,
+            expectedVersion:requireEditVersion(modal?.editVersion),
             entityCode: rowToSave.entity,
             movementCode: rowToSave.movementCode,
             currencyCode: rowToSave.currency === 'USD' ? 'USD' : 'NIO',
@@ -8774,40 +8950,23 @@ function TransactionTable({ config, currentUser }: { config: CrudConfig; current
             : 'No fue posible actualizar la transaccion.',
         );
       } finally {
+        batchSubmitting.current=false;
         setIsSavingTransactions(false);
       }
       return;
     }
 
+    if(batchSubmitting.current)return;
+    batchSubmitting.current=true;
     setIsSavingTransactions(true);
     setTransactionSaveError('');
     try {
-      const created = await apiRequest<CreatedTransactionBatch>('/transactions/batch', {
+      await apiRequest<CreatedTransactionBatch>('/transactions/batch', {
         method: 'POST',
-        body: JSON.stringify(buildTransactionBatchPayload(rowsToSave)),
+        body: JSON.stringify({...buildTransactionBatchPayload(rowsToSave),requestId:batchRequestId.current,shiftId:modal.row.shiftDatabaseId||currentShift?.database_id}),
       });
-      const databaseRows = created.transactions.map((transaction, index) => {
-        const source = rowsToSave[index];
-        const readableId = `TRA-${String(created.operationCode).padStart(6, '0')}-${String(transaction.order).padStart(2, '0')}`;
-        return normalizeTransactionRow({
-          ...source,
-          id: readableId,
-          databaseId: transaction.id,
-          transactionGroupId: created.groupId,
-          transactionGroupOrder: String(transaction.order),
-          registeredAt: coerceTransactionDateTime(created.createdAt),
-          entity: transaction.entityCode,
-          movementCode: transaction.movementCode,
-          movement: transaction.movement,
-          direction: transaction.direction === 'SALE' ? 'Salida' : 'Ingreso',
-          currency: transaction.currencyCode,
-          amountValue: String(transaction.amount),
-          pendingName: transaction.pendingName,
-          description: transaction.description,
-          status: 'Registrada',
-        });
-      });
-      setRows((currentRows) => [...currentRows, ...databaseRows]);
+      // Un reenvio confirmado puede referirse a un registro ya corregido o anulado.
+      await reloadTransactions();
       setModal(null);
       announceOperationalDataChange();
     } catch (error) {
@@ -8817,31 +8976,39 @@ function TransactionTable({ config, currentUser }: { config: CrudConfig; current
           : 'No fue posible guardar las transacciones.',
       );
     } finally {
+      batchSubmitting.current=false;
       setIsSavingTransactions(false);
     }
   }
 
   async function toggleVoid(row: CrudRow) {
-    if (row.status === 'Anulada') {
-      return;
-    }
-    if (!await requestSystemConfirm(`La transacción ${row.id} quedará anulada y sus movimientos serán revertidos.`, { title:'Anular transacción', confirmLabel:'Anular', tone:'danger' })) return;
-    if (!row.databaseId) {
-      setTransactionSaveError('La transacción no tiene un identificador válido para anularse.');
-      return;
-    }
+    if (row.status === 'Anulada' || batchSubmitting.current) return;
+    batchSubmitting.current=true;
     setIsSavingTransactions(true);
     setTransactionSaveError('');
     try {
-      await apiRequest(`/transactions/${row.databaseId}/void`, { method: 'POST' });
-      await reloadTransactions();
-      const shift = await apiRequest<ShiftDetail | null>('/shifts/current');
+      if (!await requestSystemConfirm(`La transacción ${row.id} por ${formatTransactionMoney(row)} quedará anulada y sus movimientos serán revertidos.`, { title:'Anular transacción', confirmLabel:'Anular', tone:'danger' })) return;
+      if (!row.databaseId) throw new Error('La transacción no tiene un identificador válido para anularse.');
+      if(!voidRequestIds.current.has(row.databaseId))voidRequestIds.current.set(row.databaseId,{requestId:createFinancialRequestId(),expectedVersion:requireEditVersion(row.editVersion)});
+      const result=await apiRequest<{historical?:boolean}>(`/transactions/${row.databaseId}/void`, { method: 'POST',body:JSON.stringify(voidRequestIds.current.get(row.databaseId)) });
+      const latest=(await reloadTransactions()).find(item=>item.databaseId===row.databaseId);
+      const shift = await apiRequest<ShiftDetail | null>(transactionShiftPath);
       setCurrentShift(shift);
+      voidRequestIds.current.delete(row.databaseId);
       announceOperationalDataChange();
-      await requestSystemAlert(`La transacción ${row.id} fue anulada y sus movimientos fueron revertidos.`, 'Transacción anulada');
+      await requestSystemAlert(latest?.status==='Anulada'
+        ? result.historical?`La anulación histórica de ${row.id} fue confirmada. El cierre y sus fondos se conservaron.`:`La transacción ${row.id} fue anulada y sus movimientos fueron revertidos.`
+        : latest?`La solicitud de anulación fue aplicada anteriormente. ${row.id} tiene cambios posteriores; revise su estado actual.`
+        : 'La anulación fue confirmada, pero el registro ya no está disponible en esta vista. Solicite revisión administrativa.',
+      latest?.status==='Anulada'?'Transacción anulada':'Resultado confirmado');
     } catch (error) {
+      if(error instanceof ApiRequestError&&error.code==='TRA-VER-409'){
+        voidRequestIds.current.delete(row.databaseId);
+        await reloadTransactions().catch(()=>undefined);
+      }
       setTransactionSaveError(error instanceof Error ? error.message : 'No fue posible anular la transacción.');
     } finally {
+      batchSubmitting.current=false;
       setIsSavingTransactions(false);
     }
   }
@@ -8921,7 +9088,10 @@ function TransactionTable({ config, currentUser }: { config: CrudConfig; current
             <button type="button" className="secondary-button export-button export-button--pdf transaction-export-icon" title="Exportar PDF" aria-label="Exportar PDF" onClick={() => void exportPdf(config, columns, processedRows)}>
               <FileText size={17} />
             </button>
-            <button type="button" className="primary-button transaction-add-button" onClick={openCreateModal}>
+            {currentUser.roleCode==='CAJERO'&&transactionShifts.some(item=>item.estado==='EN_REVISION')&&<label className="form-field">Turno de la transacción<select aria-label="Turno de la transacción" value={transactionShiftId||currentShift?.database_id||''} disabled={Boolean(modal)||isSavingTransactions} onChange={event=>{setCurrentShift(null);setTransactionShiftId(event.target.value);}}>
+              {transactionShifts.map(item=><option key={item.database_id} value={item.database_id}>{item.id} · {item.estado==='EN_REVISION'?'En revisión':'Abierto'}</option>)}
+            </select></label>}
+            <button type="button" className="primary-button transaction-add-button" disabled={currentUser.roleCode==='CAJERO'&&(!currentShift||currentShift.estado==='CERRADO'||currentShift.write_locked)} onClick={openCreateModal}>
               <Plus size={17} />
               Agregar
             </button>
@@ -9208,6 +9378,7 @@ function TransactionModal({
   const initialDraft = useMemo(() => normalizeTransactionRow(row), [row]);
   const [drafts, setDrafts] = useState<CrudRow[]>(() => groupRows?.map(normalizeTransactionRow) ?? [initialDraft]);
   const [removedIds, setRemovedIds] = useState<string[]>([]);
+  const groupVoidConfirming=useRef(false);
   const [activeTabIndex, setActiveTabIndex] = useState(() => Math.max(0, groupRows?.findIndex(item=>item.databaseId===row.databaseId) ?? 0));
   const draft = drafts[activeTabIndex] ?? drafts[0];
   const transactionGroupIdRef = useRef(
@@ -9672,18 +9843,6 @@ function TransactionModal({
       return;
     }
     const customerBalanceSteps = calculateTransactionCustomerBalanceSteps(balanceDrafts, transactionExchangeRate, pendingCompensation, recordedCompensation);
-    const finalBalanceStep = customerBalanceSteps[customerBalanceSteps.length - 1];
-    const finalBalanceNio = (finalBalanceStep?.balanceNio || 0)
-      + (finalBalanceStep?.balanceUsd || 0)
-        * (finalBalanceStep?.changeRateValue || finalBalanceStep?.rateValue || 1);
-    const hasMinorRoundingDifference = Math.abs(finalBalanceNio) > 0.005
-      && Math.abs(finalBalanceNio) <= transactionRoundingToleranceNio;
-    if (hasMinorRoundingDifference) {
-      await requestSystemAlert(
-        `Existe una diferencia de redondeo de ${formatCashCountMoney(Math.abs(finalBalanceNio), 'NIO')}. Se conservara completa como saldo contable aunque no pueda representarse con una denominacion fisica.`,
-        'Diferencia minima permitida',
-      );
-    }
     onSave(
       drafts.map((transactionDraft, index) => {
         const currency: CashCurrency = transactionDraft.currency === 'USD' ? 'USD' : 'NIO';
@@ -9733,6 +9892,7 @@ function TransactionModal({
     <div className="modal-backdrop" role="dialog" aria-modal="true">
       {navigation && <ModalRecordNavigator {...navigation} />}
       <section className={`modal-panel transaction-modal-panel ${isReadOnly ? 'transaction-modal-panel--readonly' : ''}`} ref={modalRef}>
+        <div className="modal-top">
         <div className="modal-header">
           <div>
             <p>{mode === 'create' ? 'Nuevo registro' : mode === 'edit' ? 'Editar registro' : mode === 'pay' ? 'Pago de pendiente' : 'Consulta de registro'}</p>
@@ -9788,13 +9948,15 @@ function TransactionModal({
                 className="transaction-tab__select"
                 role="tab"
                 aria-selected={activeTabIndex === index}
+                title={transactionDraft.movement || 'Sin movimiento'}
                 onClick={() => {
                   setActiveTabIndex(index);
                   setCashView('received');
                 }}
               >
                 <span>Transaccion {index + 1}</span>
-                <small>{transactionDraft.movement || 'Sin movimiento'}{transactionDraft.movementCode ? ` · ${transactionDraft.movementCode}` : ''}</small>
+                <small>{transactionDraft.entity || 'Sin banco'}{transactionDraft.movementCode ? ` · ${transactionDraft.movementCode}` : ''}</small>
+                <strong className="transaction-tab__amount">{formatTransactionMoney(transactionDraft)}</strong>
               </button>
               {((mode === 'create' && drafts.length > 1) || (mode === 'edit' && groupRows)) && (
                 <button
@@ -9822,6 +9984,7 @@ function TransactionModal({
           )}
         </div>
 
+        </div>
         {draft.closedShift === '1' && <p role="status">Turno cerrado: esta correccion modifica el registro historico, sin cambiar saldos, arqueos ni pendientes del cierre.</p>}
         {draft.sharedLegacy === '1' && <p role="status">Arqueo original compartido: el efectivo se muestra una sola vez, en la primera operacion de su direccion; el vuelto, en la ultima. La distribucion original por pestana no fue registrada.</p>}
         {draft.digitalSettlement === '1' && <p role="status">Liquidacion digital: no registra efectivo. Al cambiar el monto se recalcula el saldo del pendiente vinculado.</p>}
@@ -10173,7 +10336,11 @@ function TransactionModal({
             </button>
           )}
           {mode === 'edit' && groupRows && <button type="button" className="secondary-button danger-button" disabled={isSaving} onClick={async () => {
-            if (await requestSystemConfirm(`Se anularan las ${groupRows.length} transacciones del grupo.`,{title:'Anular grupo completo',confirmLabel:'Anular grupo',tone:'danger'})) await onSave([],groupRows.map(item=>item.databaseId));
+            if(groupVoidConfirming.current)return;
+            groupVoidConfirming.current=true;
+            try{
+              if (await requestSystemConfirm(`Se anularan las ${groupRows.length} transacciones del grupo.`,{title:'Anular grupo completo',confirmLabel:'Anular grupo',tone:'danger'})) await onSave([],groupRows.map(item=>item.databaseId));
+            }finally{groupVoidConfirming.current=false;}
           }}><Ban size={17}/>Anular {groupRows.length} transacciones</button>}
           {removedIds.length > 0 && <span>Se anularan {removedIds.length} transacciones</span>}
           {!isReadOnly && (

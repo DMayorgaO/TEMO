@@ -31,13 +31,20 @@ export function filterCounts(rows: Count[], banks: string[], currencies: Currenc
   });
 }
 
-export function cashierCounts(data: DashboardData, rows: Count[], day: string): CashierCount[] {
+export const weekdayLabel = (day: string) => ['dom', 'lun', 'mar', 'mie', 'jue', 'vie', 'sab'][new Date(`${day}T12:00:00Z`).getUTCDay()];
+
+export function selectDayRange(days: string[], start: number, end: number): string[] {
+  return days.slice(Math.max(0, Math.min(start, end)), Math.min(days.length, Math.max(start, end) + 1));
+}
+
+export function cashierCounts(data: DashboardData, rows: Count[], day: string | string[]): CashierCount[] {
+  const selectedDays = new Set(typeof day === 'string' ? [day] : day);
   const roster = new Map<string, CashierCount>();
   for (const row of [...data.counts, ...data.balances]) {
     const key = `${row.branch_id}:${row.cashier_id}`;
     roster.set(key, { branch_id: row.branch_id, branch: row.branch, cashier_id: row.cashier_id, cashier: row.cashier, nio: 0, usd: 0, total: 0 });
   }
-  for (const row of rows.filter(row => row.day === day)) {
+  for (const row of rows.filter(row => selectedDays.has(row.day))) {
     const key = `${row.branch_id}:${row.cashier_id}`;
     const value = roster.get(key)!;
     value.nio += row.nio; value.usd += row.usd; value.total += row.total;

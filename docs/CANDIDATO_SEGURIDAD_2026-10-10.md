@@ -1,8 +1,8 @@
 # Candidato acumulado de seguridad
 
 Fecha: 2026-10-10. Estado: paquete publicado, API y web80d6594 verificadas a17:42
-Managua. Ver ESTADO_DESPLIEGUE_2026-10-10.md. Confirmacion autenticada del titular
-tras despliegue y pendientes generales del checklist siguen abiertos.
+Managua. Ver ESTADO_DESPLIEGUE_2026-10-10.md. Titular confirma recuperacion por
+correo y acceso posterior con VIP Access; pendientes generales siguen abiertos.
 
 ## Contenido del siguiente paquete
 
@@ -43,7 +43,7 @@ tras despliegue y pendientes generales del checklist siguen abiertos.
 - [x] Usuario confirma QA en navegador habitual: diferencias de auditoria nuevas (sucursal,
   cuenta y movimiento); resumen de transferencias; PDF/Excel/PNG, login/MFA,
   logout. No acredita todos los flujos financieros. Correo local sin proveedor;
-  confirma recepcion en produccion, pendiente completar recuperacion tras despliegue.
+  confirma recuperacion completa y acceso con VIP Access en produccion despues del despliegue.
 - [x] Revision final del diff, incluidos nuevos archivos no rastreados. No usar
   git add indiscriminado: excluir respaldos, tmp, .env, secretos y documentos
   ajenos al paquete. Preservar informe de seguridad aportado por el usuario.
@@ -60,7 +60,7 @@ tras despliegue y pendientes generales del checklist siguen abiertos.
   No basta editar render.yaml para asegurar cambios en servicios existentes.
 - [x] Usuario confirma configuracion y recepcion real de correo en API:
   RESEND_API_KEY y PASSWORD_RESET_EMAIL_FROM,
-  dominio verificado. Uso completo del codigo tras despliegue pendiente.
+  dominio verificado. Uso completo del ultimo codigo y acceso posterior confirmados.
   Nunca exponerlos en frontend/logs.
 - [x] Confirmar VITE_API_URL/APP_ENV/SESSION_IDLE por bundle exacto y CSP reales al publicar
   web. onrender.com sigue permitido transitoriamente en CSP; no es Zero Trust.

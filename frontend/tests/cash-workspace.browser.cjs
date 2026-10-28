@@ -21,7 +21,7 @@ const makeShift=(code=85,state='ABIERTO')=>({database_id:code===85?id:'22222222-
       const context=await browser.newContext({viewport:{width:1366,height:768},timezoneId:'America/Managua'});
       const permissions=['CASH_COUNT','TRANSACTIONS','TRANSFERS','DOLLAR_PURCHASES','PENDING','DASHBOARD','SHIFTS'].map(s=>`VER_${s}`);
       const user={id,fullName:'USUARIO QA LOCAL',roleCode:role,roleName:role,permissions};
-      let shift=makeShift();const closed=makeShift(80,'CERRADO');const writes=[];const errors=[];let failBalance=false;
+      let shift=makeShift();const closed=makeShift(80,'CERRADO');const writes=[];const errors=[];let failBalance=false,failCash=false,closeNotice=false,noticeTime=new Date().toISOString();
       await context.addInitScript(user=>{sessionStorage.setItem('temo:auth-token','visual-fixture-not-a-real-session');sessionStorage.setItem('temo:auth-user',JSON.stringify(user));},user);
       await context.route('**/api/**',async route=>{
         const request=route.request(),url=new URL(request.url()),p=url.pathname.replace(/^.*\/api/,'');
@@ -29,14 +29,21 @@ const makeShift=(code=85,state='ABIERTO')=>({database_id:code===85?id:'22222222-
         if(request.method()!=='GET')writes.push({path:p,body:request.postDataJSON()});
         if(p==='/auth/me')body={user};
         else if(p==='/transfers/context')body={shifts:[],accounts:[]};
-        else if(p==='/shifts/notifications')body=[];
+        else if(p==='/shifts/notifications')body=closeNotice?[{id:'55555555-5555-4555-8555-555555555555',kind:'CLOSE_REQUEST',shift_state:shift.estado,shift_id:id,shift_code:shift.id,cashier:shift.cajero,branch:shift.sucursal,register:shift.caja,created_at:noticeTime,observations:'Revision de prueba'},
+          {id:'66666666-6666-4666-8666-666666666666',kind:'SHIFT_HANDOVER',shift_id:id,shift_code:shift.id,cashier:shift.cajero,branch:shift.sucursal,register:shift.caja,created_at:noticeTime,observations:'Texto legado',handover_sender:'Cajera saliente',handover_receiver:'Cajera entrante',handover_destination:'TUR-000086',handover_mode:'EN_REVISION'}]:[];
         else if(p==='/shifts/access')body={active:{database_id:id,estado:'ABIERTO',sucursal:shift.sucursal,caja:shift.caja},prepared:null};
         else if(p==='/shifts/dashboard')body={today,tableDay:url.searchParams.get('day')||today,from:today,to:today,counts:[],accounts:[],banks:[],balances:[],lafise:[],reconciliation:[]};
         else if(p==='/shifts')body=[shift,closed];
         else if(p==='/shifts/current'||p.startsWith('/shifts/'+id)){
+          if(p.endsWith('/close-request'))shift={...shift,closure_requested:true,write_locked:true};
+          if(p.endsWith('/cancel-close-request'))shift={...shift,closure_requested:false,write_locked:false,solicitud_estado:'CANCELADA'};
           if(p.endsWith('/account-balances')){
             if(failBalance){failBalance=false;await route.fulfill({status:503,contentType:'application/json',body:JSON.stringify({message:'Fallo de prueba al guardar saldo'})});return;}
             const input=request.postDataJSON().balances[0];shift={...shift,balances:shift.balances.map(row=>row.account===input.account?{...row,system:String(input.amount),system_income:input.income===undefined?row.system_income:String(input.income),system_expense:input.expense===undefined?row.system_expense:String(input.expense)}:row)};
+          }
+          if(p.endsWith('/cash-count')&&request.method()==='PUT'){
+            if(failCash){failCash=false;await route.fulfill({status:503,contentType:'application/json',body:JSON.stringify({message:'No se guardo el arqueo de prueba'})});return;}
+            shift={...shift,cambio_nio:String(request.postDataJSON().changeNio)};
           }
           body=shift;
         }else if(p.includes(closed.database_id))body=closed;
@@ -48,6 +55,8 @@ const makeShift=(code=85,state='ABIERTO')=>({database_id:code===85?id:'22222222-
       await page.goto(`${baseUrl}/#/arqueo`);
       await page.waitForTimeout(600);
       await page.locator('.cash-workspace-balances .consolidation-table').first().waitFor();
+      assert.deepEqual((await page.locator('.cash-count-live-grid .transaction-cash-card--nio .transaction-cash-denomination').allTextContents()).slice(-3),['C$ 1.00','C$ 0.50','C$ 0.25']);
+      assert.equal(await page.getByRole('button',{name:'Limpiar',exact:true}).count(),0,'Arqueo no permite reiniciar todo el conteo');
       await page.waitForTimeout(300);
       for(const [width,height] of [[1366,768],[1920,1080],[1280,720],[1366,650],[390,844]]){
         await page.setViewportSize({width,height});await page.waitForTimeout(150);
@@ -117,6 +126,40 @@ const makeShift=(code=85,state='ABIERTO')=>({database_id:code===85?id:'22222222-
         assert.equal(writes.filter(w=>w.path.endsWith('/account-balances')).at(-1).body.balances[0].amount,499900);
         assert.equal(shift.balances.find(row=>row.account==='BAC NIO SECOND').system,'100');
       }
+      if(role==='CAJERO'){
+        shift={...shift,estado:'EN_REVISION',solicitud_estado:'PENDIENTE'};
+        await page.reload();await page.locator('.cash-workspace-balances').waitFor();
+        const close=page.getByRole('button',{name:'Solicitar cierre',exact:true});
+        assert.equal(await close.isEnabled(),true);
+        const before=writes.length;
+        await close.click();
+        await page.getByRole('dialog').filter({hasText:'El turno seguira en revision'}).waitFor();
+        await page.getByRole('button',{name:'Enviar solicitud',exact:true}).click();
+        await page.getByText('Correcciones listas. Solicitud enviada al Administrador para revisar el cierre.',{exact:true}).waitFor();
+        const save=writes.slice(before).findIndex(w=>w.path.endsWith('/cash-count'));
+        const request=writes.slice(before).findIndex(w=>w.path.endsWith('/close-request'));
+        assert.ok(save>=0&&request>save,'Save current cash before asking for closure');
+        assert.equal(writes.slice(before).filter(w=>w.path.endsWith('/close-request')).length,1);
+        assert.equal(shift.estado,'EN_REVISION');
+        assert.equal(await close.isEnabled(),false);
+        assert.equal(await page.getByRole('textbox',{name:'Saldo sistema BAC NIO',exact:true}).isEditable(),false);
+        assert.equal(await page.getByRole('button',{name:'Agregar transaccion',exact:true}).isEnabled(),false);
+        const cash=page.locator('input[data-cash-scope="general-cash-count"]').first();
+        assert.equal(await cash.isEditable(),false);
+        await page.screenshot({path:path.join(root,'tmp','review-request-close.png'),fullPage:true});
+        await page.getByRole('button',{name:'Cancelar solicitud',exact:true}).click();
+        await page.getByRole('button',{name:'Habilitar correcciones',exact:true}).click();
+        await page.waitForFunction(()=>!document.querySelector('.cash-close-button')?.disabled);
+        assert.equal(shift.estado,'EN_REVISION');
+        assert.equal(await cash.isEditable(),true);
+        assert.equal(await page.getByRole('textbox',{name:'Saldo sistema BAC NIO',exact:true}).isEditable(),true);
+        failCash=true;
+        const requests=writes.filter(w=>w.path.endsWith('/close-request')).length;
+        await close.click();await page.getByRole('button',{name:'Enviar solicitud',exact:true}).click();
+        await page.getByText('No se guardo el arqueo de prueba',{exact:true}).waitFor();
+        assert.equal(writes.filter(w=>w.path.endsWith('/close-request')).length,requests,'Failed cash save must not notify readiness');
+        assert.equal(await close.isEnabled(),true);
+      }
       await page.goto(`${baseUrl}/#/saldos`);await page.locator('.cash-workspace-balances').waitFor();
       if(role==='JEFA'){
         for(const hash of ['transferencias','compra-dolares','pendientes']){
@@ -133,7 +176,51 @@ const makeShift=(code=85,state='ABIERTO')=>({database_id:code===85?id:'22222222-
         assert.equal(await button.getAttribute('aria-pressed'),'true');
         await page.getByLabel('Día de transacciones',{exact:true}).fill('2026-01-01');
         assert.equal(await button.getAttribute('aria-pressed'),'false');
-        await button.click();assert.equal(await button.getAttribute('aria-pressed'),'true');
+        await button.click();
+        await page.waitForFunction(()=>document.querySelector('.report-today-button')?.getAttribute('aria-pressed')==='true');
+        assert.equal(await button.getAttribute('aria-pressed'),'true');
+      }
+      if(role==='JEFA'){
+        closeNotice=true;await page.reload();
+        await page.getByText('Saliente',{exact:true}).waitFor();
+        await page.getByText('Entrante',{exact:true}).waitFor();
+        const reviewButton=page.getByRole('button',{name:'Revisar cierre',exact:true});
+        const style=await reviewButton.evaluate(e=>({background:getComputedStyle(e).backgroundColor,color:getComputedStyle(e).color,height:e.getBoundingClientRect().height}));
+        assert.equal(style.background,'rgb(15, 118, 110)');assert.equal(style.color,'rgb(255, 255, 255)');assert.ok(style.height>=40);
+        for(const [width,height]of [[1366,768],[1920,1080],[390,844]]){
+          await page.setViewportSize({width,height});
+          assert.ok(await page.locator('.notification-summary').evaluate(e=>e.scrollWidth<=e.clientWidth));
+          await page.screenshot({path:path.join(root,'tmp',`handover-notification-${width}.png`),fullPage:true,animations:'disabled'});
+        }
+        await page.setViewportSize({width:1366,height:768});
+        await page.getByRole('button',{name:'Aceptar resumen',exact:true}).click();
+        await page.evaluate(()=>window.dispatchEvent(new Event('temo:operational-data-changed')));
+        await page.waitForTimeout(350);
+        assert.equal(await page.getByRole('button',{name:'Revisar cierre',exact:true}).count(),0,'Dismissed request stays hidden until renewed');
+        noticeTime=new Date(Date.now()+1000).toISOString();
+        shift={...shift,estado:'EN_REVISION',closure_version:'2026-10-27 14:00:00.123456-06',solicitud_observaciones:'Traspaso del turno TUR-000085: Cajera saliente entrega a Cajera entrante. Cierre pendiente de aprobacion administrativa.\nObservaciones: Revisar documentos',handover:{sender:'Cajera saliente',receiver:'Cajera entrante',source:'TUR-000085',destination:'TUR-000086',mode:'EN_REVISION',observations:'Revisar documentos'}};
+        await page.evaluate(()=>window.dispatchEvent(new Event('temo:operational-data-changed')));
+        await page.getByRole('button',{name:'Revisar cierre',exact:true}).click();
+        const closure=page.locator('.shift-close-modal');await closure.waitFor();
+        assert.equal(await closure.locator('[data-shift-close-observations]').inputValue(),'Revisar documentos');
+        assert.ok((await closure.locator('.handover-identity').textContent()).includes('Cajera entrante'));
+        const purchase=closure.locator('.shift-purchase-difference');
+        assert.ok((await purchase.textContent()).includes('141.08'));
+        assert.ok((await purchase.textContent()).includes('Diferencia por compra de dólares'));
+        await page.screenshot({path:path.join(root,'tmp','closure-purchase-difference.png'),fullPage:true,animations:'disabled'});
+        await closure.locator('[data-shift-close-observations]').scrollIntoViewIfNeeded();
+        const pinned=await closure.evaluate(e=>{
+          const panel=e.getBoundingClientRect(),header=e.querySelector('.modal-header').getBoundingClientRect(),footer=e.querySelector('.modal-footer').getBoundingClientRect();
+          return header.top>=panel.top-1&&footer.bottom<=panel.bottom+1&&footer.top>header.bottom;
+        });
+        assert.equal(pinned,true,'Closure header and footer remain visible after scrolling to observations');
+        await page.screenshot({path:path.join(root,'tmp','closure-handover-summary.png'),fullPage:true,animations:'disabled'});
+        await closure.locator('[data-shift-close-observations]').fill('Cuadre comprobado por Administradora');
+        await closure.getByRole('button',{name:'Guardar',exact:true}).click();
+        await closure.waitFor({state:'hidden'});
+        const saved=writes.findLast(w=>w.path.endsWith('/close'));
+        assert.equal(saved.body.expectedCloseRequest,shift.closure_version);
+        assert.equal(saved.body.observations,'Cuadre comprobado por Administradora');
       }
       assert.deepEqual(errors,[]);await context.close();
     }

@@ -1,6 +1,6 @@
 # Seguridad TEMO: contexto y checklist
 
-Actualizado: 2026-10-10. Referencia: [informe de seguridad](INFORME_SEGURIDAD_TEMO_2026-10-06.md).
+Actualizado: 2026-10-27. Referencia: [informe de seguridad](INFORME_SEGURIDAD_TEMO_2026-10-06.md).
 
 Seguimiento 2026-10-07: correccion operativa autorizada desplegada en d45772c (liquidaciones USD con NIO, arqueo nominal y resumen vertical de notificaciones). Evidencia en CORRECCION_LIQUIDACIONES_USD_2026-10-07.md. API y web verificadas; 20 pruebas backend y 5 frontend aprobadas. No se completaron nuevos bloques de seguridad; esas mejoras continuan en desarrollo.
 
@@ -10,6 +10,50 @@ Seguimiento 2026-10-07: correccion operativa autorizada desplegada en d45772c (l
 - Un [x] significa implementado y verificado en el entorno indicado, no automaticamente desplegado.
 - Registrar evidencia y riesgos pendientes. No prometer seguridad absoluta ni confundir compras con controles activos.
 - La futura aplicacion movil utilizara la misma API: aplicar permisos en servidor, no solo en la interfaz.
+
+## Prioridad urgente: Render, Node y eMudhra (2026-10-27)
+
+Ver AVISO_RENDER_NODE_EMUDHRA_2026-10-27.md. Este aviso requiere seguimiento independiente del paquete funcional pendiente. No demuestra por si solo una intrusion en TEMO ni autoriza publicacion.
+
+- [x] Avisos contrastados con Render y Node.js. TEMO usa Node en la API y en la compilacion web; PHP2Shell no aplica directamente al repositorio inspeccionado.
+- [x] Preparacion local: NODE_VERSION 22.23.4 en ambos servicios de render.yaml y respaldo .node-version. Chequeo de runtime sin credenciales ni red y 3 pruebas nuevas aprobadas. No es evidencia de parche productivo.
+- [x] Calificacion en Node 22.23.4 portable aislado, firma OpenJS y checksum verificados: build/lint, regresion y navegador correctos. Control HTTPS valido y ambos destinos de prueba rechazados con CERT_REVOKED. El Node global 24.11.1 sigue pendiente; no usarlo para publicar. Ver CIERRE_BLOQUE_SEGURIDAD_2026-10-27.md.
+- [ ] Confirmar servicios/commit Live/Node efectivos y overrides del dashboard; revisar flags TLS y CA adicionales. No se inspecciono la configuracion viva de Render.
+- [ ] Autorizar y aplicar parche de runtime, junto al candidato si supera QA o como hotfix independiente si se demora: reconstruir API y web con Node corregido y commit confirmado. No basta reiniciar ni cambiar archivos locales; registrar efectos sobre auto-deploy si se elige un commit especifico. Recordatorio del usuario: al terminar este bloque, antes de publicar.
+- [ ] Comprobar almacen de CA renovado y CA personalizada de PostgreSQL sin deshabilitar validacion TLS. Probar rechazo de certificados desde el Node real de Render; error DNS/timeout no acredita rechazo TLS.
+- [ ] Smoke test posterior: health, PostgreSQL/TLS, login/MFA/logout, CORS y recuperacion por Resend con codigo nuevo. Confirmar builds exitosos y version efectiva antes de cerrar el aviso.
+- [ ] Revisar actividad anomala; si hay indicios, respuesta a incidentes y rotacion controlada segun alcance. No cambiar claves de MFA indiscriminadamente. Revisar scripts auxiliares antiguos que omiten validacion de certificado antes de reutilizarlos.
+
+## Cierre de candidato: 2026-10-27 (solo desarrollo)
+
+- [x] Formularios con encabezado/herramientas/pestanas y acciones fijados, montos por transaccion y contexto compacto. Lanzador de doble clic sin resembrar, proxy /api local, API/PG en loopback, entorno filtrado y archivos privados bloqueados por Vite. Reinicio conserva datos/esquema/secuencias. Wi-Fi Privada y regla TCP 3188/LocalSubnet aplicadas con autorizacion; ver DESARROLLO_RED_LOCAL_2026-10-27.md. Pendientes propios EN_REVISION visibles sin ampliar permisos de liquidacion.
+- [ ] Confirmar acceso real desde el segundo dispositivo en la red local. Las pruebas automatizadas por la IP Wi-Fi se ejecutaron desde la maquina anfitriona; no prueban configuracion del router ni de otro dispositivo.
+- [x] Regresion posterior de formularios/lanzador/pendientes: 241/241 backend, 29/29 frontend, build/lint y seis recorridos de navegador aprobados con Node 22.23.4. La publicacion conjunta con el parche sigue pendiente de autorizacion y puertas de salida, no de un cambio automatico del lanzador.
+
+- [x] Bloqueo por solicitud explicita de cierre o traspaso vigente, limitado al turno del cajero solicitante. Cancelar/rechazar permite corregir; EN_REVISION no vuelve a ABIERTO. Aviso automatico de revision no bloquea correcciones. Revision administrativa cancelada/renovada rechazada por la web actual; metadatos/observaciones legibles y boton Revisar cierre destacado. Migracion 054 solo local; ver SOLICITUDES_CIERRE_TRASPASO_2026-10-27.md.
+
+Ver CIERRE_BLOQUE_SEGURIDAD_2026-10-27.md. Regresion con Node portable parcheado, instalacion limpia y build/lint correctos. Pagos de salida NIO/USD con recibos y reversion cubiertos, tambien bajo rol SQL restringido. Respaldo/restauracion local comprobados tras ampliar equivalencias exactas del verificador CHECK, sin omitir restricciones ni cambiar datos. QA operativo, carga representativa, respaldo productivo y validacion de Render siguen siendo puertas de salida; no hay commit/push/despliegue nuevo. Control de gastos excluido.
+
+## Avance acumulado: 2026-10-26 (solo desarrollo)
+
+Esta seccion complementa las etapas historicas inferiores; no marca completa toda la matriz de API ni autoriza publicacion.
+
+- [x] Permisos revalidados dentro de escrituras cubiertas: identidad activa, rol, version y cambio obligatorio. Casos de cajero propio/ajeno, otra sucursal, Administrador, Transferista, exportacion e IDs manipulados; incluye EN_REVISION y preserva el aislamiento entre cajeros.
+- [x] Auditoria ampliada de propuesta/aceptacion/rechazo/cancelacion del traspaso, registro de diferencia, correcciones de arqueo/saldos en revision y aprobacion del cierre; antes/despues permitidos sin expandir snapshots o secretos.
+- [x] Altas de transacciones/transferencias con recibo transaccional por usuario, operacion y referencia. Concurrencia, reenvio sin duplicacion, conflicto al cambiar datos, rollback y alcance actual comprobados. Migracion 049 solo local.
+- [x] Interfaz conserva referencia al reintentar manualmente, impide doble envio sin esperar otro render y consulta registros actuales tras confirmar. Sin reintentos automaticos; claves compatibles con preview HTTP local.
+- [x] Transferencias: turno original inmutable al editar, relectura bajo bloqueo, doble anulacion sin doble restitucion y rechazo de modificaciones financieras sobre turnos cerrados.
+- [x] Dependencias: 7 avisos actuales corregidos sin cambiar versiones principales. Override de Multer comprobado en instalacion limpia, paquetes de produccion y lock; npm audit sin avisos conocidos. Prueba HTTP de gzip malformado sin caida ni datos privados.
+- [x] Backend 230/230, frontend 27/27, build/lint y preflight local correctos. Pruebas SQL restringidas y concurrencia real; ver VALIDACION_PERMISOS_RECIBOS_AUDITORIA_2026-10-26.md, SEGURIDAD_LIQUIDACIONES_2026-10-26.md, SEGURIDAD_CORRECCIONES_2026-10-26.md y FORMULARIOS_OBSOLETOS_2026-10-26.md para los avances sucesivos.
+- [x] Cierre tras correcciones: el propietario solicita revision administrativa desde EN_REVISION, con sesion revalidada, guardado previo y auditoria atomica. El aviso renovado reaparece sin cambiar el estado ni los fondos del receptor. Observaciones legibles con nombres y turno; migracion 050 solo local. Ver REVISION_TRASPASO_2026-10-25.md.
+- [x] Liquidaciones individuales/multiples de efectivo, digitales y combinadas: recibos transaccionales, permisos vigentes al pagar/revertir, revalidacion del turno de aplicacion al reenviar, rechazo de recibos de pagos revertidos, auditoria ampliada y doble clic protegido en las cinco entradas web. Migracion 051 solo local. Pruebas de concurrencia real y navegador; ver SEGURIDAD_LIQUIDACIONES_2026-10-26.md.
+- [x] Ediciones/anulaciones individuales y de grupos de transacciones: recibos atomicos, reautorizacion del reenvio, rechazo de turnos anulados/sin abrir, auditoria antes/despues de anulacion, confirmaciones y doble clic protegidos. Historicos conservan fondos; respuestas antiguas no sobrescriben correcciones posteriores. Migracion 052 solo local; ver SEGURIDAD_CORRECCIONES_2026-10-26.md.
+- [x] Versionado de formularios de transacciones: edicion/anulacion obsoleta rechazada bajo bloqueo; borrador conservado, lecturas de grupo consistentes y recibo confirmado prioritario. Dos conexiones reales con referencias diferentes: solo una guarda con la misma version. Pendientes, arqueos e historicos relacionados invalidan versiones; refrescos ajenos no. Migracion 053 solo local; ver FORMULARIOS_OBSOLETOS_2026-10-26.md.
+- [ ] QA manual del conjunto con Administradora y dos cajeros; revisar Auditoria, reenvio manual de resultado incierto, transferencias y cierre del turno en revision.
+- [ ] QA manual de liquidaciones con Administradora/cajeros, POR_PAGAR y ambas monedas; comprobar reintento, correccion y aislamiento junto a los traspasos.
+- [ ] Extender matriz al resto de rutas y recibos a otras escrituras, como aperturas/cierres y edicion de transferencias; definir retencion y archivo. Los clientes anteriores sin requestId conservan compatibilidad, no esta garantia de confirmacion idempotente.
+- [ ] QA manual del versionado en dos ventanas; ampliar a otros formularios y decidir obligatoriedad para clientes anteriores/API movil. Medir carga/contencion de los nuevos triggers antes de publicar.
+- [ ] Preparar respaldo, migraciones 044-053, configuracion y retorno; publicar solo con autorizacion nueva. Control de gastos excluido y solo local.
 
 ## Pendientes consolidados al 2026-10-10
 
@@ -246,7 +290,7 @@ TOTP aumenta seguridad, pero no evita por completo phishing ni abuso de una sesi
 - [x] Preflight productivo de solo lectura:43 migraciones coincidentes, indices e identidades correctos; TLS del cliente verificado. Sin SQL nuevo.
 - [x] Respaldo nuevo del10deoctubre restaurado en servidor local aislado:62 tablas/vistas. No modifica produccion ni valida todos los ACL/RLS o recuperacion de claves externas.
 - [x] API y web80d6594 activas a17:42 Managua; API/base saludables, bundle exacto con API propia, CSP/header/meta, CORS y rechazo de anonimos comprobados. Login carga sin errores observados. Ver ESTADO_DESPLIEGUE_2026-10-10.md. Primer fallo de CORS resuelto por configuracion, sin debilitar validacion.
-- [ ] Titular confirma MFA y recuperacion completa por correo despues de publicar; no compartir OTP ni codigos.
+- [x] Titular confirma recuperacion completa en produccion con el ultimo correo, mensaje de contrasena actualizada e inicio posterior con VIP Access. Validacion de esa cuenta, no de todos los Administradores; sin compartir claves ni codigos.
 - [ ] Verificar garantia de cifrado del salto interno pooler/PostgreSQL; pg_stat_ssl=false no invalida TLS verificado del cliente, pero tampoco demuestra TLS interno.
 
 - [x] 2026-10-10, desarrollo: politica compartida para claves nuevas, maximo72bytes UTF-8 compatible con pgcrypto bf; cambio, recuperacion y claves temporales. Hashes/login/MFA existentes conservados. Backend102/102 y frontend21/21, build/lint correctos. Ver VALIDACION_POLITICA_CONTRASENAS_2026-10-10.md. No desplegado.

@@ -12,7 +12,13 @@
 .admin-report .report-search, .admin-report th input { width: 100%; min-width: 0; box-sizing: border-box; height: 25px; min-height: 25px; border: 1px solid #d8e2e2; border-radius: 4px; padding: 3px 6px; font-size: 11px; background: #fafcfc; }
 .admin-report .report-search { margin-bottom: 5px; }
 .admin-report .report-table-scroll { max-height: 190px; overflow: auto; }
-.admin-report .report-top .report-table-scroll { max-height: 146px; }
+.admin-report .report-top > .report-section { min-height: 360px; }
+.admin-report .report-top .report-table-scroll { max-height: none; overflow: visible; }
+.admin-report .report-top thead { position: static; }
+.admin-report .report-chart { display: flex; flex-direction: column; }
+.admin-report .report-chart .report-chart-scroll { flex: 1 1 0; min-height: 250px; }
+.admin-report .report-chart .report-chart-surface { height: 100%; min-height: 250px; }
+.admin-report .report-chart canvas { height: 100%; min-height: 250px; }
 .admin-report table { width: 100%; min-width: 0; table-layout: fixed; border-collapse: collapse; font-size: 11px; }
 .admin-report th, .admin-report td { padding: 5px 4px; text-align: left; border-bottom: 1px solid #e4eceb; overflow-wrap: anywhere; font-size: 11px; white-space: normal; vertical-align: middle; }
 .admin-report th { background: #e8f3f0; font-weight: 600; }
@@ -25,6 +31,15 @@
 .admin-report input[type=date] { width: 125px; max-width: 100%; height: 27px; min-height: 27px; font-size: 11px; border: 1px solid #d8e2e2; border-radius: 4px; padding: 3px; }
 .admin-report canvas { display: block; width: 100%; height: 170px; }
 .admin-report .report-selectable-chart { cursor: pointer; }
+.admin-report .report-selectable-chart { touch-action: pan-y; user-select: none; }
+.admin-report .report-selectable-chart:focus-visible { outline: 2px solid #1875a1; outline-offset: -2px; }
+.admin-report .report-chart-actions { display: flex; gap: 4px; }
+.admin-report .report-chart-actions [aria-pressed=true] { background: #e3eff9; border-color: #1875a1; color: #185c86; }
+.admin-report .report-chart-scroll { overflow-x: auto; }
+.admin-report .report-chart-surface { position: relative; }
+.admin-report .report-chart-tooltip { position: absolute; top: 34px; transform: translateX(-50%); pointer-events: none; background: #203c42; color: #fff; border-radius: 4px; padding: 5px 8px; font-size: 11px; white-space: nowrap; box-shadow: 0 2px 6px #203c4230; }
+.admin-report .report-chart-tooltip strong { display: block; margin-top: 3px; }
+.admin-report .report-selection-summary { font-size: 11px; color: #185c86; }
 .admin-report .icon-button { width: 28px; height: 28px; display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; padding: 0; min-height: 28px; min-width: 28px; color: #146e64; }
 .admin-report .icon-button svg { flex-shrink: 0; }
 .admin-report .report-empty { color: #62777a; text-align: center !important; }

@@ -38,8 +38,12 @@ Fecha:2026-10-10, America/Managua. API y web publicadas y verificadas a17:42.
 4. Web y asset200, X-Frame-Options DENY, nosniff, Referrer-Policy y
    Permissions-Policy presentes. Login renderiza, sin errores/avisos de consola
    observados en esa carga; no acredita recorrido autenticado completo.
-5. Titular confirma MFA y recuperacion completa por correo; no solicitar ni
-   extraer OTP/semillas. Revisar errores durante operaciones reales.
+5. Titular confirma recuperacion completa por correo e ingreso posterior con
+   VIP Access. El rechazo400 investigado correspondia al uso de un correo
+   anterior, confirmado por el usuario; al usar el ultimo codigo funciono.
+   El cierre de conexion anterior no tiene causa demostrada: no atribuirlo al
+   codigo viejo. No se extrajeron OTP/semillas ni se debilitaron protecciones.
+   Validacion de esa cuenta; revisar errores durante operaciones reales.
 
 El retorno de codigo anterior no implica restaurar datos antiguos encima de
 nuevas operaciones. Pendientes generales del checklist conservados abiertos.
