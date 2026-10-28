@@ -9,6 +9,7 @@ const sensitiveRoutes = new Set([
   '/api/transactions', '/api/transactions/:id/detail', '/api/transactions/:id/group-detail',
   '/api/transactions/pending', '/api/transactions/pending/:id/payments',
   '/api/shifts', '/api/shifts/current', '/api/shifts/:id', '/api/shifts/dashboard',
+  '/api/shifts/handovers', '/api/shifts/:id/handover-preview', '/api/shifts/:id/handover-candidates',
   '/api/transfers', '/api/transfers/:id', '/api/directory', '/api/directory/:id',
   '/api/dollar-purchases',
 ]);

@@ -16,6 +16,7 @@ const currencyCashCountsSchema = z
   .strict();
 
 const amountSchema = z.number().positive().max(9999999999.9999);
+const editVersionSchema=z.string().regex(/^(0|[1-9][0-9]{0,18})$/);
 
 const ratesSchema = z
   .object({
@@ -41,6 +42,8 @@ const settlementSchema = z
 
 export const updateTransactionSchema = z
   .object({
+    requestId: z.string().uuid().optional(),
+    expectedVersion:editVersionSchema.optional(),
     entityCode: z.string().trim().min(1).max(40),
     movementCode: z.string().trim().min(1).max(40),
     currencyCode: z.enum(['NIO', 'USD']),
@@ -53,15 +56,19 @@ export const updateTransactionSchema = z
   .strict();
 
 export const updateTransactionGroupSchema = z.object({
+  requestId: z.string().uuid().optional(),
+  expectedVersion:editVersionSchema.optional(),
   updates: z.array(z.object({ id: z.string().uuid(), data: updateTransactionSchema }).strict()).max(20),
   voidIds: z.array(z.string().uuid()).max(20),
   preferential: z.boolean(),
 }).strict().refine(value => value.updates.length + value.voidIds.length > 0, 'Seleccione transacciones.');
 export type UpdateTransactionGroupInput = z.infer<typeof updateTransactionGroupSchema>;
+export const voidTransactionSchema = z.object({requestId:z.string().uuid().optional(),expectedVersion:editVersionSchema.optional()}).strict();
 export const reopenPaymentsSchema = z.object({ paymentIds: z.array(z.string().uuid()).min(1).max(100) }).strict();
 
 export const createTransactionBatchSchema = z
   .object({
+    requestId: z.string().uuid().optional(),
     shiftId: z.string().uuid().optional(),
     userId: z.string().uuid().optional(),
     rates: ratesSchema,
@@ -98,6 +105,7 @@ export const createTransactionBatchSchema = z
 
 export const payPendingSchema = z
   .object({
+    requestId: z.string().uuid().optional(),
     rates: ratesSchema,
     settlement: settlementSchema,
   })
@@ -106,7 +114,8 @@ export const payPendingSchema = z
 // Valida una liquidacion total de varios pendientes compatibles.
 export const payPendingBatchSchema = z
   .object({
-    pendingIds: z.array(z.string().uuid()).min(1).max(50),
+    requestId: z.string().uuid().optional(),
+    pendingIds: z.array(z.string().uuid()).min(1).max(50).refine(ids=>new Set(ids.map(id=>id.toLowerCase())).size===ids.length,'No repita pendientes en la misma liquidacion.'),
     method: z.enum(['EFECTIVO', 'DIGITAL', 'MIXTO']),
     rates: ratesSchema,
     settlement: settlementSchema.optional(),

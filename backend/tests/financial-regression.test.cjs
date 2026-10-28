@@ -46,11 +46,11 @@ test('financial regression in local preview with rollback', { skip: !process.env
     const transfers = new TransfersService(db);
     const catalogs = new CatalogsController(db, {});
     const purchases = new DollarPurchasesService(db);
-    const adminRow = (await client.query("select u.id_usuario as id,u.version_sesion from temo.usuarios u join temo.roles r using(id_rol) where r.codigo='JEFA' and u.estado='ACTIVO' limit 1")).rows[0];
+    const adminRow = (await client.query("select u.id_usuario as id,u.version_sesion from temo.usuarios u join temo.roles r using(id_rol) where r.codigo='JEFA' and r.estado='ACTIVO' and u.estado='ACTIVO' and not u.debe_cambiar_contrasena limit 1")).rows[0];
     assert.ok(adminRow);
     const admin = { id: adminRow.id, roleCode: 'JEFA', sessionVersion: adminRow.version_sesion };
-    const userRow = (await client.query(`insert into temo.usuarios (id_rol,nombres,apellidos,usuario,contrasena_hash,estado)
-      select id_rol,'Security','Regression',$1,'not-a-login-credential','ACTIVO' from temo.roles where codigo='CAJERO'
+    const userRow = (await client.query(`insert into temo.usuarios (id_rol,nombres,apellidos,usuario,contrasena_hash,estado,debe_cambiar_contrasena)
+      select id_rol,'Security','Regression',$1,'not-a-login-credential','ACTIVO',false from temo.roles where codigo='CAJERO'
       returning id_usuario as id`, [username])).rows[0];
     const cashier = { id: userRow.id, roleCode: 'CAJERO' };
     const branch = (await client.query(`select s.id_sucursal as id,s.nombre from temo.sucursales s
@@ -92,6 +92,33 @@ test('financial regression in local preview with rollback', { skip: !process.env
     const batch = (items, cash) => createTransactionBatchSchema.parse({ shiftId, userId: cashier.id, rates,
       transactions: items.map((item) => ({ entityCode: 'BAC', movementCode: 'DC', currencyCode: 'NIO', ...item })), settlement: cash });
     const summary = () => shifts.detail(shiftId, cashier);
+    await t.test('NIO cent coins are received, returned, transferred and reversed without rounding balances', async()=>{
+      const before=await summary();
+      const coinCounts={NIO:[{denomination:.5,piles25:0,loose:1},{denomination:.25,piles25:0,loose:1}],USD:[]};
+      const empty={NIO:[],USD:[]};
+      const first=await transactions.createBatch(batch([{amount:.75}],{primaryRateKind:'COMPRA',changeRateKind:'COMPRA',expectedChange:{NIO:0,USD:0},primaryCounts:coinCounts,changeCounts:empty}),{});
+      const after=await summary();
+      near(after.expectedCash.NIO,before.expectedCash.NIO+.75);
+      for(const value of [.5,.25])assert.equal(after.cashCounts.ACTUAL.NIO.lines.find(line=>line.denomination===value).loose,1);
+      const change={NIO:[{denomination:.25,piles25:0,loose:1}],USD:[]};
+      const paid=await transactions.createBatch(batch([{amount:100.75}],{primaryRateKind:'COMPRA',changeRateKind:'COMPRA',expectedChange:{NIO:.25,USD:0},primaryCounts:{NIO:[{denomination:100,piles25:0,loose:1},{denomination:1,piles25:0,loose:1}],USD:[]},changeCounts:change}),{});
+      near((await summary()).expectedCash.NIO,after.expectedCash.NIO+100.75);
+      const stored=await transactions.detail(paid.transactions[0].id,cashier);
+      assert.ok(stored.settlement.changeCounts.NIO.some(line=>line.denomination===.25&&line.loose===1));
+      const transfer=await transfers.create({shiftId,type:'EFECTIVO',direction:'EGRESO',currency:'NIO',amount:.5,description:'CENT COINS QA',cashLines:[{denomination:.5,piles25:0,loose:1}]},cashier);
+      await transfers.void(transfer.database_id??transfer.id_transferencia,'Coin reversal QA',cashier);
+      await transactions.void(paid.transactions[0].id,cashier);
+      await transactions.void(first.transactions[0].id,cashier);
+      const restored=await summary();
+      near(restored.expectedCash.NIO,before.expectedCash.NIO);
+      near(restored.cashCounts.ACTUAL.NIO.total,before.cashCounts.ACTUAL.NIO.total);
+      const residual=await transactions.createBatch(batch([{amount:100.01}],settlement(100)),{});
+      const withResidual=await summary();
+      near(withResidual.expectedCash.NIO,before.expectedCash.NIO+100.01);
+      near(withResidual.cashCounts.ACTUAL.NIO.total,before.cashCounts.ACTUAL.NIO.total+100);
+      await transactions.void(residual.transactions[0].id,cashier);
+      near((await summary()).expectedCash.NIO,before.expectedCash.NIO);
+    });
     let deposit;
     await t.test('Cash deposit changes physical expectation and bank balance once', async () => {
       const before = await summary();
@@ -110,7 +137,7 @@ test('financial regression in local preview with rollback', { skip: !process.env
       const id = deposit.transactions[0].id;
       const before = await summary();
       await shifts.requestClose(shiftId, cashier);
-      await assert.rejects(transactions.loadEditableTransaction(client, id, cashier), e => e.getStatus() === 403);
+      await assert.rejects(transactions.loadEditableTransaction(client, id, cashier), e => e.getStatus() === 409&&e.getResponse().code==='TUR-SOL-409');
       await assert.rejects(shifts.rejectClose(shiftId, cashier), e => e.getStatus() === 403);
       await assert.rejects(shifts.rejectClose(shiftId, { ...admin, sessionVersion: admin.sessionVersion + 1 }), e => e.getStatus() === 403);
       const failing = new ShiftsService({ ...db, transaction: work => db.transaction(c => work({ query: (sql, params) => {
@@ -198,8 +225,8 @@ test('financial regression in local preview with rollback', { skip: !process.env
     await t.test('Same-branch coworker cannot read ordinary records; shared pending groups stay accessible only in branch', async () => {
       const createCoworker = async (branchId, label) => {
         const login = `${username}_${label}`;
-        const user = (await client.query(`insert into temo.usuarios(id_rol,nombres,apellidos,usuario,contrasena_hash,estado)
-          select id_rol,'Scope',$1,$2,'not-a-login-credential','ACTIVO' from temo.roles where codigo='CAJERO' returning id_usuario as id`, [label, login])).rows[0];
+        const user = (await client.query(`insert into temo.usuarios(id_rol,nombres,apellidos,usuario,contrasena_hash,estado,debe_cambiar_contrasena)
+          select id_rol,'Scope',$1,$2,'not-a-login-credential','ACTIVO',false from temo.roles where codigo='CAJERO' returning id_usuario as id`, [label, login])).rows[0];
         const identity = { id: user.id, roleCode: 'CAJERO' };
         await client.query('insert into temo.usuarios_sucursales(id_usuario,id_sucursal) values($1,$2)', [identity.id, branchId]);
         const prepared = await shifts.create(openShiftSchema.parse({ branchId, branch: branch.nombre, register: `Scope ${label}`, cashier: login, counts: counts(1000), balances: [], prepared: true }), admin);
@@ -427,6 +454,10 @@ test('financial regression in local preview with rollback', { skip: !process.env
       const after=await summary();
       near(after.dollarPurchases.usd-before.dollarPurchases.usd,235.13);
       near(after.dollarPurchases.differenceNio-before.dollarPurchases.differenceNio,141.078);
+      const handoverSnapshot=await shifts.handoverSnapshot(client,shiftId);
+      near(handoverSnapshot.dollarPurchases.usd,after.dollarPurchases.usd);
+      near(handoverSnapshot.dollarPurchases.differenceNio,after.dollarPurchases.differenceNio);
+      near(handoverSnapshot.cashDifference,after.cashCounts.ACTUAL.NIO.total+after.cashCounts.ACTUAL.USD.total*after.expectedGeneralRate-after.expectedCash.NIO);
       const actualDelta=after.cashCounts.ACTUAL.NIO.total-before.cashCounts.ACTUAL.NIO.total;
       const expectedDelta=after.expectedCash.NIO-before.expectedCash.NIO;
       near(actualDelta-expectedDelta,141.078+0.19);

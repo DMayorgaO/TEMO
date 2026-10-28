@@ -6,20 +6,32 @@ export function quoteRecoveryIdentifier(name) {
 }
 
 export function normalizeRecoveryDefinition(entry) {
-  // PostgreSQL 18 reparses these two known CHECKs with element casts instead of an array cast.
+  // PostgreSQL 18 reparses these known CHECKs with element casts instead of an array cast.
   // Accept only the exact equivalent forms; never rewrite arbitrary SQL or ignore CHECKs.
   const checks = {
-    'notificaciones_usuarios.ck_notificaciones_tipo': ['tipo', ['PENDIENTE_PAGADO', 'TRANSFERENCIA_REGISTRADA']],
-    'solicitudes_cierre_turno.solicitudes_cierre_turno_estado_check': ['estado', ['PENDIENTE', 'ATENDIDA', 'CANCELADA']],
+    'notificaciones_usuarios.ck_notificaciones_tipo': ['tipo', [
+      ['PENDIENTE_PAGADO', 'TRANSFERENCIA_REGISTRADA'],
+      ['PENDIENTE_PAGADO', 'TRANSFERENCIA_REGISTRADA', 'TRASPASO_TURNO'],
+    ]],
+    'solicitudes_cierre_turno.solicitudes_cierre_turno_estado_check': ['estado', [['PENDIENTE', 'ATENDIDA', 'CANCELADA']]],
+    'solicitudes_financieras.solicitudes_financieras_operacion_check': ['operacion', [[
+      'CREAR_TRANSACCIONES', 'CREAR_TRANSFERENCIA', 'LIQUIDAR_PENDIENTE', 'LIQUIDAR_PENDIENTES',
+      'EDITAR_TRANSACCION', 'ANULAR_TRANSACCION', 'EDITAR_GRUPO',
+    ]]],
+    'traspasos_turno.traspasos_turno_estado_check': ['estado', [['PENDIENTE', 'ACEPTADO', 'RECHAZADO', 'CANCELADO', 'VENCIDO']]],
+    'traspasos_turno.traspasos_turno_modo_check': ['modo', [['CON_CIERRE', 'EN_REVISION']]],
   };
   const check = entry.kind === 'constraint' && Object.hasOwn(checks, entry.name) ? checks[entry.name] : undefined;
   if (!check) return entry;
-  const [column, values] = check;
-  const array = values.map(value => `'${value}'::character varying`).join(', ');
-  const elements = values.map(value => `('${value}'::character varying)::text`).join(', ');
-  const canonical = `CHECK (((${column})::text = ANY ((ARRAY[${array}])::text[])))`;
-  const reparsed = `CHECK (((${column})::text = ANY (ARRAY[${elements}])))`;
-  return entry.definition === reparsed ? { ...entry, definition: canonical } : entry;
+  const [column, variants] = check;
+  for (const values of variants) {
+    const array = values.map(value => `'${value}'::character varying`).join(', ');
+    const elements = values.map(value => `('${value}'::character varying)::text`).join(', ');
+    const canonical = `CHECK (((${column})::text = ANY ((ARRAY[${array}])::text[])))`;
+    const reparsed = `CHECK (((${column})::text = ANY (ARRAY[${elements}])))`;
+    if (entry.definition === reparsed) return { ...entry, definition: canonical };
+  }
+  return entry;
 }
 
 export async function captureRecoveryManifest(client) {

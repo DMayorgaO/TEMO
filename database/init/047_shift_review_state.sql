@@ -1,0 +1,1 @@
+ALTER TYPE temo.estado_turno ADD VALUE IF NOT EXISTS 'EN_REVISION';

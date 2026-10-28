@@ -44,6 +44,7 @@ export const updateShiftSchema = openShiftSchema;
 export type UpdateShiftInput = z.infer<typeof updateShiftSchema>;
 
 export const closeShiftSchema = z.object({
+  expectedCloseRequest: z.string().min(10).max(80).optional(),
   counts: cashCountsSchema,
   balances: z.array(bankBalanceSchema).max(100),
   changeNio: z.number().min(-9999999999.9999).max(9999999999.9999),

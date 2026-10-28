@@ -1,7 +1,47 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+
+test('handover audit exposes event and actor references, not nested snapshot or credentials',()=>{
+  const {auditChanges}=require('../dist/modules/catalogs/audit-changes');
+  const result=auditChanges('traspasos_turno',null,{evento:'ACEPTAR_TRASPASO',detalle:{source:'source-id',destination:'destination-id',sender:'sender-id',receiver:'receiver-id',snapshot:{private:'never-show'},token:'never-show'}});
+  assert.equal(result.changes.length,5);
+  assert.ok(!JSON.stringify(result).includes('never-show'));
+  assert.ok(result.changes.some(row=>row.field==='Cajero receptor'&&row.after==='receiver-id'));
+});
 const { auditChanges } = require('../dist/modules/catalogs/audit-changes');
 const { CatalogsController } = require('../dist/modules/catalogs/catalogs.controller');
+
+test('payment audit shows approved settlement totals and method without expanding pending lists or secrets',()=>{
+  const result=auditChanges('pagos_pendientes',{saldo_pendiente:20,pendientes:[{token:'do-not-display'}]},
+    {estado:'PAGADO',saldo_pendiente:0,method:'MIXTO',totalAmount:20,cantidad_pendientes:2,pendingIds:['private-id'],secret:'do-not-display'});
+  assert.ok(result.changes.some(row=>row.field==='Saldo pendiente'&&row.before==='20'&&row.after==='0'));
+  assert.ok(result.changes.some(row=>row.field==='Forma de pago'&&row.after==='MIXTO'));
+  assert.ok(result.changes.some(row=>row.field==='Cantidad de pendientes'&&row.after==='2'));
+  assert.ok(!JSON.stringify(result).includes('private-id'));
+  assert.ok(!JSON.stringify(result).includes('do-not-display'));
+});
+
+test('handover audit compares mode, amounts and source state without expanding raw snapshots',()=>{
+  const result=auditChanges('traspasos_turno',{detalle:{state:'PENDIENTE',sourceState:'ABIERTO',registeredNio:0}},
+    {evento:'ACEPTAR_TRASPASO',detalle:{state:'ACEPTADO',sourceState:'EN_REVISION',mode:'EN_REVISION',cashNio:1000,cashUsd:20,registeredNio:5,differenceNio:0,purchaseDifferenceNio:3,
+      snapshot:{token:'private-secret',accounts:['not-for-display']},password:'private-secret'}});
+  assert.ok(result.changes.some(row=>row.field==='Estado del turno saliente'&&row.before==='ABIERTO'&&row.after==='EN_REVISION'));
+  assert.ok(result.changes.some(row=>row.field==='Diferencia registrada NIO'&&row.before==='0'&&row.after==='5'));
+  assert.ok(!JSON.stringify(result).includes('private-secret'));
+  assert.ok(!JSON.stringify(result).includes('not-for-display'));
+});
+
+test('review shift audit shows changed cent coins and approved balance fields only',()=>{
+  const id='11111111-1111-4111-8111-111111111111';
+  const before={changeNio:0,settlement:{primaryCounts:{NIO:[{denomination:.25,piles25:0,loose:1}],USD:[]}},balances:[{id,account:'BAC NIO',currency:'NIO',system:10,password:'secret'}]};
+  const after={...before,changeNio:2,settlement:{primaryCounts:{NIO:[{denomination:.25,piles25:0,loose:2}],USD:[]}},balances:[{id,account:'BAC NIO',currency:'NIO',system:20,password:'hidden'}]};
+  const result=auditChanges('turnos',before,after);
+  assert.ok(result.changes.some(row=>row.field==='Arqueo C$ 0.25'&&row.before==='1 unidades'&&row.after==='2 unidades'));
+  assert.ok(result.changes.some(row=>row.field.includes('Saldo Sistema')&&row.before==='10'&&row.after==='20'));
+  assert.ok(!JSON.stringify(result).includes('secret'));
+  assert.ok(!JSON.stringify(result).includes('hidden'));
+  assert.deepEqual(auditChanges('turnos',{}, {balances:[{id:'bad',password:'secret'}]}).changes,[]);
+});
 
 test('audit changes only exposes approved scalars and distinguishes missing from null', () => {
   const result = auditChanges('pagos_pendientes', { estado: 'PENDIENTE', password: 'secret' }, { estado: 'PAGADO', saldo_pendiente: null, token: 'secret', monto_original: { token: 'secret' } });

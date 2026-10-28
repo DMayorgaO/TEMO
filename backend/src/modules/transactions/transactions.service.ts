@@ -9,6 +9,8 @@ import { randomUUID } from 'node:crypto';
 import { AuthenticatedUser } from '../auth/auth.service';
 import { DatabaseService } from '../database/database.service';
 import { preferentialGroupMarker } from '../../common/preferential-cash';
+import { financialRequest, validateFinancialActor } from '../../common/financial-request';
+import { assertShiftNotSubmitted } from '../../common/shift-submission-lock';
 import {
   CreateTransactionBatchInput,
   PayPendingBatchInput,
@@ -98,6 +100,7 @@ export interface PersistedTransaction {
 }
 
 interface RequestAudit {
+  actor?: AuthenticatedUser;
   ip?: string;
   userAgent?: string;
 }
@@ -107,8 +110,10 @@ export class TransactionsService {
   constructor(private readonly db: DatabaseService) {}
 
   createBatch(input: CreateTransactionBatchInput, audit: RequestAudit) {
-    return this.db.transaction(async (client) => {
-      const shift = await this.resolveShift(client, input);
+    return this.db.transaction(async (client) => financialRequest(client,{
+      actor:audit.actor,operation:'CREAR_TRANSACCIONES',requestId:input.requestId,payload:input,roles:['JEFA','CAJERO'],
+    },async()=>{
+      const shift = await this.resolveShift(client, input,audit.actor);
       const userId = await this.resolveUser(client, input.userId, shift.id_cajero);
       const currencies = await this.loadCurrencies(client);
       const rateId = await this.resolveExchangeRate(client, input, userId);
@@ -502,7 +507,13 @@ export class TransactionsService {
           changeTotals,
         },
       };
-    });
+    },async result=>{
+      const available=await client.query(`select 1 from temo.grupos_transacciones g join temo.turnos t using(id_turno)
+        where g.id_grupo_transacciones=$1 and g.id_usuario_creacion=$2
+          and ($3='JEFA' or (t.id_cajero=$2 and t.estado in ('ABIERTO','PENDIENTE_APROBACION','EN_REVISION')))`,
+      [result.groupId,audit.actor!.id,audit.actor!.roleCode]);
+      if(!available.rowCount)throw new ConflictException('La solicitud ya fue aplicada y su turno ya no esta disponible. Solicite revision administrativa; no registre otra copia.');
+    }));
   }
 
   async listPending(user: AuthenticatedUser) {
@@ -548,6 +559,7 @@ export class TransactionsService {
        where t.estado <> 'ANULADA'
          and (
            $1 = 'JEFA'
+           or ($1='CAJERO' and t.id_cajero=$2::uuid and tu.estado='EN_REVISION')
            or exists (
              select 1
              from temo.turnos active_shift
@@ -601,12 +613,15 @@ export class TransactionsService {
         estado_turno: string;
         tasa_compra_usada: string;
         tasa_venta_usada: string;
+        edit_version:string;
       } & QueryResultRow>(
         `select
            t.id_transaccion as database_id,
            concat('TRA-', lpad(g.codigo_operacion::text, 6, '0'), '-', lpad(t.orden_grupo::text, 2, '0')) as id,
            t.id_grupo_transacciones,
            g.codigo_operacion,
+           g.version_edicion::text as edit_version,
+           t.id_turno as shift_id,
            t.orden_grupo,
            t.fecha_transaccion,
            coalesce(tm.monto, t.monto_original) as monto,
@@ -660,7 +675,7 @@ export class TransactionsService {
         throw new NotFoundException('La transaccion seleccionada no existe.');
       }
       if (user.roleCode !== 'JEFA') {
-        const sameCashierOpen = transaction.id_cajero === user.id && ['ABIERTO', 'PENDIENTE_APROBACION'].includes(transaction.estado_turno);
+        const sameCashierOpen = transaction.id_cajero === user.id && ['ABIERTO', 'PENDIENTE_APROBACION','EN_REVISION'].includes(transaction.estado_turno);
         const sameBranchDay = sameCashierOpen ? true : Boolean((await client.query(
           `select 1 from temo.turnos
            where id_cajero = $1 and id_sucursal = $2
@@ -737,12 +752,14 @@ export class TransactionsService {
         }
       }
 
-      const { id_cajero: _cashierId, id_sucursal: _branchId, fecha_turno: _shiftDate, estado_turno: _shiftState, ...visibleTransaction } = transaction;
+      const { id_cajero: _cashierId, id_sucursal: _branchId, fecha_turno: _shiftDate, estado_turno: _shiftState,edit_version:editVersion, ...visibleTransaction } = transaction;
       const historical = await client.query<{ datos: UpdateTransactionInput | null; proyeccion: Record<string, unknown>; anulada: boolean } & QueryResultRow>(
         'select datos,proyeccion,anulada from temo.correcciones_transacciones_cerradas where id_transaccion=$1', [transactionId],
       );
       const correction = historical.rows[0];
+      await this.checkEditVersion(client,transaction.id_grupo_transacciones,editVersion);
       return {
+        editVersion,
         transaction: { ...visibleTransaction, ...correction?.proyeccion,
           ...(correction?.anulada ? { estado: 'ANULADA' } : {}),
           historicalCorrection: Boolean(correction), closedShift: _shiftState === 'CERRADO' },
@@ -791,7 +808,20 @@ export class TransactionsService {
        order by pp.codigo_pendiente`,
       [selected.transaction.id_grupo_transacciones],
     );
-    return { details, compensations: compensations.rows };
+    if(details.some(detail=>detail.editVersion!==selected.editVersion))throw this.obsoleteEdit();
+    await this.checkEditVersion(this.db,selected.transaction.id_grupo_transacciones,selected.editVersion);
+    return { details, compensations: compensations.rows,editVersion:selected.editVersion };
+  }
+
+  private obsoleteEdit() {
+    return new ConflictException({code:'TRA-VER-409',message:'La operacion cambio desde que abrio el formulario. No se guardo ningun cambio. Conserve su borrador y vuelva a abrir el registro para revisar los datos actuales.'});
+  }
+
+  private async checkEditVersion(client:{query:(sql:string,params:unknown[])=>Promise<{rows:QueryResultRow[]}>},groupId:string,expected?:string,lock=false) {
+    if(expected===undefined)return;
+    const current=await client.query(`select version_edicion::text as version from temo.grupos_transacciones
+      where id_grupo_transacciones=$1 ${lock?'for update':''}`,[groupId]);
+    if(current.rows[0]?.version!==expected)throw this.obsoleteEdit();
   }
 
   update(
@@ -807,6 +837,7 @@ export class TransactionsService {
         transactionId,
         user,
       );
+      if(!groupClient)await this.checkEditVersion(client,transaction.id_grupo_transacciones,input.expectedVersion,true);
       if (transaction.estado_turno === 'CERRADO') {
         await this.saveHistoricalCorrection(client, transaction, input, false, user);
         return { id: transactionId, updated: true, historical: true };
@@ -1033,16 +1064,20 @@ export class TransactionsService {
 
       return { id: transactionId, updated: true };
     };
-    return groupClient ? work(groupClient) : this.db.transaction(work);
+    return groupClient ? work(groupClient) : this.db.transaction(client=>financialRequest(client,{
+      actor:user,operation:'EDITAR_TRANSACCION',requestId:input.requestId,payload:{transactionId,...input},roles:['JEFA','CAJERO'],
+    },()=>work(client),()=>this.authorizeTransactionReplay(client,transactionId,user)));
   }
 
-  void(transactionId: string, user: AuthenticatedUser, groupClient?: PoolClient) {
+  void(transactionId: string, user: AuthenticatedUser, groupClient?: PoolClient, requestId?:string,expectedVersion?:string) {
     const work = async (client: PoolClient) => {
       const transaction = await this.loadEditableTransaction(client, transactionId, user);
+      if(!groupClient)await this.checkEditVersion(client,transaction.id_grupo_transacciones,expectedVersion,true);
       if (transaction.estado_turno === 'CERRADO') {
         await this.saveHistoricalCorrection(client, transaction, null, true, user);
         return { id: transactionId, status: 'ANULADA', historical: true };
       }
+      const auditBefore=(await this.groupAuditSnapshot(client,transaction.id_grupo_transacciones)).find(row=>row.id===transactionId);
       if (await this.isDigitalPayment(client, transactionId)) {
         await this.releasePayments(client, [transactionId], user);
       } else if (!groupClient) {
@@ -1130,18 +1165,23 @@ export class TransactionsService {
       );
       await this.refreshShiftAccountBalances(client, transaction.id_turno);
       await client.query(
-        `insert into temo.bitacora (id_usuario, accion, tabla, id_registro, datos_nuevos)
-         values ($1, 'ANULAR', 'transacciones', $2, $3::jsonb)`,
-        [user.id, transactionId, JSON.stringify({ pendingId: transaction.id_pendiente })],
+        `insert into temo.bitacora (id_usuario, accion, tabla, id_registro, datos_anteriores,datos_nuevos)
+         values ($1, 'ANULAR', 'transacciones', $2, $3::jsonb,$4::jsonb)`,
+        [user.id,transactionId,JSON.stringify(auditBefore),JSON.stringify({...auditBefore,estado:'ANULADA',settlement:emptySettlement,pendingId:transaction.id_pendiente})],
       );
       return { id: transactionId, status: 'ANULADA' };
     };
-    return groupClient ? work(groupClient) : this.db.transaction(work);
+    return groupClient ? work(groupClient) : this.db.transaction(client=>financialRequest(client,{
+      actor:user,operation:'ANULAR_TRANSACCION',requestId,payload:{transactionId,...(expectedVersion===undefined?{}:{expectedVersion})},roles:['JEFA','CAJERO'],
+    },()=>work(client),()=>this.authorizeTransactionReplay(client,transactionId,user)));
   }
 
   updateGroup(transactionId: string, input: UpdateTransactionGroupInput, user: AuthenticatedUser) {
-    return this.db.transaction(async client => {
+    return this.db.transaction(async client => financialRequest(client,{
+      actor:user,operation:'EDITAR_GRUPO',requestId:input.requestId,payload:{transactionId,...input},roles:['JEFA','CAJERO'],
+    },async()=>{
       const anchor = await this.loadEditableTransaction(client, transactionId, user);
+      await this.checkEditVersion(client,anchor.id_grupo_transacciones,input.expectedVersion,true);
       await client.query('select id_turno from temo.turnos where id_turno=$1 for update', [anchor.id_turno]);
       const groupRates = input.updates[0]?.data.rates;
       if (input.updates.some(item => input.preferential !== (item.data.rates.buy === 36.55)
@@ -1226,7 +1266,16 @@ export class TransactionsService {
         JSON.stringify({transactions:originalRows.rows.map(row=>row.data),settlements:before,auditTransactions:auditBefore}),
         JSON.stringify({...input,auditTransactions:await this.groupAuditSnapshot(client,anchor.id_grupo_transacciones)})]);
       return {updated:input.updates.length,voided:input.voidIds.length};
-    });
+    },()=>this.authorizeTransactionReplay(client,transactionId,user)));
+  }
+
+  private async authorizeTransactionReplay(client:PoolClient,transactionId:string,user:AuthenticatedUser) {
+    const available=await client.query(`select t.id_transaccion from temo.transacciones t
+      join temo.turnos s on s.id_turno=t.id_turno where t.id_transaccion=$1
+        and (($2='JEFA' and s.estado in ('ABIERTO','PENDIENTE_APROBACION','EN_REVISION','CERRADO'))
+          or ($2='CAJERO' and t.id_cajero=$3 and s.id_cajero=$3 and s.estado in ('ABIERTO','EN_REVISION')))
+      for share of s,t`,[transactionId,user.roleCode,user.id]);
+    if(!available.rowCount)throw new ConflictException('La solicitud ya fue aplicada y su turno ya no esta disponible. Revise el registro actual; no repita la operacion.');
   }
 
   private async groupAuditSnapshot(client: PoolClient, groupId: string) {
@@ -1253,7 +1302,9 @@ export class TransactionsService {
     input: PayPendingInput,
     user: AuthenticatedUser,
   ) {
-    return this.db.transaction(async (client) => {
+    return this.db.transaction(async (client) => financialRequest(client,{
+      actor:user,operation:'LIQUIDAR_PENDIENTE',requestId:input.requestId,payload:{pendingId,...input},roles:['JEFA','CAJERO'],
+    },async()=>{
       const result = await client.query<{
         id_pendiente: string;
         estado: string;
@@ -1318,6 +1369,7 @@ export class TransactionsService {
         );
       }
 
+      await assertShiftNotSubmitted(client,activeShift.id_turno,user);
       const rateId = await this.resolveExchangeRate(client, input, user.id);
       const amount = Number(pending.saldo_pendiente);
       const primaryDirection: MoneyDirection =
@@ -1490,7 +1542,7 @@ export class TransactionsService {
         [
           user.id,
           pendingId,
-          JSON.stringify({ estado: pending.estado }),
+          JSON.stringify({ estado: pending.estado,saldo_pendiente:pending.saldo_pendiente }),
           JSON.stringify({
             estado: 'PAGADO',
             saldo_pendiente: 0,
@@ -1506,11 +1558,13 @@ export class TransactionsService {
         appliedShiftId: activeShift?.id_turno ?? null,
         cashierNotified: user.roleCode === 'JEFA' && Boolean(activeShift),
       };
-    });
+    },result=>this.authorizePaymentReplay(client,[result.paymentId],user)));
   }
 
   payPendingBatch(input: PayPendingBatchInput, user: AuthenticatedUser) {
-    return this.db.transaction(async (client) => {
+    return this.db.transaction(async (client) => financialRequest(client,{
+      actor:user,operation:'LIQUIDAR_PENDIENTES',requestId:input.requestId,payload:input,roles:['JEFA','CAJERO'],
+    },async()=>{
       const paymentBatchId = randomUUID();
       // Bloquea todos los pendientes para liquidarlos como una sola operacion atomica.
       const result = await client.query<{
@@ -1538,7 +1592,7 @@ export class TransactionsService {
          join temo.monedas m on m.id_moneda = pp.id_moneda
          join temo.contrapartes cp on cp.id_contraparte = pp.id_contraparte
          where pp.id_pendiente = any($1::uuid[])
-         order by pp.fecha_creacion
+         order by pp.fecha_creacion,pp.id_pendiente
          for update of pp`,
         [input.pendingIds],
       );
@@ -1570,6 +1624,7 @@ export class TransactionsService {
         throw new ConflictException('No existe un turno activo en la misma sucursal y fecha para liquidar los pendientes.');
       }
 
+      await assertShiftNotSubmitted(client,activeShift.id_turno,user);
       const totalAmount = pendings.reduce((sum, pending) => sum + Number(pending.saldo_pendiente), 0);
       const primaryDirection: MoneyDirection = reference.tipo === 'POR_COBRAR' ? 'ENTRA' : 'SALE';
       const rateId = await this.resolveExchangeRate(client, input, user.id);
@@ -1741,12 +1796,28 @@ export class TransactionsService {
         );
       }
       await client.query(
-        `insert into temo.bitacora (id_usuario,accion,tabla,id_registro,datos_nuevos)
-         values ($1,'ACTUALIZAR','pagos_pendientes',$2,$3::jsonb)`,
-        [user.id, reference.id_pendiente, JSON.stringify({ pendingIds: input.pendingIds, method: input.method, totalAmount })],
+        `insert into temo.bitacora (id_usuario,accion,tabla,id_registro,datos_anteriores,datos_nuevos)
+         values ($1,'ACTUALIZAR','pagos_pendientes',$2,$3::jsonb,$4::jsonb)`,
+        [user.id, reference.id_pendiente,
+          JSON.stringify({saldo_pendiente:totalAmount,pendientes:pendings.map(p=>({id:p.id_pendiente,estado:p.estado,saldo_pendiente:p.saldo_pendiente}))}),
+          JSON.stringify({estado:'PAGADO',saldo_pendiente:0,pendingIds:input.pendingIds,method:input.method,totalAmount,cantidad_pendientes:pendings.length})],
       );
-      return { ids: input.pendingIds, estado: 'PAGADO', method: input.method, totalAmount };
-    });
+      return { ids: input.pendingIds, estado: 'PAGADO', method: input.method, totalAmount,
+        paymentIds:[...cashPayments,...digitalPayments].map(payment=>payment.id) };
+    },result=>this.authorizePaymentReplay(client,result.paymentIds,user)));
+  }
+
+  private async authorizePaymentReplay(client:PoolClient,paymentIds:string[],user:AuthenticatedUser) {
+    if(!paymentIds?.length)throw new ConflictException('La liquidacion requiere revision antes de confirmar su resultado.');
+    // Reautoriza el turno de aplicacion, no el turno de origen del pendiente compartido.
+    const current=await client.query(`select ap.id_abono from temo.abonos_pendientes ap
+      join temo.pagos_pendientes pp using(id_pendiente)
+      join temo.turnos s on s.id_turno=ap.id_turno_aplicacion
+      where ap.id_abono=any($1::uuid[]) and pp.estado='PAGADO'
+        and s.estado in ('ABIERTO','PENDIENTE_APROBACION')
+        and ($2='JEFA' or s.id_cajero=$3)
+      order by pp.id_pendiente,ap.id_abono for share of pp,s,ap`,[paymentIds,user.roleCode,user.id]);
+    if(current.rowCount!==paymentIds.length)throw new ConflictException('Esta liquidacion ya fue aplicada y luego corregida o su turno ya no esta disponible. Revise el registro actual; no registre otra copia.');
   }
 
   async pendingPaymentDetail(pendingId: string, user: AuthenticatedUser) {
@@ -1774,6 +1845,7 @@ export class TransactionsService {
   async reopenPaymentBatch(pendingId: string, expectedIds: string[], user: AuthenticatedUser) {
     await this.pendingPaymentDetail(pendingId, user);
     return this.db.transaction(async client => {
+      await validateFinancialActor(client,user,['JEFA','CAJERO']);
       const payments = await client.query(`select ap.*,pp.tipo,pp.id_transaccion as original_transaction_id,
         s.estado as shift_state,s.id_cajero from temo.abonos_pendientes ap
         join temo.pagos_pendientes pp using(id_pendiente)
@@ -1785,6 +1857,7 @@ export class TransactionsService {
         throw new ConflictException('La liquidacion cambio. Vuelva a abrirla antes de confirmar.');
       }
       for (const payment of payments.rows) {
+        await assertShiftNotSubmitted(client,payment.id_turno_aplicacion,user);
         if (!['ABIERTO','PENDIENTE_APROBACION'].includes(payment.shift_state) || (user.roleCode !== 'JEFA' && payment.id_cajero !== user.id)) {
           throw new ForbiddenException('Solo puede revertir liquidaciones aplicadas a un turno activo autorizado. Los cierres no se modifican.');
         }
@@ -1923,6 +1996,7 @@ export class TransactionsService {
     transactionId: string,
     user: AuthenticatedUser,
   ) {
+    await validateFinancialActor(client,user,['JEFA','CAJERO']);
     const result = await client.query<EditableTransactionRow>(
       `select
          t.id_transaccion,
@@ -1947,22 +2021,35 @@ export class TransactionsService {
     if (!transaction) {
       throw new NotFoundException('La transaccion seleccionada no existe.');
     }
+    if(user.roleCode!=='JEFA'&&transaction.id_cajero!==user.id){
+      throw new ForbiddenException('Solo puede corregir transacciones de su propio turno.');
+    }
+    await assertShiftNotSubmitted(client,transaction.id_turno,user);
     if (transaction.estado_transaccion === 'ANULADA') {
       throw new ConflictException('Una transaccion anulada no puede editarse.');
     }
+    if(!['ABIERTO','PENDIENTE_APROBACION','EN_REVISION','CERRADO'].includes(transaction.estado_turno)){
+      throw new ConflictException('El estado del turno no permite corregir transacciones.');
+    }
     if (
       user.roleCode !== 'JEFA' &&
-      (transaction.id_cajero !== user.id || transaction.estado_turno !== 'ABIERTO')
+      (transaction.id_cajero !== user.id || !['ABIERTO','EN_REVISION'].includes(transaction.estado_turno))
     ) {
       throw new ForbiddenException(
-        'Solo puede editar transacciones de su turno abierto.',
+        'Solo puede editar transacciones de su turno abierto o en revision.',
       );
+    }
+    if(transaction.estado_turno==='EN_REVISION'&&(await client.query(`select 1 from temo.abonos_pendientes ap
+      left join temo.pagos_pendientes pp on pp.id_pendiente=ap.id_pendiente
+      where (ap.id_transaccion=$1 or pp.id_transaccion=$1) and ap.id_turno_aplicacion is distinct from $2::uuid limit 1`,[transactionId,transaction.id_turno])).rowCount){
+      throw new ConflictException('Esta transaccion tiene liquidaciones en otro turno. Requiere revision administrativa sin alterar los fondos del receptor.');
     }
     return transaction;
   }
 
   reopenPendingPayment(pendingId: string, user: AuthenticatedUser) {
     return this.db.transaction(async (client) => {
+      await validateFinancialActor(client,user,['JEFA','CAJERO']);
       const pendingResult = await client.query<{
         id_pendiente: string;
         id_transaccion_original: string;
@@ -2020,6 +2107,10 @@ export class TransactionsService {
       if (!payments.rowCount) {
         throw new ConflictException('No se encontró la liquidación que debe corregirse.');
       }
+      const affectedShifts=await client.query(`select s.id_turno from temo.turnos s
+        where s.id_turno in(select ap.id_turno_aplicacion from temo.abonos_pendientes ap where ap.id_pendiente=$1)
+        order by s.id_turno for update`,[pendingId]);
+      for(const shift of affectedShifts.rows)await assertShiftNotSubmitted(client,shift.id_turno,user);
       const protectedPayments = await client.query(`select ap.id_abono from temo.abonos_pendientes ap
         left join temo.turnos s on s.id_turno=ap.id_turno_aplicacion
         where ap.id_pendiente=$1 and (
@@ -2226,11 +2317,12 @@ export class TransactionsService {
   private async resolveShift(
     client: PoolClient,
     input: CreateTransactionBatchInput,
+    actor?: AuthenticatedUser,
   ) {
     const result = await client.query<ShiftRow>(
       `select id_turno, id_sucursal, id_caja, id_cajero
        from temo.turnos
-       where estado in ('ABIERTO', 'PENDIENTE_APROBACION')
+       where (estado in ('ABIERTO', 'PENDIENTE_APROBACION') or (estado='EN_REVISION' and id_turno=$1::uuid))
          and ($1::uuid is null or id_turno = $1)
          and id_cajero = $2::uuid
        order by fecha_apertura desc
@@ -2240,9 +2332,10 @@ export class TransactionsService {
     );
     if (!result.rows[0]) {
       throw new ConflictException(
-        'No existe un turno abierto para registrar la transaccion. Abra un turno antes de guardar.',
+        'Seleccione un turno propio abierto o en revision para registrar la transaccion.',
       );
     }
+    await assertShiftNotSubmitted(client,result.rows[0].id_turno,actor);
     return result.rows[0];
   }
 
@@ -2665,6 +2758,13 @@ export class TransactionsService {
       }
       const primaryByValue = new Map(primary[currency].map((line) => [line.denomination, line.piles25 * 25 + line.loose]));
       const changeByValue = new Map(change[currency].map((line) => [line.denomination, line.piles25 * 25 + line.loose]));
+      // Un turno anterior puede no tener filas para denominaciones recien incorporadas.
+      const usedDenominations = [...new Set([...primary[currency], ...change[currency]]
+        .filter(line => line.piles25 > 0 || line.loose > 0).map(line => line.denomination))];
+      await client.query(`insert into temo.arqueos_denominaciones(id_arqueo,id_denominacion,cantidad,monto,montones_25,sueltos)
+        select $1,d.id_denominacion,0,0,0,0 from temo.denominaciones d join temo.monedas m using(id_moneda)
+        where m.codigo=$2 and d.estado='ACTIVO' and d.valor=any($3::numeric[])
+        on conflict(id_arqueo,id_denominacion) do nothing`,[cashCountId,currency,usedDenominations]);
       const rows = await client.query<{ id: string; value: string; quantity: number; piles25: number; loose: number } & QueryResultRow>(
         `select ad.id_arqueo_denominacion as id, d.valor as value, ad.cantidad as quantity,
            ad.montones_25 as "piles25", ad.sueltos as loose

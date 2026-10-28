@@ -1,8 +1,10 @@
-import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { PoolClient, QueryResultRow } from 'pg';
 import { AuthenticatedUser } from '../auth/auth.service';
 import { DatabaseService } from '../database/database.service';
 import { TransferInput } from './transfers.schema';
+import { financialRequest, validateFinancialActor } from '../../common/financial-request';
+import { assertShiftNotSubmitted } from '../../common/shift-submission-lock';
 
 type TransferRow = QueryResultRow & {
   database_id: string;
@@ -30,7 +32,7 @@ export class TransfersService {
     const canManageAnyShift = this.canManageAnyShift(user);
     const result = await this.db.query(
       `${this.selectTransfer()}
-       where ($1::boolean or (t.id_cajero = $2 and t.estado in ('ABIERTO', 'PENDIENTE_APROBACION')))
+       where ($1::boolean or (t.id_cajero = $2 and t.estado in ('ABIERTO', 'PENDIENTE_APROBACION','EN_REVISION')))
        order by tr.fecha_transferencia desc`,
       [canManageAnyShift, user.id],
     );
@@ -48,6 +50,8 @@ export class TransfersService {
        join temo.cajas c on c.id_caja = t.id_caja
        where t.estado in ('ABIERTO', 'PENDIENTE_APROBACION')
          and ($1::boolean or t.id_cajero = $2)
+         and ($1::boolean or (t.estado='ABIERTO' and not exists(select 1 from temo.traspasos_turno h
+           where h.id_turno_origen=t.id_turno and h.estado='PENDIENTE' and h.fecha_limite>clock_timestamp())))
        order by t.fecha_apertura desc`,
       [canManageAnyShift, user.id],
     );
@@ -76,7 +80,9 @@ export class TransfersService {
   }
 
   async create(input: TransferInput, user: AuthenticatedUser) {
-    return this.db.transaction(async (client) => {
+    return this.db.transaction(async (client) => financialRequest(client,{
+      actor:user,operation:'CREAR_TRANSFERENCIA',requestId:input.requestId,payload:input,roles:['JEFA','CAJERO','TRANSFERISTA'],
+    },async()=>{
       const shift = await this.resolveShift(client, input.shiftId, user);
       this.assertWritable(input, shift, user);
       const normalized = await this.validateInput(client, input, shift.id_sucursal);
@@ -93,16 +99,21 @@ export class TransfersService {
       await this.applyEffect(client, id, shift, normalized, input.cashLines, 1);
       await this.notifyAffectedCashier(client, id, shift, normalized, input.description, user);
       return this.detailWithin(client, id);
-    });
+    },async result=>{await this.findAuthorized(result.database_id,user,client);}));
   }
 
   async update(id: string, input: TransferInput, user: AuthenticatedUser) {
     return this.db.transaction(async (client) => {
+      await validateFinancialActor(client,user,['JEFA','CAJERO','TRANSFERISTA']);
+      const observed=await this.findAuthorized(id,user,client);
+      const shift=await this.resolveShift(client,observed.id_turno,user,true);
       const previous = await this.findAuthorized(id, user, client);
+      if(previous.id_turno!==shift.id_turno)throw new ConflictException('La transferencia cambio de turno. Actualice la pantalla.');
+      if(input.shiftId&&input.shiftId!==shift.id_turno)throw new ForbiddenException('La transferencia debe conservar su turno original. Anulela y registre otra si corresponde.');
+      if(!['ABIERTO','PENDIENTE_APROBACION','EN_REVISION'].includes(shift.estado))throw new ConflictException('No puede modificar transferencias de turnos cerrados. Solicite revision administrativa.');
       if (previous.estado !== 'ACTIVO') throw new BadRequestException('La transferencia anulada no puede editarse.');
       this.assertEditable(previous, user);
-      const shift = await this.resolveShift(client, input.shiftId ?? previous.id_turno, user, true);
-      this.assertWritable(input, shift, user);
+      this.assertWritable(input, shift, user, true);
       const normalized = await this.validateInput(client, input, shift.id_sucursal);
       const oldLines = await this.loadLines(client, id);
       await this.applyEffect(client, id, shift, {
@@ -124,10 +135,14 @@ export class TransfersService {
 
   async void(id: string, reason: string, user: AuthenticatedUser) {
     return this.db.transaction(async (client) => {
+      await validateFinancialActor(client,user,['JEFA','CAJERO','TRANSFERISTA']);
+      const observed=await this.findAuthorized(id,user,client);
+      const shift=await this.resolveShift(client,observed.id_turno,user,true);
       const transfer = await this.findAuthorized(id, user, client);
+      if(transfer.id_turno!==shift.id_turno)throw new ConflictException('La transferencia cambio de turno. Actualice la pantalla.');
+      if(!['ABIERTO','PENDIENTE_APROBACION','EN_REVISION'].includes(shift.estado))throw new ConflictException('No puede anular transferencias de turnos cerrados. Solicite revision administrativa.');
       if (transfer.estado !== 'ACTIVO') throw new BadRequestException('La transferencia ya esta anulada.');
       this.assertEditable(transfer, user);
-      const shift = await this.resolveShift(client, transfer.id_turno, user, true);
       const lines = await this.loadLines(client, id);
       await this.applyEffect(client, id, shift, {
         type: transfer.tipo, direction: transfer.direccion, currencyId: transfer.id_moneda,
@@ -163,7 +178,7 @@ export class TransfersService {
     const result = await client.query<TransferRow>(`${this.selectTransfer()} where tr.id_transferencia=$1`, [id]);
     const row = result.rows[0];
     if (!row) throw new NotFoundException('La transferencia no existe.');
-    if (!this.canManageAnyShift(user) && (row.id_cajero !== user.id || !['ABIERTO','PENDIENTE_APROBACION'].includes(row.estado_turno))) {
+    if (!this.canManageAnyShift(user) && (row.id_cajero !== user.id || !['ABIERTO','PENDIENTE_APROBACION','EN_REVISION'].includes(row.estado_turno))) {
       throw new ForbiddenException('No tiene acceso a esta transferencia.');
     }
     return row;
@@ -173,25 +188,26 @@ export class TransfersService {
     const result = await client.query(
       `select t.id_turno, t.id_sucursal, t.id_caja, t.id_cajero, t.estado
        from temo.turnos t where ${requested ? 't.id_turno=$1' : "t.id_cajero=$1 and t.estado in ('ABIERTO','PENDIENTE_APROBACION')"}
-       order by t.fecha_apertura desc limit 1`,
+       order by t.fecha_apertura desc limit 1 for update`,
       [requested ?? user.id],
     );
     const shift = result.rows[0];
     if (!shift) throw new BadRequestException('No existe un turno disponible para la transferencia.');
+    await assertShiftNotSubmitted(client,shift.id_turno,user);
     if (!this.canManageAnyShift(user) && shift.id_cajero !== user.id) throw new ForbiddenException('El turno no pertenece al cajero autenticado.');
     if (!allowClosed && !['ABIERTO','PENDIENTE_APROBACION'].includes(shift.estado)) throw new BadRequestException('El turno seleccionado no esta abierto.');
     return shift;
   }
 
-  private assertWritable(input: TransferInput, shift: Record<string,string>, user: AuthenticatedUser) {
+  private assertWritable(input: TransferInput, shift: Record<string,string>, user: AuthenticatedUser, correction=false) {
     if (!this.canManageAnyShift(user) && (input.type !== 'EFECTIVO' || input.direction !== 'EGRESO')) {
       throw new ForbiddenException('El cajero solo puede registrar egresos de efectivo en su turno abierto.');
     }
-    if (!this.canManageAnyShift(user) && !['ABIERTO','PENDIENTE_APROBACION'].includes(shift.estado)) throw new ForbiddenException('El turno no esta abierto.');
+    if (!this.canManageAnyShift(user) && !['ABIERTO','PENDIENTE_APROBACION',...(correction?['EN_REVISION']:[])].includes(shift.estado)) throw new ForbiddenException('El turno no esta abierto.');
   }
 
   private assertEditable(row: TransferRow, user: AuthenticatedUser) {
-    if (!this.canManageAnyShift(user) && (row.tipo !== 'EFECTIVO' || row.direccion !== 'SALE' || row.id_cajero !== user.id || !['ABIERTO','PENDIENTE_APROBACION'].includes(row.estado_turno))) {
+    if (!this.canManageAnyShift(user) && (row.tipo !== 'EFECTIVO' || row.direccion !== 'SALE' || row.id_cajero !== user.id || !['ABIERTO','PENDIENTE_APROBACION','EN_REVISION'].includes(row.estado_turno))) {
       throw new ForbiddenException('Solo puede modificar egresos de efectivo de su turno abierto.');
     }
   }

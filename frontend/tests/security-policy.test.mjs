@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readFileSync } from 'node:fs';
-import { frontendSecurityPolicy } from '../src/utils/security-policy.ts';
+import { frontendSecurityPolicy, isPrivateDevelopmentAddress } from '../src/utils/security-policy.ts';
 
 test('production restricts scripts and API connections and rejects framing', () => {
   const policy = frontendSecurityPolicy('https://api.miscelaneaolivera.com/api');
@@ -31,4 +31,20 @@ test('meta policy omits unsupported framing directive; API sources cannot inject
   assert.throws(() => frontendSecurityPolicy('javascript:alert(1)'));
   assert.throws(() => frontendSecurityPolicy('https://user:pass@api.example.com'));
   assert.ok(frontendSecurityPolicy('https://api.example.com/path; script-src *').includes("connect-src 'self' https://api.example.com;"));
+});
+
+test('LAN development uses same-origin API and exact private HMR origins, not production or public hosts',()=>{
+  const policy=frontendSecurityPolicy('/api',true,false,['ws://192.168.0.15:3188']);
+  assert.ok(policy.includes("connect-src 'self' ws://127.0.0.1:* ws://localhost:* ws://192.168.0.15:3188;"));
+  assert.ok(!policy.includes('http://localhost'));
+  assert.throws(()=>frontendSecurityPolicy('/api',false));
+  for(const origin of ['ws://8.8.8.8:3188','ws://*.example.com','wss://192.168.0.15:3188','ws://user:secret@192.168.0.15:3188','ws://192.168.0.15:3188/evil']){
+    assert.throws(()=>frontendSecurityPolicy('/api',true,false,[origin]));
+  }
+  assert.throws(()=>frontendSecurityPolicy('https://api.example.com/api',false,false,['ws://192.168.0.15:3188']));
+});
+
+test('development network guard excludes public, malformed and arbitrary hostnames',()=>{
+  for(const host of ['127.0.0.1','localhost','::1','::ffff:192.168.0.15','10.1.2.3','172.16.0.1','172.31.255.254'])assert.equal(isPrivateDevelopmentAddress(host),true,host);
+  for(const host of ['8.8.8.8','172.15.0.1','172.32.0.1','192.168.999.1','192.168.0.15.evil.com','','example.com','169.254.0.1'])assert.equal(isPrivateDevelopmentAddress(host),false,host);
 });

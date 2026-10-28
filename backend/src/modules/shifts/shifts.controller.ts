@@ -2,6 +2,7 @@ import { BadRequestException, Body, Controller, Get, Param, Post, Put, Query, Re
 import { RecordIdPipe } from '../../common/record-id.pipe';
 import { AuthenticatedUser } from '../auth/auth.service';
 import { ShiftsService } from './shifts.service';
+import { HandoversService } from './handovers.service';
 import { z } from 'zod';
 import {
   closeShiftSchema,
@@ -17,7 +18,39 @@ type AuthenticatedRequest = { user: AuthenticatedUser };
 @Controller('shifts')
 @UsePipes(new RecordIdPipe())
 export class ShiftsController {
-  constructor(private readonly shifts: ShiftsService) {}
+  constructor(private readonly shifts: ShiftsService, private readonly handovers: HandoversService) {}
+
+  @Get('handovers')
+  handoverList(@Req() request: AuthenticatedRequest) { return this.handovers.list(request.user); }
+
+  @Get(':id/handover-candidates')
+  handoverCandidates(@Param('id') id: string, @Req() request: AuthenticatedRequest) { return this.handovers.candidates(id,request.user); }
+
+  @Get(':id/handover-preview')
+  handoverPreview(@Param('id') id: string, @Req() request: AuthenticatedRequest) { return this.handovers.preview(id,request.user); }
+
+  @Post(':id/handovers')
+  handoverPropose(@Param('id') id: string, @Body() body: unknown, @Req() request: AuthenticatedRequest) {
+    const input=this.parse(z.object({requestId:z.string().uuid(),receiverId:z.string().uuid(),expectedVersion:z.string().regex(/^[a-f0-9]{64}$/),observations:z.string().trim().max(2000).default(''),mode:z.enum(['CON_CIERRE','EN_REVISION']).default('CON_CIERRE')}).strict(),body);
+    return this.handovers.propose(id,input,request.user);
+  }
+
+  @Post(':id/handover-difference')
+  handoverDifference(@Param('id') id: string, @Body() body: unknown, @Req() request: AuthenticatedRequest) {
+    const input=this.parse(z.object({expectedVersion:z.string().regex(/^[a-f0-9]{64}$/)}).strict(),body);
+    return this.handovers.registerDifference(id,input.expectedVersion,request.user);
+  }
+
+  @Post(':id/cancel-close-request')
+  cancelClose(@Param('id') id: string, @Req() request: AuthenticatedRequest) {
+    return this.shifts.cancelClose(id,request.user);
+  }
+
+  @Post('handovers/:id/:action')
+  handoverResolve(@Param('id') id: string, @Param('action') action: string, @Req() request: AuthenticatedRequest) {
+    if (!['accept','reject','cancel'].includes(action)) throw new BadRequestException('Accion de traspaso invalida.');
+    return this.handovers.resolve(id,action as 'accept'|'reject'|'cancel',request.user);
+  }
 
   @Post('export')
   exportRows(@Body() body: unknown, @Req() request: AuthenticatedRequest & { ip?: string }) {
@@ -130,8 +163,9 @@ export class ShiftsController {
   }
 
   @Post(':id/close-request')
-  requestClose(@Param('id') id: string, @Req() request: AuthenticatedRequest) {
-    return this.shifts.requestClose(id, request.user);
+  requestClose(@Param('id') id: string, @Req() request: AuthenticatedRequest, @Body() body?: unknown) {
+    const input=this.parse(z.object({observations:z.string().trim().max(2000).default('')}).strict(),body??{});
+    return this.shifts.requestClose(id, request.user,input.observations);
   }
 
   @Post(':id/close')

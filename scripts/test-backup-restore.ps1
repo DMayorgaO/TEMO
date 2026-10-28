@@ -1,4 +1,4 @@
-param([Parameter(Mandatory = $true)][string]$BackupPath, [switch]$VerifyPreview)
+param([Parameter(Mandatory = $true)][string]$BackupPath, [switch]$VerifyPreview, [switch]$VerifyReleaseMigrations)
 
 $ErrorActionPreference = 'Stop'
 $root = (Resolve-Path (Split-Path -Parent $PSScriptRoot)).Path
@@ -69,6 +69,10 @@ try {
   if ($VerifyPreview) {
     & node (Join-Path $root 'scripts/preview-recovery.mjs') --verify-restored $resolvedBackup
     if ($LASTEXITCODE -ne 0) { throw 'Los datos o la estructura no coinciden con el manifiesto de prueba.' }
+  }
+  if ($VerifyReleaseMigrations) {
+    & node (Join-Path $root 'scripts/verify-restored-release.mjs') --isolated-restored-release
+    if ($LASTEXITCODE -ne 0) { throw 'El ensayo de las migraciones en el respaldo restaurado no fue aprobado.' }
   }
   Write-Host "Restauracion verificada: $result" -ForegroundColor Green
 } finally {

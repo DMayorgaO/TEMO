@@ -1,0 +1,2 @@
+ALTER TABLE temo.traspasos_turno
+  ADD COLUMN IF NOT EXISTS observaciones VARCHAR(2000) NOT NULL DEFAULT '';

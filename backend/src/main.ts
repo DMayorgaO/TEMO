@@ -82,7 +82,8 @@ async function bootstrap() {
   app.useGlobalFilters(new AppExceptionFilter(app.get(DatabaseService)));
   app.useGlobalInterceptors(new ExportLimitInterceptor(), new SensitiveReadInterceptor(app.get(DatabaseService)));
 
-  await app.listen(port, '0.0.0.0');
+  const bindHost=config.get<string>('APP_ENV')==='development'&&process.env.TEMO_DEVELOPMENT_LOOPBACK==='1'?'127.0.0.1':'0.0.0.0';
+  await app.listen(port, bindHost);
 }
 
 void bootstrap();

@@ -19,6 +19,7 @@ import {
   updateTransactionSchema,
   updateTransactionGroupSchema,
   reopenPaymentsSchema,
+  voidTransactionSchema,
 } from './transaction-batch.schema';
 import { TransactionsService } from './transactions.service';
 import { authorizedExport, parseExportSelection, requireExportRole } from '../../common/export-selection';
@@ -58,6 +59,7 @@ export class TransactionsController {
       });
     }
     return this.transactions.createBatch({ ...parsed.data, userId: request.user.id }, {
+      actor: request.user,
       ip: request.ip,
       userAgent: request.headers['user-agent'],
     });
@@ -83,6 +85,7 @@ export class TransactionsController {
          ) as id,
          g.id_grupo_transacciones,
          g.codigo_operacion,
+         g.version_edicion::text as edit_version,
          t.orden_grupo,
          t.fecha_transaccion,
          coalesce(tm.monto, t.monto_original) as monto,
@@ -146,7 +149,7 @@ export class TransactionsController {
          $3 = 'JEFA'
          or (
            t.id_cajero = $4::uuid
-           and tu.estado in ('ABIERTO', 'PENDIENTE_APROBACION')
+           and tu.estado in ('ABIERTO', 'PENDIENTE_APROBACION','EN_REVISION')
          )
        )
        and ($5::uuid[] is null or t.id_transaccion = any($5::uuid[]))
@@ -178,8 +181,11 @@ export class TransactionsController {
   voidTransaction(
     @Param('id') id: string,
     @Req() request: { user: AuthenticatedUser },
+    @Body() body?: unknown,
   ) {
-    return this.transactions.void(id, request.user);
+    const parsed=voidTransactionSchema.safeParse(body===undefined?{}:body);
+    if(!parsed.success)throw new BadRequestException('La solicitud de anulacion no es valida.');
+    return this.transactions.void(id, request.user,undefined,parsed.data.requestId,parsed.data.expectedVersion);
   }
 
   @Put(':id/group')

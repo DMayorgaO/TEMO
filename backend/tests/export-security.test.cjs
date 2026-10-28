@@ -57,7 +57,7 @@ test('transaction and shift exports bind scope and identifiers in SQL', async ()
   await transactions.exportRows({ format: 'PDF', ids: [first] }, cashier);
   assert.deepEqual(calls[0][1], [1, 0, 'CAJERO', actor, [first]]);
   assert.match(calls[0][0], /t.id_cajero = \$4::uuid/);
-  assert.match(calls[0][0], /tu.estado in \('ABIERTO', 'PENDIENTE_APROBACION'\)/);
+  assert.match(calls[0][0], /tu.estado in \('ABIERTO', 'PENDIENTE_APROBACION','EN_REVISION'\)/);
   assert.match(calls[0][0], /t.id_transaccion = any\(\$5::uuid\[\]\)/);
   const shifts = new ShiftsService(db);
   await shifts.exportRows({ format: 'EXCEL', ids: [first] }, cashier);

@@ -7,6 +7,7 @@ const cashLineSchema = z.object({
 });
 
 export const transferSchema = z.object({
+  requestId: z.string().uuid().optional(),
   shiftId: z.string().uuid().optional(),
   type: z.enum(['EFECTIVO', 'DIGITAL']),
   direction: z.enum(['INGRESO', 'EGRESO']),

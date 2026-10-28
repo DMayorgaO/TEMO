@@ -14,7 +14,14 @@
     "build": "npm run build -w backend && npm run build -w frontend",
     "lint": "npm run lint -w backend && npm run lint -w frontend"
   },
+  "overrides": {
+    "@nestjs/platform-express": {
+      ".": "11.2.8",
+      "multer": "2.5.0"
+    }
+  },
   "devDependencies": {
+    "@nestjs/platform-express": "11.2.8",
     "@viz-js/viz": "^3.29.0"
   }
 }

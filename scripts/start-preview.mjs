@@ -4,9 +4,12 @@ import { createServer } from 'node:net';
 import { randomBytes } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createRequire } from 'node:module';
 import pg from 'pg';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const require = createRequire(import.meta.url);
+const viteCli = path.join(path.dirname(require.resolve('vite/package.json', { paths: [path.join(root, 'frontend')] })), 'bin/vite.js');
 const runtime = path.join(root, 'tmp', 'preview');
 const data = path.join(runtime, 'pgdata');
 const databaseUrl = 'postgresql://temo_preview@127.0.0.1:55433/temo_preview';
@@ -114,7 +117,7 @@ const backend = launch(['backend/dist/main.js'], 'backend', {
 let frontend;
 try {
   await waitFor('http://127.0.0.1:4187/api/health');
-  frontend = launch(['frontend/node_modules/vite/bin/vite.js', 'frontend', '--config', 'frontend/vite.config.ts', '--host', '127.0.0.1', '--port', '3187', '--strictPort'], 'frontend', {
+  frontend = launch([viteCli, 'frontend', '--config', 'frontend/vite.config.ts', '--host', '127.0.0.1', '--port', '3187', '--strictPort'], 'frontend', {
     VITE_API_URL: 'http://127.0.0.1:4187/api', VITE_APP_ENV: 'preview',
   });
   await waitFor('http://127.0.0.1:3187');

@@ -8,6 +8,8 @@ import { PoolClient, QueryResult, QueryResultRow } from 'pg';
 import { AuthenticatedUser } from '../auth/auth.service';
 import { DatabaseService } from '../database/database.service';
 import { DollarPurchasesService } from '../dollar-purchases/dollar-purchases.service';
+import { assertShiftNotSubmitted } from '../../common/shift-submission-lock';
+import { validateFinancialActor } from '../../common/financial-request';
 import { authorizedExport, parseExportSelection, requireExportRole, recordAuthorizedExport } from '../../common/export-selection';
 import { preferentialCashAdjustment, preferentialGroupMarker, PreferentialCashRow } from '../../common/preferential-cash';
 import {
@@ -170,10 +172,10 @@ export class ShiftsService {
     const result = await this.db.query<{ database_id: string; estado: string; sucursal: string; caja: string }>(
       `select t.id_turno as database_id, t.estado, s.nombre as sucursal, c.nombre as caja
        from temo.turnos t join temo.sucursales s using(id_sucursal) join temo.cajas c using(id_caja)
-       where t.id_cajero=$1 and t.estado in ('ABIERTO','PENDIENTE_APROBACION','PENDIENTE_APERTURA')
+       where t.id_cajero=$1 and t.estado in ('ABIERTO','PENDIENTE_APROBACION','PENDIENTE_APERTURA','EN_REVISION')
        order by t.fecha_apertura desc, t.fecha_creacion desc`, [user.id]);
     return {
-      active: result.rows.find(row => row.estado === 'ABIERTO' || row.estado === 'PENDIENTE_APROBACION') ?? null,
+      active: result.rows.find(row => row.estado === 'ABIERTO' || row.estado === 'PENDIENTE_APROBACION') ?? result.rows.find(row=>row.estado==='EN_REVISION') ?? null,
       prepared: result.rows.find(row => row.estado === 'PENDIENTE_APERTURA') ?? null,
     };
   }
@@ -412,6 +414,8 @@ export class ShiftsService {
   async saveCashCount(shiftId: string, input: SaveCashCountInput, user: AuthenticatedUser) {
     const shift = await this.findAuthorizedShift(shiftId, user, true);
     await this.db.transaction(async (client) => {
+      const writable=await this.lockWritableShift(client,shiftId,user);
+      const before=writable.estado==='EN_REVISION'?await this.shiftAudit(client,shiftId):null;
       await this.persistCashCounts(client, shiftId, shift.id_caja, user.id, 'ACTUAL', input.counts);
       await client.query(
         `update temo.turnos
@@ -419,12 +423,16 @@ export class ShiftsService {
          where id_turno = $1`,
         [shiftId, input.changeNio],
       );
+      if(before)await this.auditReviewCorrection(client,shiftId,user.id,'CORREGIR_ARQUEO_EN_REVISION',before);
     });
     return this.detail(shiftId, user);
   }
 
   async updateClosed(shiftId: string, input: UpdateClosedShiftInput, user: AuthenticatedUser) {
     this.requireBoss(user);
+    if ((await this.db.query(`select 1 from temo.traspasos_turno where id_turno_origen=$1 and estado='ACEPTADO'`,[shiftId])).rowCount) {
+      throw new ConflictException('Este cierre ya fue traspasado a otro cajero. No se pueden modificar las existencias entregadas.');
+    }
     const shift = await this.findAuthorizedShift(shiftId, user);
     if (shift.estado !== 'CERRADO') {
       throw new ConflictException('Solo se pueden corregir datos de cierre en un turno cerrado.');
@@ -476,6 +484,8 @@ export class ShiftsService {
   ) {
     await this.findAuthorizedShift(shiftId, user, true);
     await this.db.transaction(async (client) => {
+      const writable=await this.lockWritableShift(client,shiftId,user);
+      const before=writable.estado==='EN_REVISION'?await this.shiftAudit(client,shiftId):null;
       const currentBalances = await this.loadBalances(shiftId, client);
       for (const balance of balances) {
         const current = currentBalances.find((row) => row.account === balance.account);
@@ -510,43 +520,53 @@ export class ShiftsService {
             current?.income ?? null, current?.expense ?? null, current?.calculated ?? null],
         );
       }
+      if(before)await this.auditReviewCorrection(client,shiftId,user.id,'CORREGIR_SALDOS_EN_REVISION',before);
     });
     return this.detail(shiftId, user);
   }
 
-  async requestClose(shiftId: string, user: AuthenticatedUser) {
+  async requestClose(shiftId: string, user: AuthenticatedUser, observations = '') {
     const shift = await this.findAuthorizedShift(shiftId, user, true);
     if (shift.id_cajero !== user.id) {
       throw new ForbiddenException('Solo el cajero del turno puede solicitar su cierre.');
     }
     return this.db.transaction(async client => {
-    const locked = await client.query('select estado from temo.turnos where id_turno=$1 for update', [shiftId]);
-    if (!['ABIERTO', 'PENDIENTE_APROBACION'].includes(locked.rows[0]?.estado)) {
+    await validateFinancialActor(client,user,['CAJERO']);
+    const locked = await client.query('select estado,id_cajero from temo.turnos where id_turno=$1 for update', [shiftId]);
+    if (locked.rows[0]?.id_cajero!==user.id) throw new ForbiddenException('Solo el cajero del turno puede solicitar su cierre.');
+    if (!['ABIERTO', 'PENDIENTE_APROBACION','EN_REVISION'].includes(locked.rows[0]?.estado)) {
       throw new ConflictException('El turno ya no admite solicitudes de cierre.');
     }
+    const reviewing=locked.rows[0].estado==='EN_REVISION';
+    await assertShiftNotSubmitted(client,shiftId,user);
     const result = await client.query(
       `insert into temo.solicitudes_cierre_turno (
          id_turno, id_usuario_solicitud, estado, fecha_solicitud,
          id_usuario_revision, fecha_revision, fecha_notificacion_cajero_leida,
-         observaciones_cierre
-       ) values ($1, $2, 'PENDIENTE', now(), null, null, null, null)
+         observaciones_cierre,bloquea_cambios
+       ) values ($1, $2, 'PENDIENTE', clock_timestamp(), null, null, null, nullif($3,''),true)
        on conflict (id_turno) do update set
          id_usuario_solicitud = excluded.id_usuario_solicitud,
          estado = 'PENDIENTE',
-         fecha_solicitud = now(),
+         bloquea_cambios = true,
+         fecha_solicitud = clock_timestamp(),
          id_usuario_revision = null,
          fecha_revision = null,
          fecha_notificacion_cajero_leida = null,
-         observaciones_cierre = null
+         observaciones_cierre = coalesce(excluded.observaciones_cierre,temo.solicitudes_cierre_turno.observaciones_cierre)
        returning id_solicitud_cierre as id`,
-      [shiftId, user.id],
+      [shiftId, user.id,observations],
     );
     await client.query(
       `update temo.turnos
-       set estado = 'PENDIENTE_APROBACION', fecha_modificacion = now()
+       set estado = $2::temo.estado_turno, fecha_modificacion = now()
        where id_turno = $1`,
-      [shiftId],
+      [shiftId,reviewing?'EN_REVISION':'PENDIENTE_APROBACION'],
     );
+    await client.query(`insert into temo.bitacora(id_usuario,accion,tabla,id_registro,datos_nuevos)
+      values($1,'ACTUALIZAR','turnos',$2,jsonb_build_object('evento',$4::text,
+        'estado',$5::text,'observaciones',$3::text))`,[user.id,shiftId,observations,
+      reviewing?'SOLICITAR_CIERRE_TRAS_CORRECCIONES':'SOLICITAR_CIERRE_TURNO',reviewing?'EN_REVISION':'PENDIENTE_APROBACION']);
     return result.rows[0];
     });
   }
@@ -557,13 +577,14 @@ export class ShiftsService {
         `select
            sc.id_solicitud_cierre as id,
            'CLOSE_REQUEST' as kind,
+           t.estado as shift_state,
            t.id_turno as shift_id,
            concat('TUR-', lpad(t.codigo_turno::text, 6, '0')) as shift_code,
            u.nombre_completo as cashier,
            s.nombre as branch,
            c.nombre as register,
            sc.fecha_solicitud as created_at,
-           null::text as observations,
+           sc.observaciones_cierre as observations,
            null::numeric as amount,
            null::text as currency,
            null::text as transfer_type,
@@ -607,7 +628,19 @@ export class ShiftsService {
            and n.fecha_lectura is null`,
         [user.id],
       );
-      return [...result.rows, ...transferNotifications.rows].sort(
+      const handovers=await this.db.query(`select n.id_notificacion as id,'SHIFT_HANDOVER' as kind,
+        t.id_turno as shift_id,concat('TUR-',lpad(t.codigo_turno::text,6,'0')) as shift_code,
+        u.nombre_completo as cashier,s.nombre as branch,c.nombre as register,n.fecha_creacion as created_at,n.mensaje as observations,
+        u.nombre_completo as handover_sender,v.nombre_completo as handover_receiver,
+        concat('TUR-',lpad(dest.codigo_turno::text,6,'0')) as handover_destination,h.modo as handover_mode,t.estado as shift_state
+        from temo.notificaciones_usuarios n join temo.turnos t on t.id_turno=n.id_turno
+        join temo.usuarios u on u.id_usuario=t.id_cajero join temo.sucursales s on s.id_sucursal=t.id_sucursal
+        join temo.cajas c on c.id_caja=t.id_caja
+        left join temo.traspasos_turno h on h.id_turno_origen=t.id_turno and h.estado='ACEPTADO'
+        left join temo.usuarios v on v.id_usuario=h.id_receptor
+        left join temo.turnos dest on dest.id_turno=h.id_turno_destino
+        where n.id_usuario_destino=$1 and n.tipo='TRASPASO_TURNO' and n.fecha_lectura is null`,[user.id]);
+      return [...result.rows, ...transferNotifications.rows,...handovers.rows].sort(
         (first, second) => new Date(String(first.created_at)).getTime() - new Date(String(second.created_at)).getTime(),
       );
     }
@@ -713,9 +746,15 @@ export class ShiftsService {
     this.requireBoss(user);
     const shift = await this.findAuthorizedShift(shiftId, user, true);
     await this.db.transaction(async (client) => {
+      await validateFinancialActor(client,user,['JEFA']);
       const locked = await client.query('select estado from temo.turnos where id_turno=$1 for update', [shiftId]);
-      if (!['ABIERTO', 'PENDIENTE_APROBACION'].includes(locked.rows[0]?.estado)) {
+      if (!['ABIERTO', 'PENDIENTE_APROBACION','EN_REVISION'].includes(locked.rows[0]?.estado)) {
         throw new ConflictException('El turno ya no admite cierre. Actualice la pantalla.');
+      }
+      const before=await this.shiftAudit(client,shiftId);
+      if(input.expectedCloseRequest&&!(await client.query(`select 1 from temo.solicitudes_cierre_turno
+        where id_turno=$1 and estado='PENDIENTE' and fecha_solicitud::text=$2`,[shiftId,input.expectedCloseRequest])).rowCount){
+        throw new ConflictException('La solicitud de cierre fue cancelada o renovada. Actualice el turno antes de revisarlo.');
       }
       const totals = this.cashTotals(input.counts);
       await this.persistCashCounts(client, shiftId, shift.id_caja, user.id, 'CIERRE_CONTADO', input.counts);
@@ -746,12 +785,9 @@ export class ShiftsService {
       );
       await client.query(
         `insert into temo.bitacora (
-           id_usuario, accion, tabla, id_registro, datos_nuevos
-         ) values (
-           $1, 'APROBAR', 'turnos', $2,
-           jsonb_build_object('estado', 'CERRADO', 'observaciones', nullif($3, ''))
-         )`,
-        [user.id, shiftId, input.observations],
+           id_usuario, accion, tabla, id_registro, datos_anteriores,datos_nuevos
+         ) values ($1,'APROBAR','turnos',$2,$3::jsonb,$4::jsonb)`,
+        [user.id,shiftId,JSON.stringify(before),JSON.stringify({...await this.shiftAudit(client,shiftId,'CIERRE_CONTADO'),evento:'APROBAR_CIERRE_TURNO',observaciones:input.observations})],
       );
     });
     return this.detail(shiftId, user);
@@ -761,28 +797,41 @@ export class ShiftsService {
     this.requireBoss(user);
     await this.db.transaction(async client => {
       await client.query('select pg_advisory_xact_lock(741260810)');
-      const actor = await client.query(`select 1 from temo.usuarios u join temo.roles r using(id_rol)
-        where u.id_usuario=$1 and u.estado='ACTIVO' and r.estado='ACTIVO'
-          and r.codigo='JEFA' and u.version_sesion=$2`, [user.id, user.sessionVersion]);
-      if (!actor.rowCount) throw new ForbiddenException('La sesion administrativa ya no es valida.');
+      await validateFinancialActor(client,user,['JEFA']);
       const shift = await client.query('select estado from temo.turnos where id_turno=$1 for update', [shiftId]);
       if (!shift.rowCount) throw new NotFoundException('El turno seleccionado no existe.');
-      if (shift.rows[0].estado !== 'PENDIENTE_APROBACION') {
+      if (!['PENDIENTE_APROBACION','EN_REVISION'].includes(shift.rows[0].estado)) {
         throw new ConflictException('Solo se puede rechazar un cierre pendiente de aprobacion.');
       }
       const request = await client.query(`update temo.solicitudes_cierre_turno
-        set estado='CANCELADA', id_usuario_revision=$2, fecha_revision=now(),
-          observaciones_cierre='Cierre rechazado; turno abierto nuevamente.'
+        set estado='CANCELADA', bloquea_cambios=false, id_usuario_revision=$2, fecha_revision=now()
         where id_turno=$1 and estado='PENDIENTE' returning id_solicitud_cierre`, [shiftId, user.id]);
       if (request.rowCount !== 1) throw new ConflictException('La solicitud de cierre ya no esta pendiente.');
-      await client.query(`update temo.turnos set estado='ABIERTO', fecha_modificacion=now()
+      await client.query(`update temo.turnos set estado=case when estado='EN_REVISION' then estado else 'ABIERTO'::temo.estado_turno end, fecha_modificacion=now()
         where id_turno=$1`, [shiftId]);
       await client.query(`insert into temo.bitacora(id_usuario,accion,tabla,id_registro,datos_anteriores,datos_nuevos)
         values($1,'RECHAZAR','turnos',$2,
-          jsonb_build_object('estado','PENDIENTE_APROBACION','solicitud_estado','PENDIENTE'),
-          jsonb_build_object('evento','RECHAZAR_CIERRE_TURNO','estado','ABIERTO','solicitud_estado','CANCELADA'))`, [user.id, shiftId]);
+          jsonb_build_object('estado',$4::text,'solicitud_estado','PENDIENTE'),
+          jsonb_build_object('evento','RECHAZAR_CIERRE_TURNO','estado',$3::text,'solicitud_estado','CANCELADA'))`, [user.id, shiftId,shift.rows[0].estado==='EN_REVISION'?'EN_REVISION':'ABIERTO',shift.rows[0].estado]);
     });
-    return { success: true, message: 'Cierre rechazado. El turno esta abierto nuevamente.' };
+    return { success: true, message: 'Cierre rechazado. El cajero puede corregir su turno.' };
+  }
+
+  async cancelClose(shiftId: string, user: AuthenticatedUser) {
+    await this.db.transaction(async client=>{
+      await validateFinancialActor(client,user,['CAJERO']);
+      const shift=(await client.query('select estado,id_cajero from temo.turnos where id_turno=$1 for update',[shiftId])).rows[0];
+      if(!shift || shift.id_cajero!==user.id)throw new ForbiddenException('Solo puede cancelar el cierre de su propio turno.');
+      if(!['PENDIENTE_APROBACION','EN_REVISION'].includes(shift.estado))throw new ConflictException('El turno no tiene un cierre pendiente.');
+      const result=await client.query(`update temo.solicitudes_cierre_turno set estado='CANCELADA',bloquea_cambios=false,
+        fecha_revision=now(),id_usuario_revision=$2 where id_turno=$1 and estado='PENDIENTE' and bloquea_cambios returning id_turno`,[shiftId,user.id]);
+      if(!result.rowCount)throw new ConflictException('La solicitud ya fue resuelta o no esta bloqueada.');
+      await client.query(`update temo.turnos set estado=case when estado='EN_REVISION' then estado else 'ABIERTO'::temo.estado_turno end,
+        fecha_modificacion=now() where id_turno=$1`,[shiftId]);
+      await client.query(`insert into temo.bitacora(id_usuario,accion,tabla,id_registro,datos_nuevos)
+        values($1,'ACTUALIZAR','turnos',$2,jsonb_build_object('evento','CANCELAR_SOLICITUD_CIERRE','estado',$3::text))`,[user.id,shiftId,shift.estado==='EN_REVISION'?'EN_REVISION':'ABIERTO']);
+    });
+    return this.detail(shiftId,user);
   }
 
   private async resolveAvailableRegister(
@@ -868,7 +917,19 @@ export class ShiftsService {
        u.id_usuario as id_cajero,
        u.nombre_completo as cajero,
        u.usuario as cajero_usuario,
-       sc.estado as solicitud_estado
+       sc.estado as solicitud_estado,
+       sc.observaciones_cierre as solicitud_observaciones,
+       case when sc.estado='PENDIENTE' then sc.fecha_solicitud::text else null end as closure_version,
+       (select jsonb_build_object('sender',a.nombre_completo,'receiver',b.nombre_completo,
+         'source',concat('TUR-',lpad(t.codigo_turno::text,6,'0')),
+         'destination',concat('TUR-',lpad(n.codigo_turno::text,6,'0')),'mode',h.modo,'state',t.estado,'observations',h.observaciones)
+        from temo.traspasos_turno h join temo.usuarios a on a.id_usuario=h.id_emisor
+        join temo.usuarios b on b.id_usuario=h.id_receptor left join temo.turnos n on n.id_turno=h.id_turno_destino
+        where h.id_turno_origen=t.id_turno and h.estado='ACEPTADO' order by h.fecha_resolucion desc limit 1) as handover,
+       (sc.estado='PENDIENTE' and sc.bloquea_cambios) is true as closure_requested,
+       (t.estado='PENDIENTE_APROBACION' or (sc.estado='PENDIENTE' and sc.bloquea_cambios) is true
+        or exists(select 1 from temo.traspasos_turno h where h.id_turno_origen=t.id_turno and h.estado='PENDIENTE'
+          and h.fecha_limite>clock_timestamp())) as write_locked
      from temo.turnos t
      join temo.sucursales s on s.id_sucursal = t.id_sucursal
      join temo.cajas c on c.id_caja = t.id_caja
@@ -880,12 +941,40 @@ export class ShiftsService {
     const result = await this.db.query<ShiftRow>(
       `${this.shiftSelect()}
        where t.id_cajero = $1
-         and t.estado in ('ABIERTO', 'PENDIENTE_APROBACION')
-       order by t.fecha_apertura desc
+         and t.estado in ('ABIERTO', 'PENDIENTE_APROBACION','EN_REVISION')
+       order by (t.estado='EN_REVISION'),t.fecha_apertura desc
        limit 1`,
       [user.id],
     );
     return result.rows[0] ?? null;
+  }
+
+  private async lockWritableShift(client: PoolClient, shiftId: string, user: AuthenticatedUser) {
+    await validateFinancialActor(client,user,['JEFA','CAJERO']);
+    await assertShiftNotSubmitted(client,shiftId,user);
+    const result=await client.query(`select estado,id_cajero from temo.turnos where id_turno=$1 for update`,[shiftId]);
+    const row=result.rows[0];
+    if (!row || !['ABIERTO','PENDIENTE_APROBACION','EN_REVISION'].includes(row.estado)
+      || (user.roleCode!=='JEFA' && row.id_cajero!==user.id)) throw new ConflictException('El turno ya no admite cambios. Actualice la pantalla.');
+    return row;
+  }
+
+  private async shiftAudit(client: PoolClient, shiftId: string, type:'ACTUAL'|'CIERRE_CONTADO'='ACTUAL') {
+    const state=(await client.query('select estado,cambio_nio from temo.turnos where id_turno=$1',[shiftId])).rows[0];
+    const counts=(await this.loadCashCounts(shiftId,client))[type];
+    const normalized=(currency:CurrencyCode)=>(counts?.[currency]?.lines??[])
+      .map(line=>({denomination:line.denomination,piles25:0,loose:line.piles25*25+line.loose}))
+      .filter(line=>line.loose>0).sort((a,b)=>b.denomination-a.denomination);
+    const balances=(await this.loadBalances(shiftId,client)).map(row=>({id:row.account_id,account:row.account,currency:row.currency,
+      calculated:String(row.calculated),system:String(row.system),income:row.system_income===null?null:String(row.system_income),expense:row.system_expense===null?null:String(row.system_expense)}));
+    return {estado:state.estado,changeNio:Number(state.cambio_nio),settlement:{primaryCounts:{NIO:normalized('NIO'),USD:normalized('USD')}},balances};
+  }
+
+  private async auditReviewCorrection(client:PoolClient,shiftId:string,actorId:string,event:string,before:unknown) {
+    const after=await this.shiftAudit(client,shiftId);
+    if(JSON.stringify(before)===JSON.stringify(after))return;
+    await client.query(`insert into temo.bitacora(id_usuario,accion,tabla,id_registro,datos_anteriores,datos_nuevos)
+      values($1,'CORREGIR','turnos',$2,$3::jsonb,$4::jsonb)`,[actorId,shiftId,JSON.stringify(before),JSON.stringify({...after,evento:event})]);
   }
 
   private async findAuthorizedShift(
@@ -897,7 +986,7 @@ export class ShiftsService {
       `${this.shiftSelect()}
        where t.id_turno = $1
          and ($2 = 'JEFA' or t.id_cajero = $3)
-         ${requireOpen ? "and t.estado in ('ABIERTO', 'PENDIENTE_APROBACION')" : ''}
+         ${requireOpen ? "and t.estado in ('ABIERTO', 'PENDIENTE_APROBACION','EN_REVISION')" : ''}
        limit 1`,
       [shiftId, user.roleCode, user.id],
     );
@@ -1068,8 +1157,8 @@ export class ShiftsService {
     );
   }
 
-  private async loadCashCounts(shiftId: string) {
-    const result = await this.db.query<{
+  private async loadCashCounts(shiftId: string, database: Queryable = this.db) {
+    const result = await database.query<{
       tipo: CashCountType;
       moneda: CurrencyCode;
       monto_total: string;
@@ -1174,10 +1263,10 @@ export class ShiftsService {
            where mc.id_cuenta = stc.id_cuenta
              and tr.estado <> 'ANULADA'
              and (
-               (eb.codigo = 'TELEDOLAR'
+               (eb.codigo = 'TELEDOLAR' and stc.traspaso_base_ingresos is null
                  and movement_shift.id_sucursal = selected_shift.id_sucursal
-                 and movement_shift.fecha_apertura::date = selected_shift.fecha_apertura::date)
-               or (eb.codigo <> 'TELEDOLAR' and tr.id_turno = stc.id_turno)
+                 and (movement_shift.fecha_apertura at time zone 'America/Managua')::date = (selected_shift.fecha_apertura at time zone 'America/Managua')::date)
+               or ((eb.codigo <> 'TELEDOLAR' or stc.traspaso_base_ingresos is not null) and tr.id_turno = stc.id_turno)
              )
            union all
            select mc.direccion, mc.monto
@@ -1187,13 +1276,15 @@ export class ShiftsService {
            where mc.id_cuenta = stc.id_cuenta
              and tf.estado = 'ACTIVO'
              and (
-               (eb.codigo = 'TELEDOLAR'
+               (eb.codigo = 'TELEDOLAR' and stc.traspaso_base_ingresos is null
                  and movement_shift.id_sucursal = selected_shift.id_sucursal
-                 and movement_shift.fecha_apertura::date = selected_shift.fecha_apertura::date)
-               or (eb.codigo <> 'TELEDOLAR' and tf.id_turno = stc.id_turno)
+                 and (movement_shift.fecha_apertura at time zone 'America/Managua')::date = (selected_shift.fecha_apertura at time zone 'America/Managua')::date)
+               or ((eb.codigo <> 'TELEDOLAR' or stc.traspaso_base_ingresos is not null) and tf.id_turno = stc.id_turno)
              )
          ) mc
-       ) movements on true
+       ) raw_movements on true
+       cross join lateral (select coalesce(raw_movements.income,0)+coalesce(stc.traspaso_base_ingresos,0) as income,
+         coalesce(raw_movements.expense,0)+coalesce(stc.traspaso_base_egresos,0) as expense) movements
        cross join lateral (
          select
            (case when eb.codigo = 'TELEDOLAR' then 0 else stc.saldo_inicial end)
@@ -1285,8 +1376,8 @@ export class ShiftsService {
     return result.rows;
   }
 
-  private async loadCashSummary(shiftId: string) {
-    const [result, rateResult] = await Promise.all([this.db.query<{
+  private async loadCashSummary(shiftId: string, database: Queryable = this.db) {
+    const [result, rateResult] = await Promise.all([database.query<{
       currency: CurrencyCode;
       expected_amount: string;
       pending_amount: string;
@@ -1358,7 +1449,7 @@ export class ShiftsService {
        where t.id_turno = $1 and m.codigo in ('NIO', 'USD')
       order by m.codigo`,
       [shiftId],
-    ), this.db.query<{ buy_rate: string } & QueryResultRow>(
+    ), database.query<{ buy_rate: string } & QueryResultRow>(
       `select coalesce((
          select tasa_compra from temo.tipos_cambio
          order by vigente_desde desc, fecha_creacion desc limit 1
@@ -1373,7 +1464,7 @@ export class ShiftsService {
       return summary;
     }, { expectedCash: { NIO: 0, USD: 0 }, pendingCash: { NIO: 0, USD: 0 } });
     const buyRate = Number(rateResult.rows[0]?.buy_rate || 36.4);
-    const preferentialRows = await this.db.query<PreferentialCashRow & QueryResultRow>(
+    const preferentialRows = await database.query<PreferentialCashRow & QueryResultRow>(
       `select tr.id_grupo_transacciones as group_id, m.codigo as currency,
          tm.direccion as direction, tm.monto as amount,
          tr.tasa_compra_usada as buy_rate, tr.tasa_venta_usada as sell_rate,
@@ -1407,6 +1498,100 @@ export class ShiftsService {
       expectedGeneralRate: buyRate,
       pendingCash: summary.pendingCash,
     };
+  }
+
+  async handoverSnapshot(client: PoolClient, shiftId: string) {
+    const cash = (await this.loadCashCounts(shiftId,client)).ACTUAL;
+    if (!cash?.NIO || !cash?.USD) throw new ConflictException('Guarde el arqueo de ambas monedas antes de traspasar.');
+    const counts: CashCountsInput = { NIO: cash.NIO.lines, USD: cash.USD.lines };
+    const totals=this.cashTotals(counts);
+    const balances=await this.loadBalances(shiftId,client);
+    const summary=await this.loadCashSummary(shiftId,client);
+    const dollarPurchases=await this.purchases.forAuthorizedShift(shiftId,client);
+    const state=await client.query(`select t.cambio_nio, to_char(now() at time zone 'America/Managua','YYYY-MM-DD') as day,
+      to_char(t.fecha_apertura at time zone 'America/Managua','YYYY-MM-DD') as source_day,
+      t.id_sucursal,t.id_caja,t.id_cajero,s.nombre as branch,c.nombre as register,u.nombre_completo as sender,
+      concat('TUR-',lpad(t.codigo_turno::text,6,'0')) as shift_code
+      from temo.turnos t join temo.sucursales s using(id_sucursal) join temo.cajas c using(id_caja)
+      join temo.usuarios u on u.id_usuario=t.id_cajero where t.id_turno=$1`,[shiftId]);
+    const row=state.rows[0];
+    if (row.source_day!==row.day) throw new ConflictException('El turno corresponde a otra jornada. Solicite cierre administrativo para cambiar de dia.');
+    const cashDifference=totals.NIO+totals.USD*summary.expectedGeneralRate-summary.expectedGeneral.NIO;
+    const accountDifferences=balances.flatMap(balance=>{
+      const fields=balance.entity==='TELEDOLAR'
+        ? [{field:'pagos',system:Number(balance.system_income),calculated:Number(balance.income)},
+          {field:'envios',system:Number(balance.system_expense),calculated:Number(balance.expense)}]
+        : [{field:'saldo',system:Number(balance.system),calculated:Number(balance.calculated)}];
+      return fields.map(field=>({...field,accountId:balance.account_id as string,account:balance.account as string,
+        currency:balance.currency as string,difference:field.system-field.calculated})).filter(field=>Math.abs(field.difference)>=0.005);
+    });
+    const hasDifferences=Math.abs(cashDifference)>=0.005 || Number(row.cambio_nio)!==0
+      || balances.some(balance=>Math.abs(Number(balance.difference))>=0.005
+        || (balance.entity==='TELEDOLAR' && (Math.abs(Number(balance.system_income)-Number(balance.income))>=0.005
+          || Math.abs(Number(balance.system_expense)-Number(balance.expense))>=0.005)));
+    return {counts,totals,balances,summary,day:row.day,branchId:row.id_sucursal,registerId:row.id_caja,
+      senderId:row.id_cajero,changeNio:String(row.cambio_nio),cashDifference,hasDifferences,dollarPurchases,
+      pendingCashDifference:cashDifference-Number(row.cambio_nio),accountDifferences,
+      identity:{shiftCode:String(row.shift_code),branch:String(row.branch),register:String(row.register),sender:String(row.sender)}};
+  }
+
+  async finalizeHandover(client: PoolClient, sourceId: string, senderId: string, receiverId: string,
+    snapshot: Awaited<ReturnType<ShiftsService['handoverSnapshot']>>, _requestId: string, observations = '', mode='CON_CIERRE') {
+    const reviewing=mode==='EN_REVISION';
+    const recipient=(await client.query('select nombre_completo from temo.usuarios where id_usuario=$1',[receiverId])).rows[0];
+    const notes=`Traspaso del turno ${snapshot.identity.shiftCode}: ${snapshot.identity.sender} entrega a ${recipient.nombre_completo}. ${reviewing?'Cierre pendiente de aprobacion administrativa.':'Cierre confirmado por entrega aceptada.'}${observations?`\nObservaciones: ${observations}`:''}`;
+    if(!reviewing)await this.persistCashCounts(client,sourceId,snapshot.registerId,senderId,'CIERRE_CONTADO',snapshot.counts);
+    // Congela exclusivamente la aportacion ajena; las correcciones propias siguen recalculandose.
+    await client.query(`update temo.saldos_turno_cuentas stc set
+      traspaso_base_ingresos=(v.item->>'income')::numeric-coalesce(own.income,0),
+      traspaso_base_egresos=(v.item->>'expense')::numeric-coalesce(own.expense,0)
+      from jsonb_array_elements($2::jsonb) v(item)
+      left join lateral(select sum(mc.monto) filter(where mc.direccion='ENTRA') as income,
+        sum(mc.monto) filter(where mc.direccion='SALE') as expense from temo.movimientos_cuentas mc
+        left join temo.transacciones tr on tr.id_transaccion=mc.id_transaccion
+        left join temo.transferencias tf on tf.id_transferencia=mc.id_transferencia
+        where mc.id_cuenta=(v.item->>'account_id')::uuid and
+          ((tr.id_turno=$1 and tr.estado<>'ANULADA') or (tf.id_turno=$1 and tf.estado='ACTIVO'))) own on true
+      where stc.id_turno=$1 and stc.id_cuenta=(v.item->>'account_id')::uuid and v.item->>'entity'='TELEDOLAR'`,[sourceId,JSON.stringify(snapshot.balances)]);
+    // Copia NUMERIC desde las filas, sin redondear importes de cuentas a float.
+    await client.query(`update temo.saldos_turno_cuentas stc set saldo_final_sistema=(v.item->>'system')::numeric,
+      saldo_ingresos_sistema=(v.item->>'system_income')::numeric,saldo_egresos_sistema=(v.item->>'system_expense')::numeric,
+      saldo_final_calculado=(v.item->>'calculated')::numeric,fecha_registro_cierre=case when $3 then null else now() end,
+      ingresos_referencia_sistema=case when v.item->>'entity'='TELEDOLAR' then (v.item->>'income')::numeric else stc.ingresos_referencia_sistema end,
+      egresos_referencia_sistema=case when v.item->>'entity'='TELEDOLAR' then (v.item->>'expense')::numeric else stc.egresos_referencia_sistema end
+      from jsonb_array_elements($2::jsonb) v(item) where stc.id_turno=$1 and stc.id_cuenta=(v.item->>'account_id')::uuid`,
+    [sourceId,JSON.stringify(snapshot.balances),reviewing]);
+    await client.query(`update temo.turnos set estado=$6::temo.estado_turno,
+      id_usuario_cierre=case when $7 then null else $2::uuid end,fecha_cierre=case when $7 then null else now() end,
+      efectivo_final_nio=case when $7 then null else $3::numeric end,efectivo_final_usd=case when $7 then null else $4::numeric end,
+      observaciones_cierre=$5,fecha_modificacion=now() where id_turno=$1`,
+    [sourceId,senderId,snapshot.totals.NIO,snapshot.totals.USD,notes,reviewing?'EN_REVISION':'CERRADO',reviewing]);
+    const day=await client.query(`insert into temo.jornadas(fecha,id_sucursal,id_usuario_apertura,estado)
+      values($1::date,$2,$3,'ABIERTO') on conflict(fecha,id_sucursal) do update set fecha=excluded.fecha returning id_jornada`,
+    [snapshot.day,snapshot.branchId,receiverId]);
+    const inserted=await client.query(`insert into temo.turnos(id_jornada,id_sucursal,id_caja,id_cajero,id_usuario_apertura,
+      efectivo_inicial_nio,efectivo_inicial_usd,observaciones_apertura,estado)
+      values($1,$2,$3,$4,$4,$5,$6,$7,'ABIERTO') returning id_turno`,
+    [day.rows[0].id_jornada,snapshot.branchId,snapshot.registerId,receiverId,snapshot.totals.NIO,snapshot.totals.USD,notes]);
+    const id=inserted.rows[0].id_turno;
+    await this.persistCashCounts(client,id,snapshot.registerId,receiverId,'APERTURA',snapshot.counts);
+    await this.persistCashCounts(client,id,snapshot.registerId,receiverId,'ACTUAL',snapshot.counts);
+    await client.query(`insert into temo.saldos_turno_cuentas(id_turno,id_cuenta,saldo_inicial,saldo_final_calculado,
+      saldo_final_sistema,saldo_ingresos_sistema,saldo_egresos_sistema,ingresos_referencia_sistema,egresos_referencia_sistema,
+      traspaso_base_ingresos,traspaso_base_egresos)
+      select $1,(v.item->>'account_id')::uuid,
+        case when v.item->>'entity'='TELEDOLAR' then 0 else (v.item->>'system')::numeric end,
+        (v.item->>'system')::numeric,(v.item->>'system')::numeric,
+        (v.item->>'system_income')::numeric,(v.item->>'system_expense')::numeric,
+        case when v.item->>'entity'='TELEDOLAR' then (v.item->>'system_income')::numeric else null end,
+        case when v.item->>'entity'='TELEDOLAR' then (v.item->>'system_expense')::numeric else null end,
+        case when v.item->>'entity'='TELEDOLAR' then (v.item->>'system_income')::numeric else null end,
+        case when v.item->>'entity'='TELEDOLAR' then (v.item->>'system_expense')::numeric else null end
+      from jsonb_array_elements($2::jsonb) v(item)`,[id,JSON.stringify(snapshot.balances)]);
+    if(reviewing)await client.query(`insert into temo.solicitudes_cierre_turno(id_turno,id_usuario_solicitud,estado,observaciones_cierre)
+      values($1,$2,'PENDIENTE',$3) on conflict(id_turno) do update set estado='PENDIENTE',fecha_solicitud=now(),
+        id_usuario_revision=null,fecha_revision=null,fecha_notificacion_cajero_leida=null,bloquea_cambios=false,observaciones_cierre=excluded.observaciones_cierre`,[sourceId,senderId,notes]);
+    return id as string;
   }
 
   private async persistOpeningBalances(
@@ -1496,7 +1681,9 @@ export class ShiftsService {
     shiftId: string,
     balances: CloseShiftInput['balances'],
   ) {
+    const current=await this.loadBalances(shiftId,client);
     for (const balance of balances) {
+      const reference=current.find(row=>row.account===balance.account);
       await client.query(
         `update temo.saldos_turno_cuentas stc
          set
@@ -1520,13 +1707,15 @@ export class ShiftsService {
            saldo_final_sistema = $3,
            saldo_ingresos_sistema = $4,
            saldo_egresos_sistema = $5,
+           ingresos_referencia_sistema = case when stc.traspaso_base_ingresos is not null then $6::numeric else stc.ingresos_referencia_sistema end,
+           egresos_referencia_sistema = case when stc.traspaso_base_egresos is not null then $7::numeric else stc.egresos_referencia_sistema end,
            fecha_registro_cierre = now()
          from temo.cuentas_bancarias cb
          join temo.entidades_bancarias eb on eb.id_entidad = cb.id_entidad
          where stc.id_turno = $1
            and stc.id_cuenta = cb.id_cuenta
            and cb.alias = $2`,
-        [shiftId, balance.account, balance.amount, balance.income ?? null, balance.expense ?? null],
+        [shiftId, balance.account, balance.amount, balance.income ?? null, balance.expense ?? null,reference?.income??null,reference?.expense??null],
       );
     }
   }

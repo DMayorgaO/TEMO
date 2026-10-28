@@ -17,10 +17,16 @@ const fields: Record<string, Record<string, string>> = {
     tipo_calculo: 'Tipo de calculo', porcentaje: 'Porcentaje', monto_fijo: 'Monto fijo', rango_inicio: 'Inicio del rango', rango_fin: 'Fin del rango', estado: 'Estado',
     id_entidad: 'ID del banco', id_moneda: 'ID de moneda', id_movimiento: 'ID del movimiento', id_moneda_comision: 'ID de moneda de comision' },
   transacciones: { estado: 'Estado', amount: 'Monto', currencyCode: 'Moneda', entityCode: 'Banco', movementCode: 'Movimiento', 'rates.buy': 'Tasa de compra', 'rates.sell': 'Tasa de venta' },
-  pagos_pendientes: { estado: 'Estado', saldo_pendiente: 'Saldo pendiente', monto_original: 'Monto original' },
+  pagos_pendientes: { estado: 'Estado', saldo_pendiente: 'Saldo pendiente', monto_original: 'Monto original',method:'Forma de pago',totalAmount:'Monto liquidado',cantidad_pendientes:'Cantidad de pendientes' },
   abonos_pendientes: { monto: 'Monto', amount: 'Monto solicitado', estado: 'Estado', currencyCode: 'Moneda', entityCode: 'Banco', movementCode: 'Movimiento' },
   grupos_transacciones: { codigoOperacion: 'Operacion', cantidadTransacciones: 'Cantidad de transacciones', preferential: 'Tasa preferencial' },
-  turnos: { estado: 'Estado' },
+  turnos: { estado: 'Estado', evento: 'Evento', observaciones: 'Observaciones',changeNio:'Diferencia registrada NIO',incremento:'Diferencia agregada NIO' },
+  saldo_turno: {calculated:'Calculado',system:'Saldo Sistema',income:'Pagos (Teledolar)',expense:'Envios (Teledolar)'},
+  traspasos_turno: { evento: 'Evento', 'detalle.shiftId': 'Turno propuesto', 'detalle.receiverId': 'Receptor propuesto',
+    'detalle.source': 'Turno de origen', 'detalle.destination': 'Turno nuevo', 'detalle.sender': 'Cajero saliente', 'detalle.receiver': 'Cajero receptor', 'detalle.observations': 'Observaciones',
+    'detalle.state':'Estado del traspaso','detalle.sourceState':'Estado del turno saliente','detalle.mode':'Modalidad de traspaso',
+    'detalle.cashNio':'Efectivo entregado NIO','detalle.cashUsd':'Efectivo entregado USD','detalle.registeredNio':'Diferencia registrada NIO',
+    'detalle.differenceNio':'Diferencia pendiente NIO','detalle.purchaseDifferenceNio':'Diferencia por compras USD (NIO)' },
 };
 
 export function auditChanges(entity: string, before: unknown, after: unknown) {
@@ -66,6 +72,28 @@ export function auditChanges(entity: string, before: unknown, after: unknown) {
             after: newCount === null ? 'No registrado' : `${newCount} unidades` });
         }
       }
+    }
+  }
+  if(entity==='turnos'){
+    changes.push(...auditChanges('transacciones',{settlement:previous.settlement},{settlement:next.settlement}).changes
+      .map(change=>({...change,field:change.field.replace('Efectivo principal','Arqueo')})));
+    const members=(value:unknown)=>{
+      if(!Array.isArray(value)||value.length>100)return null;
+      const rows=new Map<string,Record<string,unknown>>();
+      for(const row of value){
+        if(!row||typeof row!=='object'||Array.isArray(row)||typeof row.id!=='string'
+          ||!/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(row.id)||rows.has(row.id))return null;
+        rows.set(row.id,row);
+      }
+      return rows;
+    };
+    const old=members(previous.balances),updated=members(next.balances);
+    for(const id of new Set([...(old?.keys()??[]),...(updated?.keys()??[])])){
+      const row=updated?.get(id)??old!.get(id)!;
+      const account=typeof row.account==='string'?row.account.slice(0,100):id;
+      const currency=row.currency==='USD'?'USD':row.currency==='NIO'?'NIO':'';
+      changes.push(...auditChanges('saldo_turno',old?.get(id),updated?.get(id)).changes
+        .map(change=>({...change,field:`${account} ${currency} (${id}) - ${change.field}`})));
     }
   }
   const catalogCollections: Record<string, [string, string, string][]> = {

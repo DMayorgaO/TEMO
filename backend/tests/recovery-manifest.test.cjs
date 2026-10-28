@@ -75,7 +75,7 @@ test('preview manifest detects changed view definitions and sequence state witho
     }
   });
 
-test('only two exact equivalent PostgreSQL CHECK representations are normalized, altered rules remain different', async () => {
+test('only allowlisted exact equivalent PostgreSQL CHECK representations are normalized, altered rules remain different', async () => {
   const { normalizeRecoveryDefinition } = await import('../../scripts/lib/recovery-manifest.mjs');
   const reparsed = { kind: 'constraint', name: 'notificaciones_usuarios.ck_notificaciones_tipo',
     definition: "CHECK (((tipo)::text = ANY (ARRAY[('PENDIENTE_PAGADO'::character varying)::text, ('TRANSFERENCIA_REGISTRADA'::character varying)::text])))" };
@@ -93,4 +93,25 @@ test('only two exact equivalent PostgreSQL CHECK representations are normalized,
     "CHECK (((estado)::text = ANY ((ARRAY['PENDIENTE'::character varying, 'ATENDIDA'::character varying, 'CANCELADA'::character varying])::text[])))");
   const changedState = { ...state, definition: state.definition.replace('CANCELADA', 'OTHER') };
   assert.deepEqual(normalizeRecoveryDefinition(changedState), changedState);
+});
+
+test('handover and receipt CHECK normalization preserves every allowed value and rejects drift', async () => {
+  const { normalizeRecoveryDefinition } = await import('../../scripts/lib/recovery-manifest.mjs');
+  for (const [name,column,values] of [
+    ['notificaciones_usuarios.ck_notificaciones_tipo','tipo',['PENDIENTE_PAGADO','TRANSFERENCIA_REGISTRADA','TRASPASO_TURNO']],
+    ['solicitudes_financieras.solicitudes_financieras_operacion_check','operacion',[
+      'CREAR_TRANSACCIONES','CREAR_TRANSFERENCIA','LIQUIDAR_PENDIENTE','LIQUIDAR_PENDIENTES','EDITAR_TRANSACCION','ANULAR_TRANSACCION','EDITAR_GRUPO']],
+    ['traspasos_turno.traspasos_turno_estado_check','estado',['PENDIENTE','ACEPTADO','RECHAZADO','CANCELADO','VENCIDO']],
+    ['traspasos_turno.traspasos_turno_modo_check','modo',['CON_CIERRE','EN_REVISION']],
+  ]) {
+    const entry={kind:'constraint',name,definition:`CHECK (((${column})::text = ANY (ARRAY[${values.map(v=>`('${v}'::character varying)::text`).join(', ')}])))`};
+    const expected=`CHECK (((${column})::text = ANY ((ARRAY[${values.map(v=>`'${v}'::character varying`).join(', ')}])::text[])))`;
+    assert.equal(normalizeRecoveryDefinition(entry).definition,expected);
+    for(const value of values){
+      const changed={...entry,definition:entry.definition.replace(`'${value}'`,`'INVALID'`)};
+      assert.deepEqual(normalizeRecoveryDefinition(changed),changed);
+    }
+    assert.deepEqual(normalizeRecoveryDefinition({...entry,name:'other.check'}),{...entry,name:'other.check'});
+    assert.deepEqual(normalizeRecoveryDefinition({...entry,definition:expected}),{...entry,definition:expected});
+  }
 });

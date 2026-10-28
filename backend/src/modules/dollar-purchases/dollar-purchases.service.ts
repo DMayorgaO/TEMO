@@ -2,6 +2,9 @@ import { ForbiddenException, Injectable } from '@nestjs/common';
 import { AuthenticatedUser } from '../auth/auth.service';
 import { DatabaseService } from '../database/database.service';
 import { calculatePurchaseLedger, PurchaseLedgerRow } from './purchase-ledger';
+import { QueryResult, QueryResultRow } from 'pg';
+
+type PurchaseDatabase = { query<T extends QueryResultRow = QueryResultRow>(text: string, params?: unknown[]): Promise<QueryResult<T>> };
 
 @Injectable()
 export class DollarPurchasesService {
@@ -15,17 +18,17 @@ export class DollarPurchasesService {
   }
 
   // Solo se invoca despues de autorizar el turno en ShiftsService.
-  async forAuthorizedShift(shiftId: string) {
-    const rows = await this.load('JEFA', null, shiftId);
+  async forAuthorizedShift(shiftId: string, database: PurchaseDatabase = this.db) {
+    const rows = await this.load('JEFA', null, shiftId, database);
     return rows.reduce<{ usd: number; differenceNio: number }>((total, row) => ({
       usd: total.usd + Number(row.monto_comprado_usd),
       differenceNio: total.differenceNio + Number(row.diferencia_nio),
     }), { usd: 0, differenceNio: 0 });
   }
 
-  private async load(role: string, userId: string | null, shiftId: string | null) {
+  private async load(role: string, userId: string | null, shiftId: string | null, database: PurchaseDatabase = this.db) {
     const scope = [role, userId, shiftId];
-    const transactions = await this.db.query<PurchaseLedgerRow>(`
+    const transactions = await database.query<PurchaseLedgerRow>(`
       select t.id_transaccion as database_id,t.id_grupo_transacciones as group_id,
         concat('TRA-',lpad(g.codigo_operacion::text,6,'0'),'-',lpad(t.orden_grupo::text,2,'0')) as id,
         t.fecha_transaccion,m.codigo as currency,tm.direccion as direction,tm.monto as amount,
@@ -66,7 +69,7 @@ export class DollarPurchasesService {
           where active_shift.id_turno=t.id_turno and active_shift.id_cajero=$2
             and active_shift.estado in ('ABIERTO','PENDIENTE_APROBACION'))))
       order by t.id_grupo_transacciones,t.orden_grupo,t.id_transaccion`, scope);
-    const pending = await this.db.query<ReturnType<typeof calculatePurchaseLedger>[number]>(`
+    const pending = await database.query<ReturnType<typeof calculatePurchaseLedger>[number]>(`
       with cash_payments as (
         select ap.*,t.id_grupo_transacciones,t.orden_grupo,t.id_sucursal,s.id_cajero,
           coalesce(ap.id_lote_liquidacion,ap.id_abono) as lot

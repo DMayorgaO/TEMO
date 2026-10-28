@@ -34,8 +34,14 @@ test('known parser failures are sanitized by type and status, never by raw messa
     assert.equal(forwarded.getStatus(), status);
     assert.ok(!JSON.stringify(forwarded.getResponse()).includes('secret-body'));
   }
+  for(const code of ['Z_DATA_ERROR','Z_BUF_ERROR']){
+    let forwarded;
+    sanitizeBodyParserError({code,status:400,message:'secret-body',body:'secret-body'}, {}, {}, error=>{forwarded=error;});
+    assert.equal(forwarded.getStatus(),400);
+    assert.ok(!JSON.stringify(forwarded.getResponse()).includes('secret-body'));
+  }
   for (const error of [null, new Error('internal'), { type: 'entity.parse.failed', status: 500 },
-    { type: '__proto__', status: 400 }, { status: 400 }]) {
+    { type: '__proto__', status: 400 }, { status: 400 },{code:'Z_DATA_ERROR',status:500}]) {
     sanitizeBodyParserError(error, {}, {}, e => assert.equal(e, error));
   }
 });
@@ -100,6 +106,13 @@ test('HTTP ingress rejects malformed and oversized bodies safely before controll
       // Within the existing body limit, parsing succeeds and authorization still denies anonymous access.
       assert.equal((await request('/auth/profile-photo', JSON.stringify({ photoDataUrl: 'x'.repeat(200000) }))).status, 401);
       assert.equal((await request('/transactions/batch', '{}')).status, 401);
+      const compressedTail=Buffer.concat([gzipSync('{}'),Buffer.from(marker)]);
+      const tailResponse=await request('/transactions/batch',compressedTail,{'Content-Encoding':'gzip'});
+      assert.equal(tailResponse.status,400,'A compressed tail must be rejected without crashing the isolated API');
+      assert.equal(tailResponse.headers.get('cache-control'),'no-store');
+      assert.ok(!(await tailResponse.text()).includes(marker));
+      await new Promise(resolve=>setTimeout(resolve,100));
+      assert.equal((await fetch(`${base}/health`)).status,200,'API stays alive after the decoder settles');
       const foreign = await request('/auth/profile-photo', '{', { Origin: 'https://untrusted.invalid' });
       assert.equal(foreign.status, 400);
       assert.equal(foreign.headers.get('access-control-allow-origin'), null);

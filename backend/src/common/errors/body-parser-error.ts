@@ -13,9 +13,10 @@ const statuses: Record<string, number> = {
 
 // Parser errors can contain the submitted body; never forward that content or message.
 export const sanitizeBodyParserError: ErrorRequestHandler = (error: unknown, _request, _response, next) => {
-  const parsed = error as { type?: unknown; status?: unknown } | null;
+  const parsed = error as { type?: unknown; status?: unknown; code?: unknown } | null;
+  const invalidCompression=parsed?.status===400&&(parsed.code==='Z_DATA_ERROR'||parsed.code==='Z_BUF_ERROR');
   const status = typeof parsed?.type === 'string' && Object.hasOwn(statuses, parsed.type)
-    ? statuses[parsed.type] : undefined;
+    ? statuses[parsed.type] : invalidCompression?400:undefined;
   if (status && parsed?.status === status) {
     next(new HttpException({ code: `GEN-REQ-${status}`, message: status === 413
       ? 'La informacion enviada excede el tamano permitido.'

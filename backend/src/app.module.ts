@@ -17,6 +17,7 @@ import { validateEnvironment } from './config/environment.validation';
     ConfigModule.forRoot({
       isGlobal: true,
       envFilePath: ['.env', '../.env'],
+      ignoreEnvFile: process.env.APP_ENV==='development'&&process.env.TEMO_ISOLATED_DEVELOPMENT==='1',
       validate: validateEnvironment,
     }),
     DatabaseModule,
