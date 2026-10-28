@@ -1,6 +1,18 @@
 # Seguridad TEMO: contexto y checklist
 
-Actualizado: 2026-10-27. Referencia: [informe de seguridad](INFORME_SEGURIDAD_TEMO_2026-10-06.md).
+Actualizado: 2026-10-27. Referencia local privada: INFORME_SEGURIDAD_TEMO_2026-10-06.md (no publicado).
+
+## Publicacion conjunta del 2026-10-27
+
+- [x] Usuario autoriza el paquete completo y confirma pausa de operaciones. Respaldo productivo nuevo restaurado y migraciones 044-054 ensayadas primero en copia aislada, sin alterar datos originales salvo centavos NIO previstos.
+- [x] Migraciones 044-054 aplicadas en produccion; 54 hashes coincidentes y preflight TLS/identidades/roles aprobado. API y web 45d1cf7 verificadas por health y assets JS/CSS exactos. Ver DESPLIEGUE_2026-10-27.md.
+- [x] Compilacion/lint, 242 pruebas backend, 33 frontend y siete recorridos de navegador local aprobados. Contencion de triggers en respaldo restaurado: 5 conexiones y 100 escrituras sin versiones perdidas; no certifica capacidad de Render.
+- [x] Usuario guarda NODE_VERSION=22.23.4 en ambos servicios; builds y arranque rechazan runtime anterior al parche o TLS deshabilitado. Confirmados CORS, CSP, anti-framing y rechazo de anonimos. Control de gastos y archivos privados excluidos de main.
+- [ ] Confirmacion funcional productiva por titulares: Administradora/cajeros, MFA/logout, recuperacion con codigo nuevo y operaciones habituales. No reemplazar esta comprobacion con pruebas interceptadas ni con logins suplantados.
+- [ ] Evidencia de runtime/CA desde Render y ampliacion de pruebas de capacidad en infraestructura representativa. Se conserva la matriz de seguridad restante abierta.
+- [ ] Seguimiento GHSA-gcqx-w48m-w2h4: deepmerge transitivo del compilador, sin parche publicado. npm audit completo reporta tres entradas bajas por esa dependencia; audit --omit=dev reporta cero. No aplicar downgrade incompatible del CLI.
+
+Las secciones inferiores conservan evidencia historica previa a esta publicacion; los estados de salida actuales se resumen arriba.
 
 Seguimiento 2026-10-07: correccion operativa autorizada desplegada en d45772c (liquidaciones USD con NIO, arqueo nominal y resumen vertical de notificaciones). Evidencia en CORRECCION_LIQUIDACIONES_USD_2026-10-07.md. API y web verificadas; 20 pruebas backend y 5 frontend aprobadas. No se completaron nuevos bloques de seguridad; esas mejoras continuan en desarrollo.
 
@@ -19,7 +31,7 @@ Ver AVISO_RENDER_NODE_EMUDHRA_2026-10-27.md. Este aviso requiere seguimiento ind
 - [x] Preparacion local: NODE_VERSION 22.23.4 en ambos servicios de render.yaml y respaldo .node-version. Chequeo de runtime sin credenciales ni red y 3 pruebas nuevas aprobadas. No es evidencia de parche productivo.
 - [x] Calificacion en Node 22.23.4 portable aislado, firma OpenJS y checksum verificados: build/lint, regresion y navegador correctos. Control HTTPS valido y ambos destinos de prueba rechazados con CERT_REVOKED. El Node global 24.11.1 sigue pendiente; no usarlo para publicar. Ver CIERRE_BLOQUE_SEGURIDAD_2026-10-27.md.
 - [ ] Confirmar servicios/commit Live/Node efectivos y overrides del dashboard; revisar flags TLS y CA adicionales. No se inspecciono la configuracion viva de Render.
-- [ ] Autorizar y aplicar parche de runtime, junto al candidato si supera QA o como hotfix independiente si se demora: reconstruir API y web con Node corregido y commit confirmado. No basta reiniciar ni cambiar archivos locales; registrar efectos sobre auto-deploy si se elige un commit especifico. Recordatorio del usuario: al terminar este bloque, antes de publicar.
+- [x] Parche incluido en publicacion conjunta autorizada: usuario guarda NODE_VERSION corregido, API y web se reconstruyen, guardias incorporadas y revision 45d1cf7 confirmada. La prueba negativa de certificados desde Render sigue separada y pendiente.
 - [ ] Comprobar almacen de CA renovado y CA personalizada de PostgreSQL sin deshabilitar validacion TLS. Probar rechazo de certificados desde el Node real de Render; error DNS/timeout no acredita rechazo TLS.
 - [ ] Smoke test posterior: health, PostgreSQL/TLS, login/MFA/logout, CORS y recuperacion por Resend con codigo nuevo. Confirmar builds exitosos y version efectiva antes de cerrar el aviso.
 - [ ] Revisar actividad anomala; si hay indicios, respuesta a incidentes y rotacion controlada segun alcance. No cambiar claves de MFA indiscriminadamente. Revisar scripts auxiliares antiguos que omiten validacion de certificado antes de reutilizarlos.
