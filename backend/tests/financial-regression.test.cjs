@@ -51,8 +51,8 @@ test('financial regression in local preview with rollback', { skip: !process.env
     const admin = { id: adminRow.id, roleCode: 'JEFA', sessionVersion: adminRow.version_sesion };
     const userRow = (await client.query(`insert into temo.usuarios (id_rol,nombres,apellidos,usuario,contrasena_hash,estado,debe_cambiar_contrasena)
       select id_rol,'Security','Regression',$1,'not-a-login-credential','ACTIVO',false from temo.roles where codigo='CAJERO'
-      returning id_usuario as id`, [username])).rows[0];
-    const cashier = { id: userRow.id, roleCode: 'CAJERO' };
+      returning id_usuario as id,version_sesion`, [username])).rows[0];
+    const cashier = { id: userRow.id, roleCode: 'CAJERO', sessionVersion: userRow.version_sesion };
     const branch = (await client.query(`select s.id_sucursal as id,s.nombre from temo.sucursales s
       join temo.cuentas_sucursales cs using(id_sucursal) join temo.cuentas_bancarias c using(id_cuenta)
       join temo.entidades_bancarias e using(id_entidad) join temo.monedas m using(id_moneda)
@@ -226,8 +226,8 @@ test('financial regression in local preview with rollback', { skip: !process.env
       const createCoworker = async (branchId, label) => {
         const login = `${username}_${label}`;
         const user = (await client.query(`insert into temo.usuarios(id_rol,nombres,apellidos,usuario,contrasena_hash,estado,debe_cambiar_contrasena)
-          select id_rol,'Scope',$1,$2,'not-a-login-credential','ACTIVO',false from temo.roles where codigo='CAJERO' returning id_usuario as id`, [label, login])).rows[0];
-        const identity = { id: user.id, roleCode: 'CAJERO' };
+          select id_rol,'Scope',$1,$2,'not-a-login-credential','ACTIVO',false from temo.roles where codigo='CAJERO' returning id_usuario as id,version_sesion`, [label, login])).rows[0];
+        const identity = { id: user.id, roleCode: 'CAJERO', sessionVersion: user.version_sesion };
         await client.query('insert into temo.usuarios_sucursales(id_usuario,id_sucursal) values($1,$2)', [identity.id, branchId]);
         const prepared = await shifts.create(openShiftSchema.parse({ branchId, branch: branch.nombre, register: `Scope ${label}`, cashier: login, counts: counts(1000), balances: [], prepared: true }), admin);
         await shifts.openPrepared(prepared.database_id ?? prepared.id_turno, identity);

@@ -5,12 +5,12 @@ const cashLineSchema = z.object({
   piles25: z.number().int().nonnegative().max(1000000),
   // Los sueltos admiten conteos completos para monedas y cajeros que no usan montones de 25.
   loose: z.number().int().nonnegative().max(1000000),
-});
+}).strict();
 
 export const cashCountsSchema = z.object({
   NIO: z.array(cashLineSchema).max(30),
   USD: z.array(cashLineSchema).max(30),
-});
+}).strict();
 
 const bankBalanceSchema = z.object({
   account: z.string().trim().min(1).max(80),
@@ -18,16 +18,16 @@ const bankBalanceSchema = z.object({
   amount: z.number().min(-9999999999.9999).max(9999999999.9999),
   income: z.number().min(0).max(9999999999.9999).optional(),
   expense: z.number().min(0).max(9999999999.9999).optional(),
-});
+}).strict();
 
 export const saveBalancesSchema = z.object({
   balances: z.array(bankBalanceSchema).max(100),
-});
+}).strict();
 
 export const saveCashCountSchema = z.object({
   counts: cashCountsSchema,
   changeNio: z.number().min(-9999999999.9999).max(9999999999.9999),
-});
+}).strict();
 
 export const openShiftSchema = z.object({
   branchId: z.string().uuid().optional(),
@@ -38,7 +38,7 @@ export const openShiftSchema = z.object({
   counts: cashCountsSchema,
   balances: z.array(bankBalanceSchema).max(100),
   prepared: z.boolean().optional().default(false),
-});
+}).strict();
 
 export const updateShiftSchema = openShiftSchema;
 export type UpdateShiftInput = z.infer<typeof updateShiftSchema>;
@@ -49,21 +49,21 @@ export const closeShiftSchema = z.object({
   balances: z.array(bankBalanceSchema).max(100),
   changeNio: z.number().min(-9999999999.9999).max(9999999999.9999),
   observations: z.string().trim().max(2000).default(''),
-});
+}).strict();
 
 export const updateClosedShiftSchema = z.object({
   opening: z.object({
     counts: cashCountsSchema,
     balances: z.array(bankBalanceSchema).max(100),
     notes: z.string().trim().max(2000).default(''),
-  }),
+  }).strict(),
   closing: z.object({
     counts: cashCountsSchema,
     balances: z.array(bankBalanceSchema).max(100),
     notes: z.string().trim().max(2000).default(''),
     changeNio: z.number().min(-9999999999.9999).max(9999999999.9999),
-  }),
-});
+  }).strict(),
+}).strict();
 
 export type CashCountsInput = z.infer<typeof cashCountsSchema>;
 export type SaveCashCountInput = z.infer<typeof saveCashCountSchema>;

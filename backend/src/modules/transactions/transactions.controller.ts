@@ -24,6 +24,7 @@ import {
 import { TransactionsService } from './transactions.service';
 import { authorizedExport, parseExportSelection, requireExportRole } from '../../common/export-selection';
 import { RecordIdPipe } from '../../common/record-id.pipe';
+import { parseTransactionQuery, requireTransactionReader } from '../../common/read-query';
 
 @Controller('transactions')
 @UsePipes(new RecordIdPipe())
@@ -71,9 +72,12 @@ export class TransactionsController {
     @Query('offset') offset = '0',
     @Req() request: { user: AuthenticatedUser },
     selectedIds?: string[],
+    @Query() query?: unknown,
   ) {
-    const safeLimit = selectedIds ? Math.max(1, selectedIds.length) : Math.min(Math.max(Number.parseInt(limit, 10) || 50, 1), 200);
-    const safeOffset = Math.max(Number.parseInt(offset, 10) || 0, 0);
+    requireTransactionReader(request.user);
+    const paging = parseTransactionQuery(query ?? {limit,offset});
+    const safeLimit = selectedIds ? Math.max(1, selectedIds.length) : paging.limit;
+    const safeOffset = paging.offset;
     const result = await this.db.query(
       `select
          t.id_transaccion as database_id,
@@ -200,21 +204,25 @@ export class TransactionsController {
     @Param('id') id: string,
     @Req() request: { user: AuthenticatedUser },
   ) {
+    requireTransactionReader(request.user);
     return this.transactions.detail(id, request.user);
   }
 
   @Get(':id/group-detail')
   groupDetail(@Param('id') id: string, @Req() request: { user: AuthenticatedUser }) {
+    requireTransactionReader(request.user);
     return this.transactions.groupDetail(id, request.user);
   }
 
   @Get('pending')
   pending(@Req() request: { user: AuthenticatedUser }) {
+    requireTransactionReader(request.user);
     return this.transactions.listPending(request.user);
   }
 
   @Get('pending/:id/payments')
   pendingPayments(@Param('id') id: string, @Req() request: { user: AuthenticatedUser }) {
+    requireTransactionReader(request.user);
     return this.transactions.pendingPaymentDetail(id, request.user);
   }
 

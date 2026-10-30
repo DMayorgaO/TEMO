@@ -2,18 +2,20 @@ import { BadRequestException, ConflictException, ForbiddenException } from '@nes
 import { createHash } from 'node:crypto';
 import { PoolClient } from 'pg';
 import { AuthenticatedUser } from '../modules/auth/auth.service';
+import { requireSessionVersion } from './session-version';
 
 export async function validateFinancialActor(client: PoolClient, actor: AuthenticatedUser, roles: string[]) {
   if(!roles.includes(actor.roleCode)||actor.mustChangePassword)throw new ForbiddenException('Su perfil no permite esta operacion financiera.');
+  const version = requireSessionVersion(actor.sessionVersion);
   const current=await client.query(`select 1 from temo.usuarios u join temo.roles r using(id_rol)
     where u.id_usuario=$1 and u.estado='ACTIVO' and r.estado='ACTIVO' and r.codigo=$2
-      and not u.debe_cambiar_contrasena and ($3::integer is null or u.version_sesion=$3)
-    for share of u,r`,[actor.id,actor.roleCode,actor.sessionVersion??null]);
+      and not u.debe_cambiar_contrasena and u.version_sesion=$3
+    for share of u,r`,[actor.id,actor.roleCode,version]);
   if(!current.rowCount)throw new ForbiddenException('La sesion o los permisos cambiaron. Inicie sesion nuevamente.');
 }
 
 export async function financialRequest<T>(client: PoolClient,
-  input: {actor?:AuthenticatedUser;operation:'CREAR_TRANSACCIONES'|'CREAR_TRANSFERENCIA'|'LIQUIDAR_PENDIENTE'|'LIQUIDAR_PENDIENTES'|'EDITAR_TRANSACCION'|'ANULAR_TRANSACCION'|'EDITAR_GRUPO';requestId?:string;payload:unknown;roles:string[]},
+  input: {actor?:AuthenticatedUser;operation:'CREAR_TRANSACCIONES'|'CREAR_TRANSFERENCIA'|'LIQUIDAR_PENDIENTE'|'LIQUIDAR_PENDIENTES'|'EDITAR_TRANSACCION'|'ANULAR_TRANSACCION'|'EDITAR_GRUPO'|'EDITAR_TRANSFERENCIA'|'ANULAR_TRANSFERENCIA';requestId?:string;payload:unknown;roles:string[]},
   work:()=>Promise<T>, authorizeReplay:(result:T)=>Promise<void>) {
   if(input.actor)await validateFinancialActor(client,input.actor,input.roles);
   if(!input.requestId)return work();

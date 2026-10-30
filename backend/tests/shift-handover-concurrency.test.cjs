@@ -13,7 +13,8 @@ test('real concurrent connections reserve receiver and accept only once in isola
   let branch;const users=[];
   try{
     const admin=(await db.query(`select u.id_usuario as id,u.version_sesion as "sessionVersion",'JEFA' as "roleCode"
-      from temo.usuarios u join temo.roles r using(id_rol) where r.codigo='JEFA' and u.estado='ACTIVO' limit 1`)).rows[0];
+      from temo.usuarios u join temo.roles r using(id_rol) where r.codigo='JEFA' and r.estado='ACTIVO'
+        and u.estado='ACTIVO' and not u.debe_cambiar_contrasena limit 1`)).rows[0];
     branch=(await db.query(`insert into temo.sucursales(codigo,nombre,estado) values($1,$1,'ACTIVO') returning id_sucursal`,[prefix])).rows[0].id_sucursal;
     for(let i=0;i<3;i++){
       const user=(await db.query(`insert into temo.usuarios(id_rol,nombres,apellidos,usuario,contrasena_hash,estado,debe_cambiar_contrasena)

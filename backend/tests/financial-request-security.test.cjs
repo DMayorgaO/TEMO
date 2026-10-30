@@ -51,6 +51,23 @@ test('financial receipts and permission matrix: real local services, every chang
     const summary=owner=>shifts.detail(owner.shift.database_id,owner.actor);
     let original;
     const first=payload(a);
+    await t.test('shift creation and opening edits reject stale administrators inside the transaction',async()=>{
+      const input={branchId:branch.id,branch:branch.nombre,register:'Never created',cashier:a.actor.username,counts:cash(1000),balances:[],notes:'',prepared:true};
+      const before=await summary(a);
+      for(const sessionVersion of [undefined,null,'1',admin.sessionVersion+1]){
+        const stale={...admin,sessionVersion};
+        await assert.rejects(shifts.create(input,stale),e=>e.getStatus()===403);
+        await assert.rejects(shifts.update(a.shift.database_id,input,stale),e=>e.getStatus()===403);
+      }
+      await c.query('savepoint stale_shift_admin');
+      try{
+        await c.query('update temo.usuarios set version_sesion=version_sesion+1 where id_usuario=$1',[admin.id]);
+        await assert.rejects(shifts.create(input,admin),e=>e.getStatus()===403);
+        await assert.rejects(shifts.update(a.shift.database_id,input,admin),e=>e.getStatus()===403);
+      }finally{await c.query('rollback to savepoint stale_shift_admin');}
+      assert.deepEqual((await summary(a)).cashCounts,before.cashCounts);
+      assert.deepEqual((await summary(a)).expectedCash,before.expectedCash);
+    });
     await t.test('same request returns original IDs and response; one cash effect, ledger and creation audit',async()=>{
       const before=await summary(a);
       original=await controller.createBatch({...first,userId:b.actor.id},{user:a.actor,headers:{}});
@@ -60,6 +77,22 @@ test('financial receipts and permission matrix: real local services, every chang
       assert.equal((await c.query(`select count(*)::int as n from temo.solicitudes_financieras where id_usuario=$1 and id_solicitud=$2`,[a.actor.id,first.requestId])).rows[0].n,1);
       assert.equal((await c.query(`select count(*)::int as n from temo.bitacora where tabla='grupos_transacciones' and id_registro=$1 and accion='CREAR'`,[original.groupId])).rows[0].n,1);
       assert.equal((await c.query(`select id_usuario_creacion from temo.grupos_transacciones where id_grupo_transacciones=$1`,[original.groupId])).rows[0].id_usuario_creacion,a.actor.id);
+    });
+    await t.test('missing or malformed sessions cannot change cash or retrieve a stored receipt',async()=>{
+      const before=await summary(a);
+      const receipts=async()=>(await c.query('select count(*)::int n from temo.solicitudes_financieras where id_usuario=$1',[a.actor.id])).rows[0].n;
+      const beforeReceipts=await receipts();
+      for(const sessionVersion of [undefined,null,'1',-1,0.5,2147483648]){
+        const actor={...a.actor,sessionVersion};
+        await assert.rejects(transactions.createBatch(first,{actor}),e=>e.getStatus()===403);
+        await assert.rejects(transactions.createBatch(payload(a),{actor}),e=>e.getStatus()===403);
+        await assert.rejects(shifts.saveCashCount(a.shift.database_id,{counts:cash(2000),changeNio:0},actor),e=>e.getStatus()===403);
+        await assert.rejects(shifts.saveBalances(a.shift.database_id,[],actor),e=>e.getStatus()===403);
+        await assert.rejects(handovers.preview(a.shift.database_id,actor),e=>e.getStatus()===403);
+      }
+      assert.equal(await receipts(),beforeReceipts);
+      assert.deepEqual((await summary(a)).cashCounts,before.cashCounts);
+      assert.deepEqual((await summary(a)).expectedCash,before.expectedCash);
     });
     await t.test('same key with changed data rejected; distinct key and distinct owner remain legitimate',async()=>{
       await assert.rejects(transactions.createBatch({...first,transactions:[{...first.transactions[0],amount:20}]},{actor:a.actor}),e=>e.getStatus()===409);

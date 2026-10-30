@@ -1,6 +1,100 @@
 # Seguridad TEMO: contexto y checklist
 
-Actualizado: 2026-10-27. Referencia local privada: INFORME_SEGURIDAD_TEMO_2026-10-06.md (no publicado).
+Actualizado: 2026-10-30. Referencia local privada: INFORME_SEGURIDAD_TEMO_2026-10-06.md (no publicado).
+
+## Publicacion autorizada: 2026-10-30
+
+- [x] Usuario autoriza y confirma pausa. Respaldo productivo nuevo restaurado con manifiesto de datos/estructura/secuencias coincidente; 055 ensayada sin cambios de datos anteriores y triggers comprobados. Ver DESPLIEGUE_2026-10-30.md.
+- [x] 055 aplicada en produccion; preflight posterior aprobado con 55 hashes coincidentes, TLS e identidades/roles/indices correctos. Archivos internos de gastos excluidos.
+- [ ] Publicacion y comprobacion API/web, revision efectiva/configuracion Render y QA final por titulares. No reabrir operaciones hasta confirmar disponibilidad tecnica.
+
+## Identidad en operaciones de caja: 2026-10-30 (solo desarrollo)
+
+- [x] Version obligatoria sin coercion en actor financiero y Directorio; mismo validador en administracion/exportaciones. Los nueve tipos de recibo rechazan identidad invalida antes de ejecutar o devolver una operacion anterior.
+- [x] Creacion/apertura preparada/edicion de apertura/correccion historica de cierre revalidan identidad dentro de la escritura. Traspasos invalidos se rechazan antes de bloquear; actor actual sigue comprobado en la transaccion. Ver IDENTIDAD_OPERACIONES_2026-10-30.md.
+- [x] 316 pruebas backend, 34 frontend y doce recorridos locales aprobados; build/lint correctos con Node 22.23.4. Veinticuatro casos de operaciones/recibos y Directorio repetidos bajo rol SQL restringido, sin omisiones ni fallos.
+- [ ] QA manual del paquete, matriz granular restante y autorizacion/pausa/respaldo/055/Render antes de publicar. Sin cambios productivos ni alteracion del control local de gastos.
+
+## Sesion administrativa en catalogos: 2026-10-30 (solo desarrollo)
+
+- [x] Version exacta obligatoria y rechazo de cambio obligatorio de contrasena en las nueve entradas de escritura administrativa. Identidad/rol activos comprobados y bloqueados hasta terminar guardado/auditoria; sin ampliar permisos ni cambiar reglas financieras.
+- [x] Once pruebas nuevas: matriz de revocacion/estado/rol, rollback de auditoria, autorrevocacion y carreras reales en ambos ordenes. Ocho casos repetidos bajo rol SQL restringido. Ver SESION_CATALOGOS_2026-10-30.md.
+- [x] Regresion acumulada: 307 backend, 34 frontend, doce recorridos de navegador, build/lint correctos con Node 22.23.4. Candidato actualizado, sin commit/push ni despliegue.
+- [ ] QA manual administrativo y financiero acumulado, medicion de esperas y puertas de publicacion del candidato. Produccion sin cambios; migracion 055 sigue pendiente y archivos internos de gastos excluidos.
+
+## Captura de accesos y consultas: 2026-10-29 (solo desarrollo)
+
+- [x] Agrupacion solo tras insercion confirmada, reserva independiente de eventos en vuelo, reintento permitido tras fallo y cache acotada sin descartar todos los eventos nuevos al llenarse. Auditoria financiera obligatoria sin cambios.
+- [x] Saturacion/fallos medidos y advertencias genericas limitadas; rutas de plantilla/UUID/IP validados sin URLs crudas ni errores privados. Diagnostico agregado exclusivo de Administrador y aviso en Auditoria si se observaron fallos u omisiones.
+- [x] Build/lint, 296 pruebas backend, 34 frontend y doce recorridos de navegador aprobados. Diagnostico HTTP con permisos y prioridad de ruta comprobados; visual escritorio/movil. Ver AUDITORIA_CAPTURA_2026-10-29.md.
+- [ ] QA manual del aviso y del paquete acumulado antes de publicar. Captura auxiliar agrupada/best effort; centralizacion, retencion, alertas externas y recuperacion de eventos siguen pendientes. Contadores solo del proceso actual y se reinician con la API.
+
+## Consultas y concurrencia: 2026-10-29 (solo desarrollo)
+
+- [x] Paginacion de Transacciones y fechas Panel/PNG con contratos estrictos; rechazo de repetidos/arrays/campos de alcance ajenos antes de SQL, sin coercion parcial ni ano cero. Limites/defaults validos y exportacion por seleccion conservados.
+- [x] Cinco entradas de lectura de Transacciones/pendientes restringidas explicitamente a Administrador/Cajero, manteniendo el alcance por registro de los servicios. No equivale a cerrar toda la matriz granular.
+- [x] Contencion exclusiva de reportes GET pesados: 4 simultaneos por usuario, 16 por proceso, 429/Retry-After y liberacion al completar/fallar/cancelar; sin cupos diarios ni bloqueo de rutas financieras. Pruebas unitarias y HTTP aprobadas. Ver SEGURIDAD_CONSULTAS_2026-10-29.md.
+- [x] Regresion acumulada: 288 backend, 34 frontend, once recorridos de navegador y build/lint correctos. Candidato actualizado sin migraciones adicionales ni cambios productivos.
+- [ ] QA manual con uso habitual/varias pestanas y medicion de 429/p95/pool en infraestructura representativa. Control local al proceso, no distribuido. Paginacion/filtros/totales del plan de optimizacion siguen pendientes.
+
+## Frontera financiera y candidato: 2026-10-29 (solo desarrollo)
+
+- [x] Contratos estrictos en aperturas, ediciones/cierres y correccion historica de turnos, arqueos, saldos y transferencias; tambien bloques anidados. Rechazo antes de servicios sin modificar calculos ni permisos. Matriz HTTP de 12 rutas y regresion de entradas validas/centavos/negativos aprobadas.
+- [x] Paquete acumulado: build/lint, 281 backend, 34 frontend y once recorridos locales aprobados. Preflight de preview y respaldo/restauracion con datos/estructura/secuencias coincidentes. Ver CANDIDATO_PRODUCCION_2026-10-29.md.
+- [x] 39 pruebas criticas de Directorio/exportaciones/recibos/transferencias repetidas bajo rol SQL restringido, sin fallos ni omitidas.
+- [x] Titular confirma 0.5c-512mb; Blueprint local actualizado y parseado. No se cambia el plan remoto desde esta tarea. Control de gastos e informe privado excluidos localmente; escaneo de candidatos sin valores privados coincidentes.
+- [x] Auditoria de dependencias: runtime cero; tres entradas bajas de compilacion pendientes, sin downgrade forzado.
+- [ ] QA manual del paquete, autorizacion expresa y pausa de escrituras antes de nuevo respaldo/ensayo/preflight productivo. Migracion 055 y publicacion API/web compatibles todavia pendientes; no se ha hecho commit/push/despliegue.
+
+## Contrato estricto de Directorio: 2026-10-29 (solo desarrollo)
+
+- [x] Altas/ediciones rechazan campos no previstos, tambien dentro de identificadores y cedulas. Version de edicion solo admitida/requerida en PUT. Se conservan campos normales, valores por defecto y requisito de al menos un contacto.
+- [x] 14 pruebas focalizadas aprobadas (4 nuevas de contrato y 10 de seguridad/version/auditoria; estas ultimas bajo rol SQL restringido), build/lint backend correctos. Entradas invalidas devuelven 400 antes de invocar el servicio.
+- [ ] QA manual de alta/edicion/anulacion en el paquete acumulado antes de publicar. Sin DDL, cambios visuales ni despliegue por este ajuste. La validacion anterior ya descartaba campos desconocidos; este bloque los rechaza explicitamente, no acredita una explotacion previa.
+
+## Exportaciones y sesion vigente: 2026-10-29 (solo desarrollo)
+
+- [x] Identidad/rol activo, version exacta y cambio obligatorio comprobados junto con auditoria en una sentencia SQL antes de devolver exportaciones autorizadas de catalogos, Transacciones, Turnos y PNG. Denegacion sin dataset ni evento de exito si cambia la sesion.
+- [x] Auditoria declarativa usa el mismo control; agrupacion solo tras escritura correcta. Fallo no suprime reintento y mapa lleno no descarta auditorias nuevas. No es recibo de descarga ni deduplicacion distribuida.
+- [x] Pruebas focalizadas de acceso/revocacion, auditoria, reintento, saturacion y privacidad aprobadas; casos nuevos de identidad tambien bajo rol SQL restringido. Ver SEGURIDAD_EXPORTACIONES_SESION_2026-10-29.md.
+- [x] Regresion de 272 pruebas backend y 34 frontend aprobada; build/lint correctos y 18 focalizadas de exportacion sin fallos. No se agrega migracion SQL por este bloque.
+- [ ] QA manual Excel/PDF/PNG y publicacion conjunta autorizada. Permisos granulares, alertas, retencion y consistencia de conjuntos durante cambios de alcance siguen pendientes; sin cambios productivos por este bloque.
+
+## Version de Directorio y plan de optimizacion: 2026-10-29 (solo desarrollo)
+
+- [x] Version de contenido obligatoria para editar/anular destinatarios; comparacion bajo bloqueo antes de reemplazar datos relacionados. Conflicto 409 sin escritura ni auditoria de exito; borrador conservado y revision explicita requerida. Ver VERSION_DIRECTORIO_2026-10-29.md.
+- [x] Build/lint, 264 pruebas backend, 34 frontend y 10 de Directorio bajo rol SQL restringido aprobadas. Dos sesiones sinteticas de navegador comprueban rechazo del formulario antiguo y conservacion de borrador.
+- [ ] QA manual de dos ventanas y anulacion; coordinar clientes antiguos al publicar API/web. Recibos idempotentes de Directorio siguen pendientes.
+- [x] Plan de optimizacion por etapas documentado en PLAN_OPTIMIZACION_TEMO_2026-10-29.md: medicion, paginacion/filtros/totales/exportaciones en servidor, cargas/consultas por turno, indices medidos y validacion antes/despues.
+- [x] Titular confirma cambio de Compute Plan en Render tras mostrar Free. No es evidencia de tipo/recursos efectivos ni prueba de rendimiento posterior; no se supusieron gastos ni se cambiaron planes desde el agente.
+- [ ] Linea base autenticada despues del cambio: p50/p95, peticiones/bytes, CPU/memoria, pool, regiones y errores; sin payloads sensibles ni carga contra produccion.
+- [ ] Transacciones: sustituir descarga completa en refrescos por pagina/consulta filtrada en servidor, totales completos y exportaciones equivalentes autorizadas; probar historiales grandes y respuestas fuera de orden.
+- [ ] Reducir detalle/sondeo de turnos y carga inicial de catalogos, medir SQL e indices en copia aislada, y calificar 1/5 usuarios con datos sinteticos antes de autorizar publicacion. No relajar controles financieros para acelerar.
+
+## Revision de rendimiento: 2026-10-29 (solo desarrollo)
+
+- [x] Listado de transacciones independiente del detalle de turno, sin refresco superpuesto a la carga inicial; Arqueo sin ceros provisionales ni doble detalle inicial administrativo. Traspaso paraleliza solo resumen/candidatos despues de preparar datos.
+- [x] Pruebas con respuestas retenidas comprueban carga honesta y listado independiente. Build/lint, 34 unitarias frontend y seis recorridos locales aprobados. Ver REVISION_CARGA_2026-10-29.md.
+- [ ] Confirmar Compute Plan efectivo despues del cambio comunicado y medir tiempos por ruta/SQL, regiones y recursos. La lectura de health intermitente no acredita causa ni rendimiento de operaciones autenticadas.
+- [ ] Paginacion, filtros y totales en servidor para Transacciones y exportaciones completas; no reducir arbitrariamente el historial visible ni cachear autorizaciones.
+
+## Directorio y filtros monetarios: 2026-10-29 (solo desarrollo)
+
+- [x] Directorio revalida usuario, rol, cambio obligatorio y version de sesion dentro de la transaccion; edicion serializada por destinatario. No amplia permisos de lectura/escritura.
+- [x] Auditoria atomica de alta/edicion/desactivacion, con conteos y banderas sin duplicar numeros de cuentas, cedulas ni notas. Fallos revierten padre e hijos; visor con etiquetas permitidas.
+- [x] Filtros C$ / $ en consultas monetarias y bloques mixtos, sin conversion ni escritura financiera. Pendientes limpia seleccion al cambiar moneda. Panel permite mes completo y cantidades en todos los dias.
+- [x] Build/lint, 261 pruebas backend, 34 frontend, 7 de Directorio bajo rol restringido y nueve recorridos de navegador aprobados. Ver FILTROS_MONEDA_DIRECTORIO_2026-10-29.md.
+- [ ] QA manual de filtros/exportaciones, grafica y cambios del Directorio. Version de contenido incorporada en el bloque siguiente; recibos de Directorio siguen pendientes.
+- [ ] Preparar publicacion autorizada junto con el bloque de transferencias/055. Sin cambios productivos por esta entrega; Control de gastos permanece local.
+
+## Correcciones de transferencias: 2026-10-29 (solo desarrollo)
+
+- [x] Recibos atomicos para editar/anular transferencias; reenvio no duplica movimientos ni auditoria y contenido/registro distinto con la misma referencia se rechaza. Actor y alcance actual revalidados tambien al confirmar un recibo.
+- [x] Version exacta del registro/denominaciones contra ventanas antiguas; detalle coherente en una sentencia. Concurrencia, turno original, bloqueo por solicitud y turnos cerrados comprobados. Migracion 055 aplicada solo a preview.
+- [x] Auditoria obligatoria y permitida explicitamente de altas/ediciones/anulaciones; errores de auditoria/recibo revierten fondos, arqueos y version. Motivo de anulacion en ventana TEMO, borradores/referencias conservados y doble envio protegido.
+- [x] Build/lint, 254 pruebas backend, 33 frontend, 12 focalizadas bajo rol SQL restringido y ocho recorridos de navegador local aprobados. Restauracion de preview con datos/estructura/secuencias coincidentes. Ver SEGURIDAD_TRANSFERENCIAS_2026-10-29.md.
+- [ ] QA manual de transferencias con dos ventanas y los tres perfiles; revisar tambien el saldo fijo de cliente en encabezado. Los contratos opcionales de clientes anteriores no obtienen garantia de recibo/versionado si no los envian.
+- [ ] Autorizacion y preparacion para publicar el paquete con 055. Continuar matriz de rutas, aperturas/cierres, retencion, infraestructura y prueba de CA desde Render pendientes; produccion sin cambios por este bloque.
 
 ## Publicacion conjunta del 2026-10-27
 

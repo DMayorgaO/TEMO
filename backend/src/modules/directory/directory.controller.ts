@@ -2,7 +2,7 @@ import { BadRequestException, Body, Controller, Get, Param, Post, Put, Req, UseP
 import { RecordIdPipe } from '../../common/record-id.pipe';
 import { AuthenticatedUser } from '../auth/auth.service';
 import { DirectoryService } from './directory.service';
-import { directoryEntrySchema } from './directory.schema';
+import { directoryEntrySchema, directoryUpdateSchema } from './directory.schema';
 
 @Controller('directory')
 @UsePipes(new RecordIdPipe())
@@ -30,7 +30,7 @@ export class DirectoryController {
 
   @Put(':id')
   update(@Param('id') id: string, @Body() body: unknown, @Req() request: { user: AuthenticatedUser }) {
-    const parsed = directoryEntrySchema.safeParse(body);
+    const parsed = directoryUpdateSchema.safeParse(body);
     if (!parsed.success) {
       throw new BadRequestException({ message: 'Los datos del directorio no son validos.', errors: parsed.error.flatten() });
     }

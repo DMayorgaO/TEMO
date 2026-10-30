@@ -9,6 +9,7 @@ import { isIP } from 'node:net';
 import { AuthenticatedUser } from '../auth/auth.service';
 import { DatabaseService } from '../database/database.service';
 import { validatePasswordForStorage } from '../../common/password-policy';
+import { requireSessionVersion } from '../../common/session-version';
 
 type CatalogPayload = Record<string, unknown>;
 
@@ -252,11 +253,16 @@ export class CatalogsService {
   }
 
   private async lockIdentityAdministration(client: PoolClient, actor: AuthenticatedUser) {
+    const version = requireSessionVersion(actor.sessionVersion);
+    if (actor.mustChangePassword) {
+      throw new ForbiddenException('Su acceso administrativo cambio. Inicie sesion nuevamente.');
+    }
     // Serialize identity changes before checking the actor and last-administrator invariant.
     await client.query('select pg_advisory_xact_lock(741260810)');
     const current = await client.query(`select 1 from temo.usuarios u join temo.roles r using(id_rol)
       where u.id_usuario=$1 and u.estado='ACTIVO' and r.codigo='JEFA' and r.estado='ACTIVO'
-        and ($2::integer is null or u.version_sesion=$2)`, [actor.id, actor.sessionVersion ?? null]);
+        and not u.debe_cambiar_contrasena and u.version_sesion=$2
+      for share of u,r`, [actor.id, version]);
     if (!current.rowCount) throw new ForbiddenException('Su acceso administrativo cambio. Inicie sesion nuevamente.');
   }
 
@@ -757,7 +763,7 @@ export class CatalogsService {
   }
 
   private requireBoss(user: AuthenticatedUser) {
-    if (user.roleCode !== 'JEFA') {
+    if (user.roleCode !== 'JEFA' || user.mustChangePassword) {
       throw new ForbiddenException('Solo el Administrador puede modificar catalogos administrativos.');
     }
   }

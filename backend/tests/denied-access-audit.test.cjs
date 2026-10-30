@@ -7,7 +7,7 @@ const id = '00000000-0000-4000-8000-000000000001';
 
 test('denial audit binds parameters, normalizes IP and deduplicates repeated operations', async () => {
   const calls = [];
-  const audit = new DeniedAccessAudit({ query: async (...args) => calls.push(args) });
+  const audit = new DeniedAccessAudit({ query: async (...args) => {calls.push(args);return {rowCount:1};} });
   await audit.record(id, 'GET', '/api/catalogs/usuarios', '::ffff:127.0.0.1');
   await audit.record(id, 'GET', '/api/catalogs/usuarios', '127.0.0.1');
   assert.equal(calls.length, 1);
@@ -21,7 +21,7 @@ test('denial audit binds parameters, normalizes IP and deduplicates repeated ope
 test('filter records authenticated 403 without body, query, token or exception details', async () => {
   const calls = [];
   const logs = [];
-  const filter = new AppExceptionFilter({ query: async (...args) => calls.push(args) });
+  const filter = new AppExceptionFilter({ query: async (...args) => {calls.push(args);return {rowCount:1};} });
   filter.logger = { error: value => logs.push(value), warn: value => logs.push(value) };
   let status;
   const response = { status: value => { status = value; return response; }, json: () => {} };
@@ -42,6 +42,7 @@ test('filter records authenticated 403 without body, query, token or exception d
 test('audit persistence failure never changes denial response or logs database secrets', async () => {
   const filter = new AppExceptionFilter({ query: async () => { throw new Error('database-password'); } });
   const logs = [];
+  filter.deniedAudit.logger = {warn:value=>logs.push(value)};
   filter.logger = { error: value => logs.push(value), warn: value => logs.push(value) };
   let status;
   const response = { status: value => { status = value; return response; }, json: () => {} };
@@ -55,8 +56,8 @@ test('audit persistence failure never changes denial response or logs database s
 test('denial recorder bounds concurrent writes', async () => {
   const releases = [];
   const audit = new DeniedAccessAudit({ query: () => new Promise(resolve => releases.push(resolve)) });
-  const writes = Array.from({ length: 11 }, (_, index) => audit.record(id, 'GET', `/route-${index}`, ''));
+  const writes = Array.from({ length: 11 }, (_, index) => audit.record(id, 'GET', `/api/route-${index}`, ''));
   assert.equal(releases.length, 10);
-  releases.forEach(resolve => resolve());
+  releases.forEach(resolve => resolve({rowCount:1}));
   await Promise.all(writes);
 });

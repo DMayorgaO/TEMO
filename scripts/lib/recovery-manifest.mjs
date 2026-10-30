@@ -17,6 +17,9 @@ export function normalizeRecoveryDefinition(entry) {
     'solicitudes_financieras.solicitudes_financieras_operacion_check': ['operacion', [[
       'CREAR_TRANSACCIONES', 'CREAR_TRANSFERENCIA', 'LIQUIDAR_PENDIENTE', 'LIQUIDAR_PENDIENTES',
       'EDITAR_TRANSACCION', 'ANULAR_TRANSACCION', 'EDITAR_GRUPO',
+    ], [
+      'CREAR_TRANSACCIONES', 'CREAR_TRANSFERENCIA', 'LIQUIDAR_PENDIENTE', 'LIQUIDAR_PENDIENTES',
+      'EDITAR_TRANSACCION', 'ANULAR_TRANSACCION', 'EDITAR_GRUPO', 'EDITAR_TRANSFERENCIA', 'ANULAR_TRANSFERENCIA',
     ]]],
     'traspasos_turno.traspasos_turno_estado_check': ['estado', [['PENDIENTE', 'ACEPTADO', 'RECHAZADO', 'CANCELADO', 'VENCIDO']]],
     'traspasos_turno.traspasos_turno_modo_check': ['modo', [['CON_CIERRE', 'EN_REVISION']]],
@@ -34,7 +37,7 @@ export function normalizeRecoveryDefinition(entry) {
   return entry;
 }
 
-export async function captureRecoveryManifest(client) {
+export async function captureRecoveryManifest(client, { portableNotNull = false } = {}) {
   await client.query("set local time zone 'UTC'");
   await client.query("set local datestyle='ISO, YMD'");
   const relations = (await client.query(`select c.relname as name from pg_class c
@@ -58,6 +61,7 @@ export async function captureRecoveryManifest(client) {
       where n.nspname='temo' and c.relkind in ('r','p') and a.attnum>0 and not a.attisdropped
     union all select 'constraint',c.relname||'.'||k.conname,pg_get_constraintdef(k.oid)
       from pg_constraint k join pg_class c on c.oid=k.conrelid join pg_namespace n on n.oid=c.relnamespace where n.nspname='temo'
+        ${portableNotNull ? "and k.contype <> 'n'" : ''}
     union all select 'index',c.relname,pg_get_indexdef(c.oid)
       from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname='temo' and c.relkind='i'
     union all select 'trigger',c.relname||'.'||t.tgname,pg_get_triggerdef(t.oid)

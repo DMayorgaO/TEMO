@@ -5,13 +5,15 @@ import { AuthenticatedUser } from '../auth/auth.service';
 import { ShiftsService } from './shifts.service';
 import { createHash, randomUUID } from 'node:crypto';
 import { assertShiftNotSubmitted } from '../../common/shift-submission-lock';
+import { requireSessionVersion } from '../../common/session-version';
 
 @Injectable()
 export class HandoversService {
   constructor(private readonly db: DatabaseService, private readonly shifts: ShiftsService) {}
 
   private cashier(user: AuthenticatedUser) {
-    if (user.roleCode !== 'CAJERO') throw new ForbiddenException('El traspaso requiere una sesion de cajero.');
+    if (user.roleCode !== 'CAJERO' || user.mustChangePassword) throw new ForbiddenException('El traspaso requiere una sesion de cajero.');
+    return requireSessionVersion(user.sessionVersion);
   }
 
   private async expire(client: { query(text: string, params?: unknown[]): Promise<unknown> }) {
@@ -32,10 +34,10 @@ export class HandoversService {
   }
 
   private async actor(client: PoolClient, user: AuthenticatedUser) {
-    this.cashier(user);
+    const version = this.cashier(user);
     const result = await client.query(`select 1 from temo.usuarios u join temo.roles r using(id_rol)
       where u.id_usuario=$1 and u.estado='ACTIVO' and not u.debe_cambiar_contrasena and r.estado='ACTIVO' and r.codigo='CAJERO'
-      and u.version_sesion=$2`, [user.id, user.sessionVersion]);
+      and u.version_sesion=$2`, [user.id, version]);
     if (!result.rowCount) throw new ForbiddenException('La sesion del cajero ya no es valida.');
   }
 
@@ -100,6 +102,7 @@ export class HandoversService {
   }
 
   async preview(shiftId: string, user: AuthenticatedUser) {
+    this.cashier(user);
     return this.db.transaction(async client=>{
       await this.lock(client); await this.actor(client,user);
       await assertShiftNotSubmitted(client,shiftId,user);
@@ -111,6 +114,7 @@ export class HandoversService {
   }
 
   async propose(shiftId: string, input: { requestId: string; receiverId: string; expectedVersion: string; observations?: string; mode?: 'CON_CIERRE'|'EN_REVISION' }, user: AuthenticatedUser) {
+    this.cashier(user);
     return this.db.transaction(async client => {
       await this.lock(client); await this.actor(client,user);
       const previous = await client.query('select * from temo.traspasos_turno where id_traspaso=$1',[input.requestId]);
@@ -135,6 +139,7 @@ export class HandoversService {
   }
 
   async registerDifference(shiftId: string, expectedVersion: string, user: AuthenticatedUser) {
+    this.cashier(user);
     return this.db.transaction(async client=>{
       await this.lock(client); await this.actor(client,user);
       await assertShiftNotSubmitted(client,shiftId,user);
@@ -152,6 +157,7 @@ export class HandoversService {
   }
 
   async resolve(id: string, action: 'accept'|'reject'|'cancel', user: AuthenticatedUser) {
+    this.cashier(user);
     return this.db.transaction(async client => {
       await this.lock(client); await this.actor(client,user);
       const result=await client.query('select * from temo.traspasos_turno where id_traspaso=$1 for update',[id]);

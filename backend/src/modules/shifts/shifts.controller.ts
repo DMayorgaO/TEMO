@@ -4,6 +4,7 @@ import { AuthenticatedUser } from '../auth/auth.service';
 import { ShiftsService } from './shifts.service';
 import { HandoversService } from './handovers.service';
 import { z } from 'zod';
+import { parseDashboardQuery } from '../../common/read-query';
 import {
   closeShiftSchema,
   openShiftSchema,
@@ -59,14 +60,7 @@ export class ShiftsController {
 
   @Post('dashboard/export')
   exportDashboard(@Body() body: unknown, @Req() request: AuthenticatedRequest & { ip?: string }) {
-    const date = z.string().regex(/^\d{4}-\d{2}-\d{2}$/).refine(value =>
-      Number.isFinite(Date.parse(value)) && new Date(value).toISOString().slice(0, 10) === value);
-    const result = z.object({ from: date.optional(), to: date.optional(), day: date.optional() }).strict().safeParse(body);
-    if (!result.success) throw new BadRequestException('Fechas de exportacion invalidas.');
-    const { from, to, day } = result.data;
-    if (Boolean(from) !== Boolean(to) || (from && to && (from > to || Date.parse(to) - Date.parse(from) > 366 * 86400000))) {
-      throw new BadRequestException('Seleccione un rango de hasta 367 dias.');
-    }
+    const { from, to, day } = parseDashboardQuery(body);
     return this.shifts.exportDashboard(request, from, to, day);
   }
 
@@ -81,12 +75,11 @@ export class ShiftsController {
   }
 
   @Get('dashboard')
-  dashboard(@Query('from') from: string | undefined, @Query('to') to: string | undefined, @Query('day') day: string | undefined, @Req() request: AuthenticatedRequest) {
-    for (const value of [from, to, day]) {
-      if (value && (!/^\d{4}-\d{2}-\d{2}$/.test(value) || !Number.isFinite(Date.parse(value)) || new Date(value).toISOString().slice(0,10) !== value)) throw new BadRequestException('Fecha invalida.');
-    }
-    if (Boolean(from) !== Boolean(to) || (from && to && (from > to || Date.parse(to)-Date.parse(from)>366*86400000))) throw new BadRequestException('Seleccione un rango de hasta 367 dias.');
-    return this.shifts.dashboard(request.user, from, to, day);
+  dashboard(@Query('from') from: string | undefined, @Query('to') to: string | undefined, @Query('day') day: string | undefined, @Req() request: AuthenticatedRequest, @Query() query?: unknown) {
+    const dates = parseDashboardQuery(query ?? {
+      ...(from === undefined ? {} : {from}), ...(to === undefined ? {} : {to}), ...(day === undefined ? {} : {day}),
+    });
+    return this.shifts.dashboard(request.user, dates.from, dates.to, dates.day);
   }
 
   @Get('current')

@@ -2,7 +2,7 @@ services:
   - type: web
     name: temo-api
     runtime: node
-    plan: free
+    plan: 0.5c-512mb
     region: oregon
     branch: main
     buildCommand: npm ci && npm run build -w backend

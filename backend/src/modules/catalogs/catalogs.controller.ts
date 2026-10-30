@@ -1,12 +1,12 @@
 import { BadRequestException, Body, Controller, ForbiddenException, Get, Param, ParseUUIDPipe, NotFoundException, Post, Put, Req } from '@nestjs/common';
-import { isIP } from 'node:net';
 import { AuthenticatedUser } from '../auth/auth.service';
 import { DatabaseService } from '../database/database.service';
 import { CatalogsService } from './catalogs.service';
 import { auditBrowser } from './audit-browser';
 import { auditChanges } from './audit-changes';
 import { exportAuditSchema } from './export-audit.schema';
-import { authorizedExport, parseExportSelection, requireExportRole } from '../../common/export-selection';
+import { auditCaptureStatus } from '../../common/errors/audit-capture-status';
+import { authorizedExport, parseExportSelection, requireExportRole, recordRequestedExport } from '../../common/export-selection';
 
 @Controller('catalogs')
 export class CatalogsController {
@@ -65,22 +65,16 @@ export class CatalogsController {
     if (!parsed.success) throw new BadRequestException('Solicitud de auditoria de exportacion invalida.');
     const input = parsed.data;
     const operational = input.section === 'Transacciones' || input.section === 'Turnos';
-    if (request.user.roleCode !== 'JEFA' && !(request.user.roleCode === 'CAJERO' && operational)) {
-      throw new ForbiddenException('No tiene permiso para esta exportacion.');
-    }
+    requireExportRole(request.user, !operational);
     if ((input.format === 'PNG') !== (input.section === 'Grafica de transacciones')) {
       throw new BadRequestException('El formato no corresponde al apartado.');
     }
     const now = Date.now();
     for (const [key, expires] of this.exportEvents) if (expires <= now) this.exportEvents.delete(key);
     const key = `${request.user.id}|${input.section}|${input.format}`;
-    if (this.exportEvents.has(key) || this.exportEvents.size >= 1000) return { recorded: false, grouped: true };
-    this.exportEvents.set(key, now + 2000);
-    const address = (request.ip ?? '').replace(/^::ffff:/, '');
-    await this.db.query(`insert into temo.bitacora(id_usuario,accion,tabla,id_registro,datos_nuevos,direccion_ip)
-      values($1,'EXPORTAR','seguridad',$1,jsonb_build_object('evento','EXPORTACION_SOLICITADA',
-      'formato',$2::text,'apartado',$3::text,'filas_declaradas',$4::integer),$5::inet)`,
-    [request.user.id, input.format, input.section, input.rows, isIP(address) ? address : null]);
+    if (this.exportEvents.has(key)) return { recorded: false, grouped: true };
+    await recordRequestedExport(this.db, request, input.section, input.format, input.rows);
+    if (this.exportEvents.size < 1000) this.exportEvents.set(key, Date.now() + 2000);
     return { recorded: true };
   }
 
@@ -154,6 +148,12 @@ export class CatalogsController {
        limit 500`,
     );
     return result.rows.map((row: Record<string, unknown>) => ({ ...row, navegador: auditBrowser(String(row.navegador ?? '')) }));
+  }
+
+  @Get('auditoria/estado-captura')
+  auditCapture(@Req() request: { user: AuthenticatedUser }) {
+    this.requireAdministrator(request.user);
+    return auditCaptureStatus();
   }
 
   @Get('auditoria/:id')
@@ -384,7 +384,7 @@ export class CatalogsController {
   }
 
   private requireAdministrator(user: AuthenticatedUser) {
-    if (user.roleCode !== 'JEFA') {
+    if (user.roleCode !== 'JEFA' || user.mustChangePassword) {
       throw new ForbiddenException('Esta operacion requiere el perfil Administrador.');
     }
   }

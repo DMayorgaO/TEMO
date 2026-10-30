@@ -17,6 +17,9 @@ const fields: Record<string, Record<string, string>> = {
     tipo_calculo: 'Tipo de calculo', porcentaje: 'Porcentaje', monto_fijo: 'Monto fijo', rango_inicio: 'Inicio del rango', rango_fin: 'Fin del rango', estado: 'Estado',
     id_entidad: 'ID del banco', id_moneda: 'ID de moneda', id_movimiento: 'ID del movimiento', id_moneda_comision: 'ID de moneda de comision' },
   transacciones: { estado: 'Estado', amount: 'Monto', currencyCode: 'Moneda', entityCode: 'Banco', movementCode: 'Movimiento', 'rates.buy': 'Tasa de compra', 'rates.sell': 'Tasa de venta' },
+  transferencias: { estado:'Estado',tipo:'Tipo',direccion:'Direccion',moneda:'Moneda',monto:'Monto',descripcion:'Descripcion',cuenta:'Cuenta',turno:'Turno',motivo_anulacion:'Motivo de anulacion' },
+  directorio_destinatarios: {nombre:'Nombre',estado:'Estado',identificadores:'Cantidad de identificadores',cedulas:'Cantidad de cedulas',referencias:'Cantidad de referencias',
+    identifiers_changed:'Identificadores modificados',identities_changed:'Cedulas modificadas',references_changed:'Referencias modificadas',observations_changed:'Observaciones modificadas'},
   pagos_pendientes: { estado: 'Estado', saldo_pendiente: 'Saldo pendiente', monto_original: 'Monto original',method:'Forma de pago',totalAmount:'Monto liquidado',cantidad_pendientes:'Cantidad de pendientes' },
   abonos_pendientes: { monto: 'Monto', amount: 'Monto solicitado', estado: 'Estado', currencyCode: 'Moneda', entityCode: 'Banco', movementCode: 'Movimiento' },
   grupos_transacciones: { codigoOperacion: 'Operacion', cantidadTransacciones: 'Cantidad de transacciones', preferential: 'Tasa preferencial' },
@@ -56,7 +59,7 @@ export function auditChanges(entity: string, before: unknown, after: unknown) {
     if (hasBefore && hasAfter && old.value === updated.value) continue;
     changes.push({ field: label, before: hasBefore ? display(old.value) : 'No registrado', after: hasAfter ? display(updated.value) : 'No registrado' });
   }
-  if (entity === 'transacciones') {
+  if (entity === 'transacciones' || entity === 'transferencias') {
     const shared = object(previous.settlement).independent === false || object(next.settlement).independent === false;
     for (const [section, label] of [['primaryCounts', 'Efectivo principal'], ['changeCounts', 'Vuelto']] as const) {
       for (const currency of ['NIO', 'USD']) {

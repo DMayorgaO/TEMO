@@ -3,6 +3,7 @@ import { isIP } from 'node:net';
 import { z } from 'zod';
 import { AuthenticatedUser } from '../modules/auth/auth.service';
 import { DatabaseService } from '../modules/database/database.service';
+import { requireSessionVersion } from './session-version';
 
 export const exportSelectionSchema = z.object({
   format: z.enum(['EXCEL', 'PDF']),
@@ -16,7 +17,7 @@ export function parseExportSelection(body: unknown) {
 }
 
 export function requireExportRole(user: AuthenticatedUser, administrative = false) {
-  if (user.roleCode !== 'JEFA' && (administrative || user.roleCode !== 'CAJERO')) {
+  if (user.mustChangePassword || (user.roleCode !== 'JEFA' && (administrative || user.roleCode !== 'CAJERO'))) {
     throw new ForbiddenException('No tiene permiso para esta exportacion.');
   }
 }
@@ -34,10 +35,33 @@ export async function authorizedExport<T>(db: DatabaseService, request: { user: 
 
 export async function recordAuthorizedExport(db: DatabaseService, request: { user: AuthenticatedUser; ip?: string },
   section: string, format: 'EXCEL' | 'PDF' | 'PNG', count: number) {
+  return recordExportEvent(db, request, section, format, count, false);
+}
+
+export async function recordRequestedExport(db: DatabaseService, request: { user: AuthenticatedUser; ip?: string },
+  section: string, format: 'EXCEL' | 'PDF' | 'PNG', count: number) {
+  return recordExportEvent(db, request, section, format, count, true);
+}
+
+async function recordExportEvent(db: DatabaseService, request: { user: AuthenticatedUser; ip?: string },
+  section: string, format: 'EXCEL' | 'PDF' | 'PNG', count: number, requested: boolean) {
+  requireExportRole(request.user, !['Transacciones', 'Turnos'].includes(section));
+  const version = requireSessionVersion(request.user.sessionVersion);
   const ip = (request.ip ?? '').replace(/^::ffff:/, '');
-  // Fail closed: no export dataset is returned if its audit record cannot be stored.
-  await db.query(`insert into temo.bitacora(id_usuario,accion,tabla,id_registro,datos_nuevos,direccion_ip)
-    values($1,'EXPORTAR','seguridad',$1,jsonb_build_object('evento','EXPORTACION_AUTORIZADA',
-    'formato',$2::text,'apartado',$3::text,'filas_verificadas',$4::integer),$5::inet)`,
-  [request.user.id, format, section, count, isIP(ip) ? ip : null]);
+  // Current identity and mandatory audit share one SQL statement and actor lock.
+  const result = await db.query(`with export_actor as (
+      select u.id_usuario from temo.usuarios u join temo.roles r using(id_rol)
+      where u.id_usuario=$1 and u.estado='ACTIVO' and r.estado='ACTIVO'
+        and r.codigo=$6 and not u.debe_cambiar_contrasena and u.version_sesion=$7::integer
+      for share of u,r
+    )
+    insert into temo.bitacora(id_usuario,accion,tabla,id_registro,datos_nuevos,direccion_ip)
+    select id_usuario,'EXPORTAR','seguridad',id_usuario,
+      jsonb_build_object('evento','${requested ? 'EXPORTACION_SOLICITADA' : 'EXPORTACION_AUTORIZADA'}',
+      'formato',$2::text,'apartado',$3::text,'${requested ? 'filas_declaradas' : 'filas_verificadas'}',$4::integer),$5::inet
+    from export_actor returning id_usuario`,
+  [request.user.id, format, section, count, isIP(ip) ? ip : null, request.user.roleCode, version]);
+  if (result.rowCount !== 1) {
+    throw new ForbiddenException('Su sesion o acceso cambio. Inicie sesion nuevamente antes de exportar.');
+  }
 }

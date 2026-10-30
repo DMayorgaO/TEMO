@@ -42,6 +42,6 @@ export class TransfersController {
   void(@Param('id') id: string, @Body() body: unknown, @Req() request: { user: AuthenticatedUser }) {
     const parsed = voidTransferSchema.safeParse(body);
     if (!parsed.success) throw new BadRequestException('Debe indicar un motivo de anulacion.');
-    return this.transfers.void(id, parsed.data.reason, request.user);
+    return this.transfers.void(id, parsed.data.reason, request.user, parsed.data);
   }
 }

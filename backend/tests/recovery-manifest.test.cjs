@@ -1,6 +1,29 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
+test('portable NOT NULL comparison still detects nullable columns and changed CHECK rules',
+  { skip: !process.env.TEMO_TEST_PREVIEW }, async () => {
+    const { Client } = require('pg');
+    const { randomUUID } = require('node:crypto');
+    const { captureRecoveryManifest, assertRecoveryManifest, quoteRecoveryIdentifier } = await import('../../scripts/lib/recovery-manifest.mjs');
+    const c = new Client({ host: '127.0.0.1', port: 55433, database: 'temo_preview', user: 'temo_preview', ssl: false });
+    const name = 'qa_not_null_' + randomUUID().replaceAll('-', '');
+    const table = quoteRecoveryIdentifier(name);
+    await c.connect(); await c.query('begin');
+    try {
+      await c.query(`create table temo.${table}(value integer not null constraint positive check(value>0))`);
+      const strict = await captureRecoveryManifest(c);
+      const portable = await captureRecoveryManifest(c, { portableNotNull: true });
+      assert.ok(strict.structureEntries.some(row => row.kind === 'constraint' && row.name.startsWith(name + '.') && row.name.endsWith('_not_null')));
+      assert.ok(!portable.structureEntries.some(row => row.kind === 'constraint' && row.name.startsWith(name + '.') && row.name.endsWith('_not_null')));
+      await c.query(`alter table temo.${table} alter column value drop not null`);
+      await assert.rejects(async () => assertRecoveryManifest(portable, await captureRecoveryManifest(c, { portableNotNull: true })), /RECOVERY_STRUCTURE_MISMATCH/);
+      await c.query(`alter table temo.${table} alter column value set not null`);
+      await c.query(`alter table temo.${table} drop constraint positive,add constraint positive check(value>=0)`);
+      await assert.rejects(async () => assertRecoveryManifest(portable, await captureRecoveryManifest(c, { portableNotNull: true })), /RECOVERY_STRUCTURE_MISMATCH/);
+    } finally { await c.query('rollback'); await c.end(); }
+  });
+
 test('recovery comparison rejects changed data, schema and manifest origin', async () => {
   const { assertRecoveryManifest } = await import('../../scripts/lib/recovery-manifest.mjs');
   const base = { format: 2, environment: 'preview-only', serverMajor: 18, structureDigest: 'a', sequences: [],
@@ -101,6 +124,8 @@ test('handover and receipt CHECK normalization preserves every allowed value and
     ['notificaciones_usuarios.ck_notificaciones_tipo','tipo',['PENDIENTE_PAGADO','TRANSFERENCIA_REGISTRADA','TRASPASO_TURNO']],
     ['solicitudes_financieras.solicitudes_financieras_operacion_check','operacion',[
       'CREAR_TRANSACCIONES','CREAR_TRANSFERENCIA','LIQUIDAR_PENDIENTE','LIQUIDAR_PENDIENTES','EDITAR_TRANSACCION','ANULAR_TRANSACCION','EDITAR_GRUPO']],
+    ['solicitudes_financieras.solicitudes_financieras_operacion_check','operacion',[
+      'CREAR_TRANSACCIONES','CREAR_TRANSFERENCIA','LIQUIDAR_PENDIENTE','LIQUIDAR_PENDIENTES','EDITAR_TRANSACCION','ANULAR_TRANSACCION','EDITAR_GRUPO','EDITAR_TRANSFERENCIA','ANULAR_TRANSFERENCIA']],
     ['traspasos_turno.traspasos_turno_estado_check','estado',['PENDIENTE','ACEPTADO','RECHAZADO','CANCELADO','VENCIDO']],
     ['traspasos_turno.traspasos_turno_modo_check','modo',['CON_CIERRE','EN_REVISION']],
   ]) {

@@ -8,10 +8,16 @@ const {TransfersService}=require('../dist/modules/transfers/transfers.service');
 const counts=n=>({NIO:[{denomination:100,piles25:0,loose:n}],USD:[]});
 
 test('transfer edits and voids serialize financial effects, retain origin and protect closed shifts',{skip:!process.env.TEMO_TEST_PREVIEW},async()=>{
-  const db=new DatabaseService(new ConfigService({DATABASE_URL:'postgresql://temo_preview@127.0.0.1:55433/temo_preview',DATABASE_SSL:'false',APP_ENV:'development',DATABASE_POOL_MAX:4}));
+  const connection=new DatabaseService(new ConfigService({DATABASE_URL:'postgresql://temo_preview@127.0.0.1:55433/temo_preview',DATABASE_SSL:'false',APP_ENV:'development',DATABASE_POOL_MAX:4}));
+  const schema='qa_transfer_'+randomUUID().replaceAll('-','');assert.match(schema,/^qa_transfer_[a-f0-9]{32}$/);
+  const rewrite=sql=>sql.replaceAll('temo.solicitudes_financieras',schema+'.solicitudes_financieras');
+  const db={query:(sql,args)=>connection.query(rewrite(sql),args),transaction:work=>connection.transaction(client=>work({query:(sql,args)=>client.query(rewrite(sql),args)}))};
   const shifts=new ShiftsService(db),transfers=new TransfersService(db),prefix='QA_TRF_'+randomUUID().replaceAll('-','').slice(0,12);
   let branch;const users=[];
   try{
+    await connection.query(`create schema ${schema}`);
+    await connection.query(`create table ${schema}.solicitudes_financieras (like temo.solicitudes_financieras including all)`);
+    await connection.query(`create trigger proteger_recibo_financiero before update or delete on ${schema}.solicitudes_financieras for each row execute function temo.proteger_recibo_financiero()`);
     const admin=(await db.query(`select u.id_usuario as id,u.version_sesion as "sessionVersion",'JEFA' as "roleCode" from temo.usuarios u join temo.roles r using(id_rol) where r.codigo='JEFA' and u.estado='ACTIVO' and not u.debe_cambiar_contrasena limit 1`)).rows[0];
     branch=(await db.query(`insert into temo.sucursales(codigo,nombre,estado) values($1,$1,'ACTIVO') returning id_sucursal`,[prefix])).rows[0].id_sucursal;
     const sources=[];
@@ -34,13 +40,28 @@ test('transfer edits and voids serialize financial effects, retain origin and pr
     assert.equal((await shifts.detail(id,actor)).cashCounts.ACTUAL.NIO.total,1000);
     assert.equal((await shifts.detail(id,actor)).expectedCash.NIO,1000);
     const another=await transfers.create(input,actor);
+    const key=randomUUID(),editVersion=(await transfers.detail(another.database_id,actor)).edit_version;
+    const confirmed={...revised,expectedVersion:editVersion,requestId:key};
+    const duplicateEdits=await Promise.all([transfers.update(another.database_id,confirmed,actor),transfers.update(another.database_id,confirmed,actor)]);
+    assert.deepEqual(JSON.parse(JSON.stringify(duplicateEdits[0])),JSON.parse(JSON.stringify(duplicateEdits[1])));
+    assert.equal((await shifts.detail(id,actor)).cashCounts.ACTUAL.NIO.total,800);
+    const concurrentVersion=(await transfers.detail(another.database_id,actor)).edit_version;
+    const edits=await Promise.allSettled([300,400].map(amount=>transfers.update(another.database_id,{...input,amount,cashLines:counts(amount/100).NIO,expectedVersion:concurrentVersion,requestId:randomUUID()},actor)));
+    assert.equal(edits.filter(result=>result.status==='fulfilled').length,1);
+    assert.equal(edits.find(result=>result.status==='rejected').reason.getResponse().code,'TRF-VER-409');
+    const annulRequest={requestId:randomUUID(),expectedVersion:(await transfers.detail(another.database_id,actor)).edit_version};
+    const duplicateVoids=await Promise.all([transfers.void(another.database_id,'duplicate QA',actor,annulRequest),transfers.void(another.database_id,'duplicate QA',actor,annulRequest)]);
+    assert.deepEqual(duplicateVoids[0],duplicateVoids[1]);
+    assert.equal((await shifts.detail(id,actor)).cashCounts.ACTUAL.NIO.total,1000);
+    assert.equal((await db.query('select count(*)::int as n from temo.solicitudes_financieras')).rows[0].n,3);
+    const activeForRejection=await transfers.create(input,actor);
     const destinationBefore=await shifts.detail(sources[1].database_id,users[1]);
-    await assert.rejects(transfers.update(another.database_id,{...input,shiftId:sources[1].database_id},admin),e=>e.getStatus()===403);
+    await assert.rejects(transfers.update(activeForRejection.database_id,{...input,shiftId:sources[1].database_id},admin),e=>e.getStatus()===403);
     assert.deepEqual((await shifts.detail(sources[1].database_id,users[1])).cashCounts,destinationBefore.cashCounts);
     await db.query(`update temo.turnos set estado='CERRADO' where id_turno=$1`,[id]);
     const closed=await shifts.detail(id,admin);
-    await assert.rejects(transfers.update(another.database_id,input,admin),e=>e.getStatus()===409);
-    await assert.rejects(transfers.void(another.database_id,'closed fixture',admin),e=>e.getStatus()===409);
+    await assert.rejects(transfers.update(activeForRejection.database_id,input,admin),e=>e.getStatus()===409);
+    await assert.rejects(transfers.void(activeForRejection.database_id,'closed fixture',admin),e=>e.getStatus()===409);
     assert.deepEqual((await shifts.detail(id,admin)).cashCounts,closed.cashCounts);
     assert.equal((await shifts.detail(id,admin)).expectedCash.NIO,closed.expectedCash.NIO);
   }finally{
@@ -59,6 +80,6 @@ test('transfer edits and voids serialize financial effects, retain origin and pr
       await c.query('delete from temo.sucursales where id_sucursal=$1',[branch]);
       if(users.length)await c.query('delete from temo.usuarios where id_usuario=any($1::uuid[])',[users.map(row=>row.id)]);
     });
-    await db.onModuleDestroy();
+    await connection.query(`drop schema if exists ${schema} cascade`);await connection.onModuleDestroy();
   }
 });

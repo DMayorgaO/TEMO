@@ -216,6 +216,7 @@ export class ShiftsService {
   async create(input: OpenShiftInput, user: AuthenticatedUser) {
     this.requireBoss(user);
     const shiftId = await this.db.transaction(async (client) => {
+      await validateFinancialActor(client,user,['JEFA']);
       const branchId = await this.resolveActiveBranch(client, input.branchId, input.branch);
 
       const cashierResult = await client.query<{ id_usuario: string } & QueryResultRow>(
@@ -285,6 +286,7 @@ export class ShiftsService {
 
   async openPrepared(shiftId: string, user: AuthenticatedUser) {
     const openedId = await this.db.transaction(async (client) => {
+      await validateFinancialActor(client,user,['CAJERO']);
       const prepared = await client.query<{
         id_turno: string;
         id_sucursal: string;
@@ -343,6 +345,7 @@ export class ShiftsService {
       throw new ConflictException('El turno ya no admite cambios de apertura.');
     }
     await this.db.transaction(async (client) => {
+      await validateFinancialActor(client,user,['JEFA']);
       const branchId = await this.resolveActiveBranch(client, input.branchId, input.branch);
 
       const cashierResult = await client.query<{ id_usuario: string } & QueryResultRow>(
@@ -439,6 +442,7 @@ export class ShiftsService {
     }
 
     await this.db.transaction(async (client) => {
+      await validateFinancialActor(client,user,['JEFA']);
       const openingTotals = this.cashTotals(input.opening.counts);
       const closingTotals = this.cashTotals(input.closing.counts);
       await this.persistCashCounts(client, shiftId, shift.id_caja, user.id, 'APERTURA', input.opening.counts);

@@ -8,7 +8,7 @@ const host = request => ({ switchToHttp: () => ({ getRequest: () => request }) }
 
 test('successful sensitive read audits actor and record without response data or credentials', async () => {
   const calls = [];
-  const interceptor = new SensitiveReadInterceptor({ query: async (...args) => calls.push(args) });
+  const interceptor = new SensitiveReadInterceptor({ query: async (...args) => {calls.push(args);return {rowCount:1};} });
   const request = { method: 'GET', user: { id: actor }, route: { path: '/api/transactions/:id/detail' }, params: { id: target }, ip: '127.0.0.1',
     originalUrl: '/api/transactions/id/detail?token=hidden', headers: { authorization: 'hidden' } };
   const response = { records: [{ private: 'hidden' }] };
@@ -25,7 +25,7 @@ test('successful sensitive read audits actor and record without response data or
 
 test('public, polling notifications, writes and failed reads do not produce success audit', async () => {
   const calls = [];
-  const interceptor = new SensitiveReadInterceptor({ query: async (...args) => calls.push(args) });
+  const interceptor = new SensitiveReadInterceptor({ query: async (...args) => {calls.push(args);return {rowCount:1};} });
   for (const request of [
     { method: 'GET', route: { path: '/api/catalogs/usuarios' } },
     { method: 'GET', user: { id: actor }, route: { path: '/api/shifts/notifications' } },

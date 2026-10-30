@@ -10,6 +10,7 @@ import { AppExceptionFilter } from './common/errors/app-exception.filter';
 import { DatabaseService } from './modules/database/database.service';
 import { SensitiveReadInterceptor } from './common/errors/sensitive-read.interceptor';
 import { ExportLimitInterceptor } from './common/export-limit.interceptor';
+import { ReadWorkloadInterceptor } from './common/read-workload.interceptor';
 import { sanitizeBodyParserError } from './common/errors/body-parser-error';
 import { parseCorsOrigins } from './config/cors-origins';
 
@@ -80,7 +81,7 @@ async function bootstrap() {
     exclude: [{ path: '', method: RequestMethod.GET }],
   });
   app.useGlobalFilters(new AppExceptionFilter(app.get(DatabaseService)));
-  app.useGlobalInterceptors(new ExportLimitInterceptor(), new SensitiveReadInterceptor(app.get(DatabaseService)));
+  app.useGlobalInterceptors(new ReadWorkloadInterceptor(), new ExportLimitInterceptor(), new SensitiveReadInterceptor(app.get(DatabaseService)));
 
   const bindHost=config.get<string>('APP_ENV')==='development'&&process.env.TEMO_DEVELOPMENT_LOOPBACK==='1'?'127.0.0.1':'0.0.0.0';
   await app.listen(port, bindHost);

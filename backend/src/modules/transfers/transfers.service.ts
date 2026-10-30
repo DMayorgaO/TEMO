@@ -3,7 +3,7 @@ import { PoolClient, QueryResultRow } from 'pg';
 import { AuthenticatedUser } from '../auth/auth.service';
 import { DatabaseService } from '../database/database.service';
 import { TransferInput } from './transfers.schema';
-import { financialRequest, validateFinancialActor } from '../../common/financial-request';
+import { financialRequest } from '../../common/financial-request';
 import { assertShiftNotSubmitted } from '../../common/shift-submission-lock';
 
 type TransferRow = QueryResultRow & {
@@ -68,15 +68,7 @@ export class TransfersService {
   }
 
   async detail(id: string, user: AuthenticatedUser) {
-    const transfer = await this.findAuthorized(id, user);
-    const lines = await this.db.query(
-      `select d.valor::float8 as denomination, td.montones_25 as "piles25", td.sueltos as loose
-       from temo.transferencias_denominaciones td
-       join temo.denominaciones d on d.id_denominacion = td.id_denominacion
-       where td.id_transferencia = $1 order by d.orden`,
-      [id],
-    );
-    return { ...transfer, cashLines: lines.rows };
+    return this.findAuthorized(id, user, this.db, true);
   }
 
   async create(input: TransferInput, user: AuthenticatedUser) {
@@ -98,15 +90,19 @@ export class TransfersService {
       await this.persistCashLines(client, id, normalized.currencyId, input.cashLines);
       await this.applyEffect(client, id, shift, normalized, input.cashLines, 1);
       await this.notifyAffectedCashier(client, id, shift, normalized, input.description, user);
-      return this.detailWithin(client, id);
+      const result=await this.detailWithin(client,id);
+      await this.audit(client,id,user,'CREAR',null,await this.auditSnapshot(client,id));
+      return result;
     },async result=>{await this.findAuthorized(result.database_id,user,client);}));
   }
 
   async update(id: string, input: TransferInput, user: AuthenticatedUser) {
-    return this.db.transaction(async (client) => {
-      await validateFinancialActor(client,user,['JEFA','CAJERO','TRANSFERISTA']);
+    return this.db.transaction(async (client) => financialRequest(client,{
+      actor:user,operation:'EDITAR_TRANSFERENCIA',requestId:input.requestId,payload:{id,...input},roles:['JEFA','CAJERO','TRANSFERISTA'],
+    },async()=>{
       const observed=await this.findAuthorized(id,user,client);
       const shift=await this.resolveShift(client,observed.id_turno,user,true);
+      await this.checkVersion(client,id,input.expectedVersion);
       const previous = await this.findAuthorized(id, user, client);
       if(previous.id_turno!==shift.id_turno)throw new ConflictException('La transferencia cambio de turno. Actualice la pantalla.');
       if(input.shiftId&&input.shiftId!==shift.id_turno)throw new ForbiddenException('La transferencia debe conservar su turno original. Anulela y registre otra si corresponde.');
@@ -116,6 +112,7 @@ export class TransfersService {
       this.assertWritable(input, shift, user, true);
       const normalized = await this.validateInput(client, input, shift.id_sucursal);
       const oldLines = await this.loadLines(client, id);
+      const before=await this.auditSnapshot(client,id);
       await this.applyEffect(client, id, shift, {
         type: previous.tipo, direction: previous.direccion, currencyId: previous.id_moneda,
         accountId: previous.id_cuenta, amount: Number(previous.monto),
@@ -129,20 +126,25 @@ export class TransfersService {
       await client.query(`delete from temo.transferencias_denominaciones where id_transferencia=$1`, [id]);
       await this.persistCashLines(client, id, normalized.currencyId, input.cashLines);
       await this.applyEffect(client, id, shift, normalized, input.cashLines, 1);
-      return this.detailWithin(client, id);
-    });
+      const result=await this.detailWithin(client,id);
+      await this.audit(client,id,user,'ACTUALIZAR',before,await this.auditSnapshot(client,id));
+      return result;
+    },()=>this.authorizeReplay(client,id,user)));
   }
 
-  async void(id: string, reason: string, user: AuthenticatedUser) {
-    return this.db.transaction(async (client) => {
-      await validateFinancialActor(client,user,['JEFA','CAJERO','TRANSFERISTA']);
+  async void(id: string, reason: string, user: AuthenticatedUser, request: {requestId?:string;expectedVersion?:string} = {}) {
+    return this.db.transaction(async (client) => financialRequest(client,{
+      actor:user,operation:'ANULAR_TRANSFERENCIA',requestId:request.requestId,payload:{id,reason,expectedVersion:request.expectedVersion},roles:['JEFA','CAJERO','TRANSFERISTA'],
+    },async()=>{
       const observed=await this.findAuthorized(id,user,client);
       const shift=await this.resolveShift(client,observed.id_turno,user,true);
+      await this.checkVersion(client,id,request.expectedVersion);
       const transfer = await this.findAuthorized(id, user, client);
       if(transfer.id_turno!==shift.id_turno)throw new ConflictException('La transferencia cambio de turno. Actualice la pantalla.');
       if(!['ABIERTO','PENDIENTE_APROBACION','EN_REVISION'].includes(shift.estado))throw new ConflictException('No puede anular transferencias de turnos cerrados. Solicite revision administrativa.');
       if (transfer.estado !== 'ACTIVO') throw new BadRequestException('La transferencia ya esta anulada.');
       this.assertEditable(transfer, user);
+      const before=await this.auditSnapshot(client,id);
       const lines = await this.loadLines(client, id);
       await this.applyEffect(client, id, shift, {
         type: transfer.tipo, direction: transfer.direccion, currencyId: transfer.id_moneda,
@@ -153,14 +155,20 @@ export class TransfersService {
            fecha_anulacion=now(), fecha_modificacion=now() where id_transferencia=$1`,
         [id, reason, user.id],
       );
+      await this.audit(client,id,user,'ANULAR',before,await this.auditSnapshot(client,id));
       return { ok: true };
-    });
+    },()=>this.authorizeReplay(client,id,user)));
   }
 
-  private selectTransfer() {
+  private selectTransfer(includeCashLines = false) {
     return `select tr.id_transferencia as database_id,
+      tr.version_edicion::text as edit_version,
+      ${includeCashLines ? `(select coalesce(jsonb_agg(jsonb_build_object('denomination',d.valor::float8,'piles25',td.montones_25,'loose',td.sueltos) order by d.orden),'[]'::jsonb)
+        from temo.transferencias_denominaciones td join temo.denominaciones d using(id_denominacion)
+        where td.id_transferencia=tr.id_transferencia) as "cashLines",` : ''}
       concat('TRF-', lpad(tr.codigo_transferencia::text, 6, '0')) as id,
       tr.id_turno, t.estado as estado_turno, t.id_cajero, tr.id_moneda, tr.id_cuenta,
+      concat('TUR-',lpad(t.codigo_turno::text,6,'0')) as turno,
       tr.fecha_transferencia, tr.tipo, tr.direccion, m.codigo as moneda, m.simbolo,
       tr.monto, coalesce(tr.descripcion,'') as descripcion, tr.estado,
       coalesce(tr.motivo_anulacion,'') as motivo_anulacion,
@@ -174,14 +182,39 @@ export class TransfersService {
       left join temo.entidades_bancarias eb on eb.id_entidad=cb.id_entidad`;
   }
 
-  private async findAuthorized(id: string, user: AuthenticatedUser, client: Queryable = this.db) {
-    const result = await client.query<TransferRow>(`${this.selectTransfer()} where tr.id_transferencia=$1`, [id]);
+  private async findAuthorized(id: string, user: AuthenticatedUser, client: Queryable = this.db, includeCashLines = false) {
+    const result = await client.query<TransferRow>(`${this.selectTransfer(includeCashLines)} where tr.id_transferencia=$1`, [id]);
     const row = result.rows[0];
     if (!row) throw new NotFoundException('La transferencia no existe.');
     if (!this.canManageAnyShift(user) && (row.id_cajero !== user.id || !['ABIERTO','PENDIENTE_APROBACION','EN_REVISION'].includes(row.estado_turno))) {
       throw new ForbiddenException('No tiene acceso a esta transferencia.');
     }
     return row;
+  }
+
+  private async checkVersion(client: PoolClient, id: string, expectedVersion?: string) {
+    const current=await client.query('select version_edicion::text as version from temo.transferencias where id_transferencia=$1 for update',[id]);
+    if(expectedVersion!==undefined&&current.rows[0]?.version!==expectedVersion)throw new ConflictException({
+      code:'TRF-VER-409',message:'La transferencia cambio desde que abrio el formulario. Sus datos no se guardaron. Actualice el registro y revise los cambios.',
+    });
+  }
+
+  private async authorizeReplay(client: PoolClient, id: string, user: AuthenticatedUser) {
+    const row=await this.findAuthorized(id,user,client);
+    if(!['ABIERTO','PENDIENTE_APROBACION','EN_REVISION','CERRADO'].includes(row.estado_turno))throw new ConflictException('La solicitud ya fue aplicada y el turno no esta disponible. Revise el registro actual.');
+    if(!this.canManageAnyShift(user))this.assertEditable(row,user);
+  }
+
+  private async auditSnapshot(client: PoolClient, id: string) {
+    const row=(await client.query(`${this.selectTransfer(true)} where tr.id_transferencia=$1`,[id])).rows[0];
+    return {estado:row.estado,tipo:row.tipo,direccion:row.direccion,moneda:row.moneda,monto:Number(row.monto),
+      descripcion:row.descripcion,cuenta:row.cuenta,turno:row.turno,motivo_anulacion:row.motivo_anulacion,
+      settlement:{primaryCounts:{[row.moneda]:row.cashLines}}};
+  }
+
+  private async audit(client: PoolClient, id: string, user: AuthenticatedUser, action: string, before: unknown, after: unknown) {
+    await client.query(`insert into temo.bitacora(id_usuario,tabla,id_registro,accion,datos_anteriores,datos_nuevos)
+      values($1,'transferencias',$2,$3::temo.accion_bitacora,$4::jsonb,$5::jsonb)`,[user.id,id,action,JSON.stringify(before),JSON.stringify(after)]);
   }
 
   private async resolveShift(client: PoolClient, requested: string | undefined, user: AuthenticatedUser, allowClosed = false) {

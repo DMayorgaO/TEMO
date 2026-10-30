@@ -10,7 +10,7 @@ const { ShiftsController } = require('../dist/modules/shifts/shifts.controller')
 const actor = '00000000-0000-4000-8000-000000000001';
 const first = '00000000-0000-4000-8000-000000000002';
 const second = '00000000-0000-4000-8000-000000000003';
-const request = { user: { id: actor, roleCode: 'JEFA' }, ip: '::ffff:127.0.0.1' };
+const request = { user: { id: actor, roleCode: 'JEFA',sessionVersion:1 }, ip: '::ffff:127.0.0.1' };
 
 test('export selection rejects forged identities, SQL, duplicate IDs and oversized requests', () => {
   for (const body of [{ format: 'EXCEL', ids: ["' or 1=1"] }, { format: 'PDF', ids: [first, first] },
@@ -23,10 +23,10 @@ test('export selection rejects forged identities, SQL, duplicate IDs and oversiz
 
 test('authorized dataset preserves selected order, records verified count, fails closed', async () => {
   const calls = [];
-  const db = { query: async (...args) => calls.push(args) };
+  const db = { query: async (...args) => {calls.push(args);return {rowCount:1};} };
   const rows = [{ id: first, name: '=1+1' }, { id: second, name: 'private' }];
   assert.deepEqual(await authorizedExport(db, request, 'Usuarios', { format: 'EXCEL', ids: [second, first] }, rows, r => r.id), [rows[1], rows[0]]);
-  assert.deepEqual(calls[0][1], [actor, 'EXCEL', 'Usuarios', 2, '127.0.0.1']);
+  assert.deepEqual(calls[0][1], [actor, 'EXCEL', 'Usuarios', 2, '127.0.0.1','JEFA',1]);
   assert.ok(!JSON.stringify(calls).includes('private'));
   await assert.rejects(authorizedExport(db, request, 'Usuarios', { format: 'PDF', ids: [actor] }, rows, r => r.id), e => e.getStatus() === 403);
   assert.equal(calls.length, 1);
@@ -36,7 +36,7 @@ test('authorized dataset preserves selected order, records verified count, fails
 
 test('catalog export denies cashier, unsupported resources and uses allowlisted fresh data', async () => {
   const calls = [];
-  const controller = new CatalogsController({ query: async (...args) => { calls.push(args); return { rows: [{ id: first, usuario: 'fresh' }] }; } }, {});
+  const controller = new CatalogsController({ query: async (...args) => { calls.push(args); return { rowCount:1,rows: [{ id: first, usuario: 'fresh' }] }; } }, {});
   const body = { format: 'EXCEL', ids: [first] };
   await assert.rejects(controller.exportRows('users', body, { user: { id: actor, roleCode: 'CAJERO' } }), e => e.getStatus() === 403);
   for (const resource of ['__proto__', 'constructor', 'tokens', 'reports']) {
@@ -51,8 +51,8 @@ test('catalog export denies cashier, unsupported resources and uses allowlisted 
 
 test('transaction and shift exports bind scope and identifiers in SQL', async () => {
   const calls = [];
-  const db = { query: async (...args) => { calls.push(args); return { rows: [{ database_id: first }] }; } };
-  const cashier = { user: { id: actor, roleCode: 'CAJERO' } };
+  const db = { query: async (...args) => { calls.push(args); return { rowCount:1,rows: [{ database_id: first }] }; } };
+  const cashier = { user: { id: actor, roleCode: 'CAJERO',sessionVersion:1 } };
   const transactions = new TransactionsController(db, { applyHistoricalRows: async rows => rows });
   await transactions.exportRows({ format: 'PDF', ids: [first] }, cashier);
   assert.deepEqual(calls[0][1], [1, 0, 'CAJERO', actor, [first]]);
@@ -77,11 +77,11 @@ test('PNG export validates dates and role, counts server data, not client claims
     assert.throws(() => controller.exportDashboard(body, request), e => e.getStatus() === 400);
   }
   const calls = [];
-  const service = new ShiftsService({ query: async (...args) => calls.push(args) });
+  const service = new ShiftsService({ query: async (...args) => {calls.push(args);return {rowCount:1};} });
   service.dashboard = async () => ({ counts: [{ day: '2026-10-08' }, { day: '2026-10-08' }] });
   await assert.rejects(service.exportDashboard({ user: { id: actor, roleCode: 'CAJERO' } }), e => e.getStatus() === 403);
   await service.exportDashboard(request);
-  assert.deepEqual(calls[0][1], [actor, 'PNG', 'Grafica de transacciones', 2, '127.0.0.1']);
+  assert.deepEqual(calls[0][1], [actor, 'PNG', 'Grafica de transacciones', 2, '127.0.0.1','JEFA',1]);
 });
 
 const host = req => ({ switchToHttp: () => ({ getRequest: () => req }) });
@@ -112,8 +112,8 @@ test('preview: server exports match scoped reads, reject foreign IDs, never incl
   await client.connect();
   try {
     await client.query('begin');
-    const admin = (await client.query("select u.id_usuario as id from temo.usuarios u join temo.roles r using(id_rol) where r.codigo='JEFA' limit 1")).rows[0];
-    const cashier = (await client.query("select u.id_usuario as id from temo.usuarios u join temo.roles r using(id_rol) where r.codigo='CAJERO' limit 1")).rows[0];
+    const admin = (await client.query("select u.id_usuario as id,u.version_sesion as \"sessionVersion\" from temo.usuarios u join temo.roles r using(id_rol) where r.codigo='JEFA' and u.estado='ACTIVO' and not u.debe_cambiar_contrasena limit 1")).rows[0];
+    const cashier = (await client.query("select u.id_usuario as id,u.version_sesion as \"sessionVersion\" from temo.usuarios u join temo.roles r using(id_rol) where r.codigo='CAJERO' and u.estado='ACTIVO' and not u.debe_cambiar_contrasena limit 1")).rows[0];
     const catalog = new CatalogsController(client, {});
     const context = { user: { ...admin, roleCode: 'JEFA' } };
     const users = await catalog.exportRows('users', { format: 'EXCEL', ids: [admin.id] }, context);
