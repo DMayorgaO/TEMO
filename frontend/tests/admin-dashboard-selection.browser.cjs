@@ -10,6 +10,11 @@ const counts = days.flatMap((day, index) => ['BAC', 'BANPRO'].map(entity => ({ d
   try {
     const context = await browser.newContext({ viewport: { width: 1366, height: 768 }, timezoneId: 'America/Managua' });
     await context.addInitScript(user => { sessionStorage.setItem('temo:auth-token', 'synthetic-dashboard-session'); sessionStorage.setItem('temo:auth-user', JSON.stringify(user)); }, user);
+    await context.addInitScript(()=>{
+      const fillRect=CanvasRenderingContext2D.prototype.fillRect,fillText=CanvasRenderingContext2D.prototype.fillText;
+      CanvasRenderingContext2D.prototype.fillRect=function(...args){if(this.canvas.classList.contains('report-selectable-chart')&&args[0]===0&&args[1]===0)window.__monthCounts=[];return fillRect.apply(this,args);};
+      CanvasRenderingContext2D.prototype.fillText=function(...args){if(this.canvas.classList.contains('report-selectable-chart')&&args[1]===0&&args[2]===0&&this.getTransform().b<0)(window.__monthCounts??=[]).push(String(args[0]));return fillText.apply(this,args);};
+    });
     let requests = 0, extraCashiers = 0, sparse = false;
     await context.route('**/api/**', async route => {
       const url = new URL(route.request().url()), p = url.pathname.replace(/^.*\/api/, '');
@@ -28,7 +33,11 @@ const counts = days.flatMap((day, index) => ['BAC', 'BANPRO'].map(entity => ({ d
     page.on('pageerror', error => errors.push(error.message));
     await page.goto('http://127.0.0.1:3188/#/dashboard');
     const chart = page.locator('.report-selectable-chart');
-    await chart.waitFor();
+    await chart.waitFor().catch(async error=>{
+      await page.screenshot({path:path.resolve(__dirname,'../../tmp/dashboard-load-failure.png'),fullPage:true});
+      console.error(JSON.stringify({url:page.url(),errors,body:(await page.locator('body').innerText()).slice(0,1200)}));
+      throw error;
+    });
     const table = page.locator('.report-top > section').first();
     const total = table.locator('h2 span');
     await assert.equal(await total.textContent(), '108');
@@ -84,6 +93,15 @@ const counts = days.flatMap((day, index) => ['BAC', 'BANPRO'].map(entity => ({ d
         await page.screenshot({ path: path.resolve(__dirname, `../../tmp/dashboard-height-${width}-${count}.png`), fullPage: true });
       }
     }
+    await page.setViewportSize({width:1366,height:768});
+    await page.getByLabel('Gráfica desde',{exact:true}).fill('2026-10-15');
+    await page.waitForFunction(()=>!document.querySelector('.report-selectable-chart')?.getAttribute('aria-label').includes('2026-10-01'));
+    await page.getByRole('button',{name:'Mes completo',exact:true}).click();
+    await page.waitForFunction(()=>document.querySelector('.report-selectable-chart')?.getAttribute('aria-label').includes('2026-10-01'));
+    assert.equal(await page.getByLabel('Gráfica desde',{exact:true}).inputValue(),'2026-10-01');
+    assert.equal(await page.getByLabel('Gráfica hasta',{exact:true}).inputValue(),'2026-10-31');
+    assert.deepEqual(await page.evaluate(()=>window.__monthCounts),Array.from({length:31},(_,index)=>String(2*(index+1))),'Every day has a drawn count, including future days in the fixture');
+    await page.screenshot({path:path.resolve(__dirname,'../../tmp/dashboard-month-counts.png'),fullPage:true});
     sparse = true; extraCashiers = 0;
     await page.setViewportSize({ width: 1366, height: 768 });
     await page.getByRole('button', { name: 'Actualizar', exact: true }).click();

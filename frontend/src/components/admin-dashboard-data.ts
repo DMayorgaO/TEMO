@@ -33,6 +33,12 @@ export function filterCounts(rows: Count[], banks: string[], currencies: Currenc
 
 export const weekdayLabel = (day: string) => ['dom', 'lun', 'mar', 'mie', 'jue', 'vie', 'sab'][new Date(`${day}T12:00:00Z`).getUTCDay()];
 
+export function calendarMonth(day: string) {
+  const date = new Date(`${day}T12:00:00Z`);
+  date.setUTCMonth(date.getUTCMonth()+1,0);
+  return { from: `${day.slice(0,7)}-01`, to: date.toISOString().slice(0,10) };
+}
+
 export function selectDayRange(days: string[], start: number, end: number): string[] {
   return days.slice(Math.max(0, Math.min(start, end)), Math.min(days.length, Math.max(start, end) + 1));
 }

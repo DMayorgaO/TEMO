@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { PointerEvent, ReactNode } from 'react';
-import { CalendarDays, Download, RefreshCw, SquareCheckBig, X } from 'lucide-react';
-import { bankBalances, cashierCounts, filterCounts, reconciliationRows, reconciliationTotal, selectDayRange, weekdayLabel } from './admin-dashboard-data';
+import { CalendarDays, CalendarRange, Download, RefreshCw, SquareCheckBig, X } from 'lucide-react';
+import { bankBalances, calendarMonth, cashierCounts, filterCounts, reconciliationRows, reconciliationTotal, selectDayRange, weekdayLabel } from './admin-dashboard-data';
 import type { Currency, DashboardData, ReconciliationRow } from './admin-dashboard-data';
 import './admin-dashboard.css';
 import { downloadExport, exportFilename } from '../utils/export-download';
@@ -15,21 +15,23 @@ const cellText = (value: Cell) => typeof value === 'object' ? value.text : Strin
 const cellContent = (value: Cell) => typeof value === 'object' ? value.content : value;
 const currencies: Currency[] = ['NIO', 'USD'];
 
-function ReportTable<T extends TableRow>({ headers, rows, onSelect, selected, footer }: {
+function ReportTable<T extends TableRow>({ headers, rows, onSelect, selected, footer, hiddenColumns=[] }: {
   headers: string[]; rows: T[]; onSelect?: (id: string, column: number) => void; selected?: string;
   footer?: (visible: T[]) => ReactNode;
+  hiddenColumns?: number[];
 }) {
   const [search, setSearch] = useState('');
   const [filters, setFilters] = useState<Record<number, string>>({});
   const normalize = (value: string) => value.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
   const matches = (value: string, query: string) => normalize(value).includes(normalize(query));
-  const visible = rows.filter(row => matches(row.values.map(cellText).join(' '), search) && row.values.every((value, index) => matches(cellText(value), filters[index] || '')));
+  const indices=headers.map((_,index)=>index).filter(index=>!hiddenColumns.includes(index));
+  const visible = rows.filter(row => matches(indices.map(index=>cellText(row.values[index])).join(' '), search) && indices.every(index => matches(cellText(row.values[index]), filters[index] || '')));
   return <>
     <input className="report-search" aria-label={`Buscar en ${headers.join(', ')}`} placeholder="Buscar" value={search} onChange={e => setSearch(e.target.value)} />
     <div className="report-table-scroll"><table>
-      <thead><tr>{headers.map(title => <th key={title}>{title}</th>)}</tr><tr>{headers.map((title, index) => <th key={title}><input aria-label={`Filtrar ${title}`} placeholder="Filtrar" value={filters[index] || ''} onChange={e => setFilters({ ...filters, [index]: e.target.value })} /></th>)}</tr></thead>
-      <tbody>{visible.map(row => <tr key={row.id} className={selected === row.id ? 'is-selected' : undefined}>{row.values.map((value, index) => <td key={index}>{onSelect && index < 2 ? <button onClick={() => onSelect(row.id, index)} title={`Filtrar gráfica por ${cellText(value)}`}>{cellContent(value)}</button> : cellContent(value)}</td>)}</tr>)}
-        {!visible.length && <tr><td colSpan={headers.length} className="report-empty">Sin registros</td></tr>}
+      <thead><tr>{indices.map(index => <th key={headers[index]}>{headers[index]}</th>)}</tr><tr>{indices.map(index => <th key={headers[index]}><input aria-label={`Filtrar ${headers[index]}`} placeholder="Filtrar" value={filters[index] || ''} onChange={e => setFilters({ ...filters, [index]: e.target.value })} /></th>)}</tr></thead>
+      <tbody>{visible.map(row => <tr key={row.id} className={selected === row.id ? 'is-selected' : undefined}>{indices.map(index => <td key={index}>{onSelect && index < 2 ? <button onClick={() => onSelect(row.id, index)} title={`Filtrar gráfica por ${cellText(row.values[index])}`}>{cellContent(row.values[index])}</button> : cellContent(row.values[index])}</td>)}</tr>)}
+        {!visible.length && <tr><td colSpan={indices.length} className="report-empty">Sin registros</td></tr>}
       </tbody>{footer && <tfoot>{footer(visible)}</tfoot>}
     </table></div>
   </>;
@@ -39,8 +41,8 @@ function CurrencyAmount({ amount, currency }: { amount: number | null | undefine
   return <span className={`report-money report-money--${currency.toLowerCase()}`} title={amount == null ? 'Sin saldo registrado para esta cuenta y moneda' : undefined}>{amount == null ? '—' : money(amount, currency)}</span>;
 }
 
-function ReconciliationAmounts({ row, field }: { row: ReconciliationRow; field: 'income' | 'expense' | 'difference' }) {
-  return <div className="report-money-pair">{currencies.filter(currency => row.amounts[currency]).map(currency => {
+function ReconciliationAmounts({ row, field, visibleCurrencies=currencies }: { row: ReconciliationRow; field: 'income' | 'expense' | 'difference'; visibleCurrencies?:Currency[] }) {
+  return <div className="report-money-pair">{visibleCurrencies.filter(currency => row.amounts[currency]).map(currency => {
     const amount = row.amounts[currency]![field];
     const state = amount > 0 ? 'receive' : amount < 0 ? 'deposit' : 'balanced';
     return <div key={currency} className={field === 'difference' ? `report-result report-result--${state}` : undefined}>
@@ -50,11 +52,11 @@ function ReconciliationAmounts({ row, field }: { row: ReconciliationRow; field: 
   })}</div>;
 }
 
-function settlementCell(row: ReconciliationRow, field: 'income' | 'expense' | 'difference'): Cell {
-  return { text: currencies.filter(currency => row.amounts[currency]).map(currency => {
+function settlementCell(row: ReconciliationRow, field: 'income' | 'expense' | 'difference', visibleCurrencies=currencies): Cell {
+  return { text: visibleCurrencies.filter(currency => row.amounts[currency]).map(currency => {
     const amount = row.amounts[currency]![field];
     return `${money(amount, currency)}${field === 'difference' && amount !== 0 ? ` ${amount > 0 ? 'Depósito' : 'Reembolso'}` : ''}`;
-  }).join(' '), content: <ReconciliationAmounts row={row} field={field} /> };
+  }).join(' '), content: <ReconciliationAmounts row={row} field={field} visibleCurrencies={visibleCurrencies} /> };
 }
 
 export function AdminDashboard({ request }: { request: Request }) {
@@ -103,6 +105,8 @@ export function AdminDashboard({ request }: { request: Request }) {
   }, [refresh]);
 
   const filteredCounts = data ? filterCounts(data.counts, banks, selectedCurrencies) : [];
+  const visibleCurrencies=selectedCurrencies.length?selectedCurrencies:currencies;
+  const hiddenMoneyColumns=(nio:number,usd:number)=>[...(!visibleCurrencies.includes('NIO')?[nio]:[]),...(!visibleCurrencies.includes('USD')?[usd]:[])];
   const visibleSelection = selectedDays.filter(value => data && value >= data.from && value <= data.to);
   const tableDays = visibleSelection.length ? visibleSelection : data ? [day || data.tableDay] : [];
   const selectionKey = JSON.stringify(tableDays);
@@ -133,13 +137,17 @@ export function AdminDashboard({ request }: { request: Request }) {
       const values = JSON.parse(chartKey) as typeof points;
       const selection = new Set(JSON.parse(selectionKey) as string[]);
       const top = Math.ceil(Math.max(4, ...values.map(p => p.count)) / 4) * 4;
-      const left = 38, right = width - 12, bottom = height - 30, chartHeight = bottom - 45;
+      const left = 38, right = width - 12, bottom = height - 30;
+      const step = (right - left) / Math.max(1, values.length);
+      const verticalCounts = step < 24;
+      ctx.font = '10px sans-serif';
+      const labelRoom = verticalCounts ? Math.ceil(ctx.measureText(String(top)).width) + 10 : 20;
+      const chartHeight = bottom - 40 - labelRoom;
       ctx.textAlign = 'right'; ctx.font = '11px sans-serif';
       for (let tick = 0; tick <= 4; tick++) {
         const y = bottom - chartHeight * tick / 4; ctx.strokeStyle = '#e1e9e9'; ctx.beginPath(); ctx.moveTo(left, y); ctx.lineTo(right, y); ctx.stroke();
         ctx.fillStyle = '#52676a'; ctx.fillText(String(top * tick / 4), left - 6, y + 4);
       }
-      const step = (right - left) / Math.max(1, values.length);
       values.forEach((point, index) => {
         const x = left + step * index + step * .2, h = point.count / top * chartHeight;
         if (selection.has(point.day)) {
@@ -150,7 +158,10 @@ export function AdminDashboard({ request }: { request: Request }) {
           ctx.fillStyle = selection.has(point.day) ? '#1875a1' : '#138477'; ctx.fillRect(x, bottom - h, step * .6, h);
         }
         ctx.textAlign = 'center'; ctx.fillStyle = '#203c3c';
-        if (point.day <= data.today && step >= 24) ctx.fillText(String(point.count), x + step * .3, bottom - h - 6);
+        ctx.save(); ctx.font = '10px sans-serif';
+        if(verticalCounts){ctx.translate(x + step * .3,bottom - h - 6);ctx.rotate(-Math.PI/2);ctx.textAlign='left';ctx.textBaseline='middle';ctx.fillText(String(point.count),0,0);}
+        else ctx.fillText(String(point.count), x + step * .3, bottom - h - 6);
+        ctx.restore();
         ctx.font = '9px sans-serif'; ctx.fillText(weekdayLabel(point.day), x + step * .3, bottom + 13);
         ctx.fillText(point.day.slice(8), x + step * .3, bottom + 25); ctx.font = '11px sans-serif';
       });
@@ -231,12 +242,12 @@ export function AdminDashboard({ request }: { request: Request }) {
       <div className="report-top">
         <section className="report-section"><header><h2>{tableDays.length > 1 ? `Transacciones de ${tableDays.length} días` : 'Transacciones del día'} <span>{daily.reduce((sum, row) => sum + row.total, 0)}</span></h2></header>
           <div className="report-day-filter"><label>Día<input type="date" aria-label="Día de transacciones" value={tableDays.length === 1 ? tableDays[0] : ''} onChange={e => selectSingleDay(e.target.value)} /></label><button className="report-today-button" aria-pressed={tableDays.length === 1 && tableDays[0] === data.today} onClick={() => selectSingleDay('')}><CalendarDays size={14} />Hoy</button>{tableDays.length > 1 && <span className="report-selection-summary" role="status">{dateLabel(tableDays[0])} - {dateLabel(tableDays[tableDays.length - 1])}</span>}</div>
-          <ReportTable headers={['Sucursal', 'Cajero', 'C$', '$', 'Total']} rows={daily.map(row => ({ id: `${row.branch_id}:${row.cashier_id}`, values: [row.branch, row.cashier, row.nio, row.usd, row.total] }))} selected={filter?.cashier ? `${filter.branch}:${filter.cashier}` : undefined} onSelect={(id, column) => {
+          <ReportTable hiddenColumns={hiddenMoneyColumns(2,3)} headers={['Sucursal', 'Cajero', 'C$', '$', 'Total']} rows={daily.map(row => ({ id: `${row.branch_id}:${row.cashier_id}`, values: [row.branch, row.cashier, row.nio, row.usd, row.total] }))} selected={filter?.cashier ? `${filter.branch}:${filter.cashier}` : undefined} onSelect={(id, column) => {
             const row = daily.find(row => `${row.branch_id}:${row.cashier_id}` === id)!;
             setFilter({ branch: row.branch_id, cashier: column === 1 ? row.cashier_id : undefined, label: column === 1 ? `${row.branch} · ${row.cashier}` : row.branch });
           }} />
         </section>
-        <section className="report-section report-chart"><header><h2>Transacciones por día</h2><div className="report-chart-actions"><button className="icon-button" title="Seleccionar todos los días mostrados" aria-label="Seleccionar todos los días mostrados" aria-pressed={points.length > 0 && points.every(point => tableDays.includes(point.day))} disabled={loading || !points.length} onClick={() => setSelectedDays(points.map(point => point.day))}><SquareCheckBig size={17} /></button><button className="icon-button" title="Exportar en PNG" aria-label="Exportar en PNG" disabled={exporting || loading} onClick={() => void download()}><Download size={17} /></button></div></header>
+        <section className="report-section report-chart"><header><h2>Transacciones por día</h2><div className="report-chart-actions"><button className="icon-button" title="Mes completo" aria-label="Mes completo" aria-pressed={data.from===calendarMonth(data.from).from&&data.to===calendarMonth(data.from).to} disabled={loading} onClick={()=>{setSelectedDays([]);setHoveredDay(null);setRange(calendarMonth(range.from||data.from));}}><CalendarRange size={17}/></button><button className="icon-button" title="Seleccionar todos los días mostrados" aria-label="Seleccionar todos los días mostrados" aria-pressed={points.length > 0 && points.every(point => tableDays.includes(point.day))} disabled={loading || !points.length} onClick={() => setSelectedDays(points.map(point => point.day))}><SquareCheckBig size={17} /></button><button className="icon-button" title="Exportar en PNG" aria-label="Exportar en PNG" disabled={exporting || loading} onClick={() => void download()}><Download size={17} /></button></div></header>
           <div className="report-range"><label>Desde<input type="date" aria-label="Gráfica desde" value={range.from || data.from} onChange={e => { setSelectedDays([]); setHoveredDay(null); setRange({ from: e.target.value, to: range.to || data.to }); }} /></label><label>Hasta<input type="date" aria-label="Gráfica hasta" value={range.to || data.to} onChange={e => { setSelectedDays([]); setHoveredDay(null); setRange({ from: range.from || data.from, to: e.target.value }); }} /></label><button className="icon-button" title="Semana actual" aria-label="Semana actual" onClick={() => { setSelectedDays([]); setHoveredDay(null); setRange({ from: '', to: '' }); }}><CalendarDays size={17} /></button>{filter && <button className="icon-button" title="Quitar filtro de cajero o sucursal" aria-label="Quitar filtro" onClick={() => setFilter(null)}><X size={17} /></button>}</div>
           <div className="report-chart-scroll"><div className="report-chart-surface" style={{ minWidth: Math.max(280, points.length * 14 + 50) }}>
           <canvas ref={canvas} className="report-selectable-chart" tabIndex={0}
@@ -273,11 +284,11 @@ export function AdminDashboard({ request }: { request: Request }) {
         </section>
       </div>
       <div className="report-bottom">
-        <section className="report-section report-bank-balances"><h2>Saldos bancarios</h2><div className="report-branch-tables">{[...branchBalances].map(([id, branch]) => <div key={id} className="report-branch-table"><h3>{branch.name}</h3><ReportTable headers={['Banco', 'C$', '$']} rows={branch.rows.map(row => ({ id: row.id, values: [row.entity, ...currencies.map(currency => ({ text: row.amounts[currency] == null ? '—' : money(row.amounts[currency]!, currency), content: <CurrencyAmount amount={row.amounts[currency]} currency={currency} /> }))] }))} /></div>)}{!branchBalances.size && <p className="report-empty">Sin cuentas activas</p>}</div></section>
-        <section className="report-section"><h2>Diferencias LAFISE</h2><ReportTable headers={['Sucursal', 'Cajero', 'C$', '$']} rows={[...lafise].map(([id, row]) => ({ id, values: [row.branch, row.cashier, money(row.nio, 'NIO'), money(row.usd, 'USD')] }))} /><footer>Total <strong>{money([...lafise.values()].reduce((sum, row) => sum + row.nio, 0), 'NIO')}</strong><strong>{money([...lafise.values()].reduce((sum, row) => sum + row.usd, 0), 'USD')}</strong></footer></section>
-        <section className="report-section report-reconciliation"><h2>Teledolar + PEX</h2><ReportTable headers={['Banco / Sucursal', 'Envíos e ingresos', 'Pagos y egresos', 'Total']} rows={settlements.map(row => ({ id: row.id, settlement: row, values: [{ text: `${row.entity} ${row.branch}`, content: <div className="report-bank-label"><strong>{row.entity}</strong><small>{row.branch}</small></div> }, settlementCell(row, 'income'), settlementCell(row, 'expense'), settlementCell(row, 'difference')] }))} footer={visible => {
+        <section className="report-section report-bank-balances"><h2>Saldos bancarios</h2><div className="report-branch-tables">{[...branchBalances].map(([id, branch]) => <div key={id} className="report-branch-table"><h3>{branch.name}</h3><ReportTable hiddenColumns={hiddenMoneyColumns(1,2)} headers={['Banco', 'C$', '$']} rows={branch.rows.map(row => ({ id: row.id, values: [row.entity, ...currencies.map(currency => ({ text: row.amounts[currency] == null ? '—' : money(row.amounts[currency]!, currency), content: <CurrencyAmount amount={row.amounts[currency]} currency={currency} /> }))] }))} /></div>)}{!branchBalances.size && <p className="report-empty">Sin cuentas activas</p>}</div></section>
+        <section className="report-section"><h2>Diferencias LAFISE</h2><ReportTable hiddenColumns={hiddenMoneyColumns(2,3)} headers={['Sucursal', 'Cajero', 'C$', '$']} rows={[...lafise].map(([id, row]) => ({ id, values: [row.branch, row.cashier, money(row.nio, 'NIO'), money(row.usd, 'USD')] }))} /><footer>Total {visibleCurrencies.map(currency=><strong key={currency}>{money([...lafise.values()].reduce((sum,row)=>sum+(currency==='NIO'?row.nio:row.usd),0),currency)}</strong>)}</footer></section>
+        <section className="report-section report-reconciliation"><h2>Teledolar + PEX</h2><ReportTable headers={['Banco / Sucursal', 'Envíos e ingresos', 'Pagos y egresos', 'Total']} rows={settlements.map(row => ({ id: row.id, settlement: row, values: [{ text: `${row.entity} ${row.branch}`, content: <div className="report-bank-label"><strong>{row.entity}</strong><small>{row.branch}</small></div> }, settlementCell(row, 'income',visibleCurrencies), settlementCell(row, 'expense',visibleCurrencies), settlementCell(row, 'difference',visibleCurrencies)] }))} footer={visible => {
           const total = reconciliationTotal(visible.map(row => row.settlement));
-          return <tr><td>TOTAL</td>{(['income', 'expense', 'difference'] as const).map(field => <td key={field}><ReconciliationAmounts row={total} field={field} /></td>)}</tr>;
+          return <tr><td>TOTAL</td>{(['income', 'expense', 'difference'] as const).map(field => <td key={field}><ReconciliationAmounts row={total} field={field} visibleCurrencies={visibleCurrencies} /></td>)}</tr>;
         }} /></section>
       </div>
     </>}

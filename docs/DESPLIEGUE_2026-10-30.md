@@ -1,6 +1,6 @@
 # Publicacion acumulada del 2026-10-30
 
-Zona horaria America/Managua. Usuario autoriza publicacion y confirma ausencia de usuarios operando TEMO. Estado de esta primera evidencia: migracion productiva aplicada; publicacion API/web y smoke tests pendientes.
+Zona horaria America/Managua. Usuario autoriza publicacion y confirma ausencia de usuarios operando TEMO. Estado intermedio: migracion productiva y API publicadas/verificadas; web pendiente.
 
 ## Preparacion
 
@@ -20,6 +20,10 @@ Zona horaria America/Managua. Usuario autoriza publicacion y confirma ausencia d
 - Preflight posterior aprobado: 55 migraciones sin faltantes/cambios, dos Administradores activos, tres roles operativos, sin identidades duplicadas ni perfiles activos no soportados. backend_hop_tls=false representa el salto interno del pooler; el transporte TLS del cliente esta verificado.
 
 ## Puertas restantes
+
+- API da7d01cfe1901280b31be951a32d27c7a6925641 confirmada por health publico con database=ok. Siete rutas protegidas rechazan anonimos con 401/no-store; CORS propio permitido y origen ajeno sin autorizacion. No se probaron credenciales ni se escribieron operaciones financieras.
+- Regresion completa final: 317 backend sin fallos ni omisiones, 34 frontend y doce recorridos de navegador aprobados. Los cambios de verificadores no alteran comportamiento de la API.
+- Titular confirma Compute Plan 0.5c-512mb y Node 22.23.4 en ambos servicios el 2026-10-30. No se modifica configuracion privada ni se solicita cambiar claves.
 
 - Publicar API primero, comprobar revision/health y despues web compatible. Confirmar assets exactos, CSP/CORS/no-store y rechazo de anonimos sin registrar operaciones de prueba reales.
 - Confirmacion de configuracion efectiva en Render por titular: Compute Plan 0.5c-512mb y Node 22.23.4. La prueba negativa de CA desde Render sigue pendiente; no se inventa una conexion de administracion que no existe.

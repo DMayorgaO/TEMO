@@ -92,7 +92,7 @@
 .app-shell--cash-workspace .topbar h1 { font-size: 19px; letter-spacing: 0; }
 .cash-workspace > .panel { gap: 5px; padding: 8px; }
 .cash-workspace .cash-count-header { gap: 8px; margin-bottom: 6px; padding: 0; }
-.cash-workspace .cash-count-title-row { flex: 1; grid-template-columns: minmax(95px,.7fr) 112px repeat(3,minmax(0,1fr)); gap: 6px; min-width: 0; }
+.cash-workspace .cash-count-title-row { flex: 1; grid-template-columns: minmax(185px,.7fr) 112px repeat(3,minmax(0,1fr)); gap: 6px; min-width: 0; }
 .cash-workspace .cash-count-title-row h2 { font-size: 14px; }
 .cash-workspace .cash-count-title-row p { font-size: 11px; }
 .cash-workspace .cash-rate-chip { font-size: 11px; min-width: 108px; padding: 4px 6px; }
@@ -2336,14 +2336,15 @@ td {
   align-items: center;
   background: #fff4c7;
   border: 1px solid #e4c75b;
-  display: flex;
-  gap: 14px;
-  justify-content: flex-end;
-  margin: 0 0 10px;
-  padding: 8px 12px;
-  position: sticky;
-  top: 0;
-  z-index: 8;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 6px;
+  margin: 0;
+  min-width: 0;
+  min-height: 36px;
+  box-sizing: border-box;
+  padding: 6px 8px;
+  border-radius: 4px;
 }
 
 .transaction-group-change-summary--receive {
@@ -2358,14 +2359,29 @@ td {
 
 .transaction-group-change-summary span {
   color: #66551c;
-  font-size: .75rem;
+  font-size: .68rem;
   font-weight: 700;
-  margin-right: auto;
 }
 
 .transaction-group-change-summary strong {
   color: #263238;
-  font-size: .85rem;
+  font-size: .76rem;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.transaction-modal-panel .modal-top > .modal-header {
+  display: grid;
+  grid-template-columns: minmax(150px, auto) minmax(0, 1fr) auto;
+}
+.transaction-modal-panel .modal-header__actions { grid-column: 3; }
+@media (max-width: 900px) {
+  .transaction-modal-panel .modal-top > .modal-header { grid-template-columns: minmax(0, 1fr) auto; }
+  .transaction-modal-panel .modal-header__actions { grid-column: 2; grid-row: 1; }
+  .transaction-modal-panel .transaction-group-change-summary { grid-column: 1 / -1; grid-row: 2; }
+}
+@media (max-width: 600px) {
+  .transaction-modal-panel .modal-header__actions { max-width: 190px; }
 }
 
 .transaction-cash-carousel {
@@ -3450,6 +3466,19 @@ tbody tr:hover td {
   width: min(100%, 980px);
 }
 
+.transfer-cancellation-modal { max-width: 540px; width: min(100%, 540px); }
+.transfer-cancellation-modal .form-field { grid-column: 1 / -1; }
+
+[data-money-filter="NIO"] [data-money-currency="USD"],
+[data-money-filter="USD"] [data-money-currency="NIO"] { display: none !important; }
+.cash-workspace[data-money-filter="NIO"] > .panel > .cash-workspace-balances > .consolidation-card--usd,
+.cash-workspace[data-money-filter="USD"] > .panel > .cash-workspace-balances > .consolidation-card--nio,
+.cash-workspace[data-money-filter="NIO"] > .panel > .cash-count-live-grid > .cash-count-right-column > .transaction-cash-card--usd,
+.cash-workspace[data-money-filter="USD"] > .panel > .cash-count-live-grid > .transaction-cash-card--nio { display: none; }
+.cash-workspace[data-money-filter="USD"] > .panel > .cash-count-live-grid { grid-template-columns: minmax(0,1fr); }
+.cash-workspace .cash-count-title-row .currency-filter__button { min-height: 24px; height: 24px; min-width: 28px; padding: 2px 5px; }
+.cash-workspace .cash-count-title-row .currency-filter { grid-template-columns: repeat(2,28px); min-height: 24px; width: max-content; }
+
 .modal-panel--wide {
   max-width: 1040px;
   width: min(100%, 1040px);
@@ -4017,6 +4046,29 @@ tbody tr:hover td {
 .directory-lookup tbody tr:hover {
   background: #eef7f6;
 }
+
+.directory-lookup__identity-holder {
+  color: var(--muted-text);
+  display: block;
+  font-size: 0.6875rem;
+  font-weight: 400;
+  line-height: 1.2;
+}
+
+.audit-capture-warning {
+  align-items: center;
+  background: #fff5df;
+  border-left: 3px solid #b7791f;
+  color: #76480f;
+  display: flex;
+  font-size: 0.8125rem;
+  gap: 8px;
+  margin: 8px 0;
+  padding: 8px 10px;
+}
+
+.audit-capture-warning svg { flex-shrink: 0; }
+.audit-capture-warning > span { min-width: 0; overflow-wrap: anywhere; }
 
 .directory-lookup > footer {
   color: var(--muted-text);

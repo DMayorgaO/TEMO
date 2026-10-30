@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { cashierCounts, filterCounts, selectDayRange, weekdayLabel } from '../src/components/admin-dashboard-data.ts';
+import { calendarMonth, cashierCounts, filterCounts, selectDayRange, weekdayLabel } from '../src/components/admin-dashboard-data.ts';
 
 const rows = [
   { day: '2026-10-25', branch_id: 'a', branch: 'Sucursal A', cashier_id: 'one', cashier: 'Uno', entity: 'BAC', nio: 2, usd: 3, total: 5 },
@@ -32,4 +32,8 @@ test('drag selection includes intermediate days in either direction including ze
 
 test('weekday labels use calendar date without local timezone shifts', () => {
   assert.deepEqual(['25', '26', '27', '28', '29', '30', '31'].map(day => weekdayLabel(`2026-10-${day}`)), ['dom', 'lun', 'mar', 'mie', 'jue', 'vie', 'sab']);
+});
+
+test('full-month range respects leap years, year boundaries and UTC calendar dates',()=>{
+  for(const [day,from,to]of [['2026-10-29','2026-10-01','2026-10-31'],['2028-02-29','2028-02-01','2028-02-29'],['2026-02-12','2026-02-01','2026-02-28'],['2026-12-31','2026-12-01','2026-12-31'],['0099-01-30','0099-01-01','0099-01-31']])assert.deepEqual(calendarMonth(day),{from,to});
 });

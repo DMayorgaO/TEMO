@@ -1,6 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { flushSync } from 'react-dom';
 import { ShiftHandovers } from '../components/ShiftHandovers';
+import { CurrencyFilter, currencyVisible } from '../components/CurrencyFilter';
+import { AuditCaptureStatus } from '../components/AuditCaptureStatus';
+import type { CurrencySelection } from '../components/CurrencyFilter';
 import { HandoverIdentity } from '../components/HandoverIdentity';
 import type { HandoverIdentityData } from '../components/HandoverIdentity';
 import { nioCentCoins } from '../utils/nio-cent-coins';
@@ -409,6 +412,7 @@ type CreatedTransactionBatch = {
 };
 
 type TransferApiRow = {
+  edit_version?: string;
   database_id: string; id: string; id_turno: string; fecha_transferencia: string;
   tipo: 'EFECTIVO' | 'CUENTA_BANCARIA'; direccion: 'ENTRA' | 'SALE'; moneda: CashCurrency;
   monto: string; descripcion: string; estado: 'ACTIVO' | 'INACTIVO'; id_cuenta: string | null; cuenta: string | null;
@@ -435,6 +439,7 @@ type DollarPurchaseApiRow = {
 type DirectoryIdentifier = { institution: string; type: string; number: string; currency: CashCurrency | null };
 type DirectoryIdentity = { number: string; holder: string };
 type DirectoryEntry = {
+  edit_version: string;
   database_id: string;
   id: string;
   name: string;
@@ -4761,6 +4766,7 @@ function ExchangeRateScreen() {
 }
 
 function CashCountScreen({ currentUser }: { currentUser: AuthUser }) {
+  const [currencyFilter,setCurrencyFilter]=useState<CurrencySelection>(null);
   const balanceFlush=useRef<()=>Promise<void>>(async()=>{});
   const closeRequestBusy=useRef(false);
   const [requestingClose,setRequestingClose]=useState(false);
@@ -4817,15 +4823,15 @@ function CashCountScreen({ currentUser }: { currentUser: AuthUser }) {
           setClosedShifts(shifts.filter(item => item.estado === 'CERRADO'));
           const targetId = selectedShiftId || openShifts[0]?.database_id || '';
           setSelectedShiftId(targetId);
-          return targetId ? apiRequest<ShiftDetail>(`/shifts/${targetId}`) : null;
+          // The selected-shift effect owns this request; do not fetch the same detail twice.
+          return targetId ? undefined : null;
         })
-      : apiRequest<ShiftDetail | null>('/shifts/current').then(async current=>{
-          const own=await apiRequest<ShiftDetail[]>('/shifts');
+      : Promise.all([apiRequest<ShiftDetail | null>('/shifts/current'),apiRequest<ShiftDetail[]>('/shifts')]).then(([current,own])=>{
           if(isMounted)setActiveShifts(own.filter(item=>['ABIERTO','PENDIENTE_APROBACION','EN_REVISION'].includes(item.estado)));
           return current;
         });
     request.then((currentShift) => {
-        if (!isMounted) {
+        if (!isMounted || currentShift === undefined) {
           return;
         }
         setShift(currentShift);
@@ -4833,7 +4839,7 @@ function CashCountScreen({ currentUser }: { currentUser: AuthUser }) {
         setPileDrafts(currentShift ? cashDraftFromShiftCounts(currentShift.estado === 'CERRADO' ? currentShift.cashCounts.CIERRE_CONTADO ?? currentShift.cashCounts.ACTUAL : currentShift.cashCounts.ACTUAL) : {});
         setIsLoaded(true);
       })
-      .catch((error) => setMessage(error instanceof Error ? error.message : 'No fue posible cargar el arqueo.'));
+      .catch((error) => { if (isMounted) setMessage(error instanceof Error ? error.message : 'No fue posible cargar el arqueo.'); });
     return () => {
       isMounted = false;
     };
@@ -4938,14 +4944,20 @@ function CashCountScreen({ currentUser }: { currentUser: AuthUser }) {
     window.location.hash = '/transacciones';
   }
 
+  if (!isLoaded) return <section className="screen-stack"><article className="panel" aria-busy={!message}>
+    <h2>Arqueo por denominacion</h2>
+    <p role={message?'alert':'status'}>{message || 'Cargando arqueo y saldos del turno...'}</p>
+  </article></section>;
+
   return (
-    <section className="screen-stack cash-workspace">
+    <section className="screen-stack cash-workspace" data-money-filter={currencyFilter||'ALL'}>
       <article className="panel">
         <div className="panel__header table-panel-header cash-count-header">
           <div className="cash-count-title-row">
             <div>
               <p>{shift?.estado === 'CERRADO' ? 'Solo lectura' : shift?.estado==='EN_REVISION'?'En revisión · Cierre administrativo pendiente':'Conteo fisico'}</p>
               <h2>Arqueo por denominacion</h2>
+              <CurrencyFilter value={currencyFilter} onChange={setCurrencyFilter}/>
             </div>
             <div className="cash-rate-chip" aria-label="Tasa de cambio global">
               <span>Tasa global USD</span>
@@ -4957,18 +4969,18 @@ function CashCountScreen({ currentUser }: { currentUser: AuthUser }) {
                 <span>Montos iniciales</span>
                 <small>{shift ? `${shift.sucursal} - ${shift.caja}` : 'Sin turno abierto'}</small>
               </div>
-              <strong>{formatCashCountMoney(parseMoneyValue(shift?.efectivo_inicial_nio), 'NIO')}</strong>
-              <strong>{formatCashCountMoney(parseMoneyValue(shift?.efectivo_inicial_usd), 'USD')}</strong>
+              <strong data-money-currency="NIO">{formatCashCountMoney(parseMoneyValue(shift?.efectivo_inicial_nio), 'NIO')}</strong>
+              <strong data-money-currency="USD">{formatCashCountMoney(parseMoneyValue(shift?.efectivo_inicial_usd), 'USD')}</strong>
             </div>
             <div className="cash-opening-chip cash-summary-chip cash-summary-chip--pending" aria-label="Pendientes del turno">
               <div><span>Pendientes</span><small>Fuera del efectivo</small></div>
-              <strong>{formatCashCountMoney(shift?.pendingCash?.NIO ?? 0, 'NIO')}</strong>
-              <strong>{formatCashCountMoney(shift?.pendingCash?.USD ?? 0, 'USD')}</strong>
+              <strong data-money-currency="NIO">{formatCashCountMoney(shift?.pendingCash?.NIO ?? 0, 'NIO')}</strong>
+              <strong data-money-currency="USD">{formatCashCountMoney(shift?.pendingCash?.USD ?? 0, 'USD')}</strong>
             </div>
             <div className="cash-opening-chip cash-summary-chip cash-summary-chip--expected" aria-label="Monto esperado del turno">
               <div><span>Monto esperado</span><small>Fondo consolidado</small></div>
-              <strong>{formatCashCountMoney(expectedGeneral.NIO, 'NIO')}</strong>
-              <strong>{formatCashCountMoney(expectedGeneral.USD, 'USD')}</strong>
+              <strong data-money-currency="NIO">{formatCashCountMoney(expectedGeneral.NIO, 'NIO')}</strong>
+              <strong data-money-currency="USD">{formatCashCountMoney(expectedGeneral.USD, 'USD')}</strong>
             </div>
           </div>
           <div className="action-row">
@@ -5040,9 +5052,9 @@ function CashCountScreen({ currentUser }: { currentUser: AuthUser }) {
             onPileFieldChange={updatePileField}
           />
           <div className="cash-count-adjustments">
-            <div><strong>Diferencia NIO</strong>{renderDifference(differenceNio, 'NIO', { positiveLabel: '' })}</div>
-            <div><strong>Diferencia USD</strong>{renderDifference(differenceUsd, 'USD', { positiveLabel: '' })}</div>
-            <label>
+            <div data-money-currency="NIO"><strong>Diferencia NIO</strong>{renderDifference(differenceNio, 'NIO', { positiveLabel: '' })}</div>
+            <div data-money-currency="USD"><strong>Diferencia USD</strong>{renderDifference(differenceUsd, 'USD', { positiveLabel: '' })}</div>
+            <label data-money-currency="NIO">
               <strong>Diferencia registrada</strong>
               <span className="cash-change-values">
                 <span className="cash-change-entry"><span>C$</span><input data-general-cash-change value={changeNio} inputMode="decimal" readOnly={isBoss||submitted||requestingClose||handoverOpen} onChange={(event) => {cashRevision.current++;setChangeNio(normalizeSignedAccountingMoneyRaw(event.target.value));}} /></span>
@@ -5246,6 +5258,7 @@ function PeriodFilterControl({ value, onChange, includeDates }: { value: PeriodF
 }
 
 function TransfersScreen({ currentUser }: { currentUser: AuthUser }) {
+  const [currencyFilter,setCurrencyFilter]=useState<CurrencySelection>(null);
   const isBoss = ['JEFA', 'TRANSFERISTA'].includes(currentUser.roleCode);
   const [rows, setRows] = useState<TransferApiRow[]>([]);
   const [context, setContext] = useState<TransferContext>({ shifts: [], accounts: [] });
@@ -5258,6 +5271,8 @@ function TransfersScreen({ currentUser }: { currentUser: AuthUser }) {
   const [pageSize, setPageSize] = useState(10);
   const [selected, setSelected] = useState<string | null>(null);
   const [modal, setModal] = useState<{ mode: ModalMode; row?: TransferApiRow } | null>(null);
+  const [voidRow, setVoidRow] = useState<TransferApiRow | null>(null);
+  const openingVoid=useRef(false);
   const [error, setError] = useState('');
   const [periodFilter, setPeriodFilter] = useState<PeriodFilter>(emptyPeriodFilter);
 
@@ -5270,10 +5285,11 @@ function TransfersScreen({ currentUser }: { currentUser: AuthUser }) {
   }
 
   useEffect(() => { void reload().catch((loadError) => setError(loadError instanceof Error ? loadError.message : 'No fue posible cargar las transferencias.')); }, [currentUser.id]);
-  useOperationalRefresh(reload, !modal);
+  useOperationalRefresh(reload, !modal && !voidRow);
 
   const filtered = useMemo(() => {
     const result = rows.filter((row) => {
+      if(!currencyVisible(currencyFilter,row.moneda))return false;
       if (!showInactive && row.estado !== 'ACTIVO') return false;
       const value = query.trim().toLowerCase();
       const matchesGeneral = !value || [row.id, row.tipo, row.direccion, row.moneda, row.monto, row.entidad, row.cuenta, row.cajero, row.sucursal].some((item) => String(item ?? '').toLowerCase().includes(value));
@@ -5288,7 +5304,7 @@ function TransfersScreen({ currentUser }: { currentUser: AuthUser }) {
       const comparison = firstValue < secondValue ? -1 : firstValue > secondValue ? 1 : 0;
       return sortDirection === 'asc' ? comparison : -comparison;
     });
-  }, [filters, periodFilter, query, rows, showInactive, sortDirection, sortKey]);
+  }, [currencyFilter, filters, periodFilter, query, rows, showInactive, sortDirection, sortKey]);
   const pages = Math.max(1, Math.ceil(filtered.length / pageSize));
   const pageRows = filtered.slice((page - 1) * pageSize, page * pageSize);
   const transferSummary = useMemo(() => {
@@ -5304,7 +5320,7 @@ function TransfersScreen({ currentUser }: { currentUser: AuthUser }) {
     }
     return summary;
   }, [filtered]);
-  useEffect(() => setPage(1), [filters, periodFilter, query, showInactive, pageSize]);
+  useEffect(() => setPage(1), [currencyFilter, filters, periodFilter, query, showInactive, pageSize]);
 
   function toggleSort(key: 'id' | 'fecha' | 'tipo' | 'banco' | 'monto' | 'operador') {
     if (sortKey === key) setSortDirection((current) => current === 'desc' ? 'asc' : 'desc');
@@ -5324,19 +5340,20 @@ function TransfersScreen({ currentUser }: { currentUser: AuthUser }) {
   }
 
   async function voidTransfer(row: TransferApiRow) {
-    const reason = window.prompt(`Motivo para anular ${row.id}:`);
-    if (!reason) return;
-    try {
-      await apiRequest(`/transfers/${row.database_id}/void`, { method: 'POST', body: JSON.stringify({ reason }) });
-      await reload();
-      announceOperationalDataChange();
-    } catch (voidError) { setError(voidError instanceof Error ? voidError.message : 'No fue posible anular la transferencia.'); }
+    if(openingVoid.current)return;
+    openingVoid.current=true;
+    try{
+      const latest=await apiRequest<TransferApiRow>(`/transfers/${row.database_id}`);
+      if(latest.estado!=='ACTIVO'){await reload();setError('La transferencia ya no esta activa. Revise el registro actualizado.');return;}
+      setVoidRow(latest);
+    }catch(cause){setError(cause instanceof Error?cause.message:'No fue posible abrir la transferencia.');}
+    finally{openingVoid.current=false;}
   }
 
   return (
     <section className="screen-stack"><article className="panel">
       <div className="panel__header table-panel-header"><div><p>Movimientos de efectivo y saldos bancarios por turno</p><h2>Transferencias registradas</h2></div>
-        <div className="action-row"><button type="button" className="primary-button" disabled={!context.shifts.length} onClick={() => setModal({ mode: 'create' })}><Plus size={17}/>Agregar</button></div>
+        <div className="action-row"><CurrencyFilter value={currencyFilter} onChange={setCurrencyFilter}/><button type="button" className="primary-button" disabled={!context.shifts.length} onClick={() => setModal({ mode: 'create' })}><Plus size={17}/>Agregar</button></div>
       </div>
       <div className="table-consolidation" aria-label="Consolidado de transferencias">
         {([
@@ -5346,8 +5363,8 @@ function TransfersScreen({ currentUser }: { currentUser: AuthUser }) {
           <section className={`table-consolidation__group table-consolidation__group--${key === 'EFECTIVO' ? 'cash' : 'digital'}`} key={key}>
             <header><SummaryIcon size={18}/><div><strong>{label}</strong><span>Transferencias activas</span></div></header>
             <div className="table-consolidation__metrics">
-              <div><span><ArrowDownLeft size={15}/>Ingresos</span><strong>{formatCashCountMoney(transferSummary[key].ENTRA.NIO, 'NIO')}</strong><strong>{formatCashCountMoney(transferSummary[key].ENTRA.USD, 'USD')}</strong></div>
-              <div><span><ArrowUpRight size={15}/>Egresos</span><strong>{formatCashCountMoney(transferSummary[key].SALE.NIO, 'NIO')}</strong><strong>{formatCashCountMoney(transferSummary[key].SALE.USD, 'USD')}</strong></div>
+              <div><span><ArrowDownLeft size={15}/>Ingresos</span>{currencyVisible(currencyFilter,'NIO')&&<strong>{formatCashCountMoney(transferSummary[key].ENTRA.NIO, 'NIO')}</strong>}{currencyVisible(currencyFilter,'USD')&&<strong>{formatCashCountMoney(transferSummary[key].ENTRA.USD, 'USD')}</strong>}</div>
+              <div><span><ArrowUpRight size={15}/>Egresos</span>{currencyVisible(currencyFilter,'NIO')&&<strong>{formatCashCountMoney(transferSummary[key].SALE.NIO, 'NIO')}</strong>}{currencyVisible(currencyFilter,'USD')&&<strong>{formatCashCountMoney(transferSummary[key].SALE.USD, 'USD')}</strong>}</div>
             </div>
           </section>
         ))}
@@ -5368,11 +5385,13 @@ function TransfersScreen({ currentUser }: { currentUser: AuthUser }) {
         </tr>)}</tbody></table></div>
       <div className="pagination-bar"><span>Mostrando {pageRows.length} de {filtered.length} registros</span><div className="action-row"><label className="page-size-control page-size-control--pagination">Registros<select name="transfer-page-size" value={pageSize} onChange={(event) => setPageSize(Number(event.target.value))}>{[10,20,30,50].map((size)=><option key={size}>{size}</option>)}</select></label><button className="icon-button" type="button" disabled={page===1} onClick={()=>setPage(1)}><ChevronsLeft size={17}/></button><button className="icon-button" type="button" disabled={page===1} onClick={()=>setPage((value)=>Math.max(1,value-1))}><ChevronLeft size={17}/></button><span>Pagina {page} de {pages}</span><button className="icon-button" type="button" disabled={page===pages} onClick={()=>setPage((value)=>Math.min(pages,value+1))}><ChevronRight size={17}/></button><button className="icon-button" type="button" disabled={page===pages} onClick={()=>setPage(pages)}><ChevronsRight size={17}/></button></div></div>
     </article>
-    {modal && <TransferModal mode={modal.mode} row={modal.row} context={context} isBoss={isBoss} onClose={()=>setModal(null)} onSaved={async()=>{setModal(null);await reload();announceOperationalDataChange()}} onEdit={modal.mode==='view'?()=>setModal({mode:'edit',row:modal.row}):undefined}/>} </section>
+    {modal && <TransferModal mode={modal.mode} row={modal.row} context={context} isBoss={isBoss} onClose={()=>setModal(null)} onSaved={async()=>{await reload();setModal(null);announceOperationalDataChange()}} onEdit={modal.mode==='view'?()=>setModal({mode:'edit',row:modal.row}):undefined}/>}
+    {voidRow && <TransferCancellationModal key={voidRow.database_id} row={voidRow} onClose={()=>setVoidRow(null)} onSaved={async()=>{await reload();setVoidRow(null);announceOperationalDataChange()}}/>} </section>
   );
 }
 
 function DollarPurchasesScreen({ currentUser }: { currentUser: AuthUser }) {
+  const [currencyFilter,setCurrencyFilter]=useState<CurrencySelection>(null);
   const [rows, setRows] = useState<DollarPurchaseApiRow[]>([]);
   const [query, setQuery] = useState('');
   const [filters, setFilters] = useState<Record<string, string>>({});
@@ -5427,11 +5446,11 @@ function DollarPurchasesScreen({ currentUser }: { currentUser: AuthUser }) {
   useEffect(() => setPage(1), [filters, pageSize, periodFilter, query]);
   useEffect(() => setPage((current) => Math.min(current, totalPages)), [totalPages]);
 
-  return <section className="screen-stack"><article className="panel">
-    <div className="panel__header table-panel-header"><div><p>{isBoss ? 'Dolares financiados con cordobas dentro de transacciones individuales o multiples' : 'Dolares comprados durante tu turno activo'}</p><h2>Compras de dolares registradas</h2></div></div>
+  return <section className="screen-stack" data-money-filter={currencyFilter||'ALL'}><article className="panel">
+    <div className="panel__header table-panel-header"><div><p>{isBoss ? 'Dolares financiados con cordobas dentro de transacciones individuales o multiples' : 'Dolares comprados durante tu turno activo'}</p><h2>Compras de dolares registradas</h2></div><CurrencyFilter value={currencyFilter} onChange={setCurrencyFilter}/></div>
     <div className="table-consolidation dollar-purchase-summary" aria-label="Consolidado de compras de dolares">
-      <section className="table-consolidation__group table-consolidation__group--digital"><header><Coins size={18}/><div><strong>Dolares comprados</strong><span>{filtered.length} transacciones</span></div></header><div className="table-consolidation__totals"><strong>{formatCashCountMoney(totals.usd, 'USD')}</strong></div></section>
-      <section className="table-consolidation__group table-consolidation__group--income"><header><Scale size={18}/><div><strong>Diferencia acumulada</strong><span>Diferencial compra / venta</span></div></header><div className="table-consolidation__totals"><strong>{formatCashCountMoney(totals.nio, 'NIO')}</strong><strong>{formatCashCountMoney(totals.nio / 36.4, 'USD')}</strong></div></section>
+      <section data-money-currency="USD" className="table-consolidation__group table-consolidation__group--digital"><header><Coins size={18}/><div><strong>Dolares comprados</strong><span>{filtered.length} transacciones</span></div></header><div className="table-consolidation__totals"><strong>{formatCashCountMoney(totals.usd, 'USD')}</strong></div></section>
+      <section className="table-consolidation__group table-consolidation__group--income"><header><Scale size={18}/><div><strong>Diferencia acumulada</strong><span>Diferencial compra / venta</span></div></header><div className="table-consolidation__totals"><strong data-money-currency="NIO">{formatCashCountMoney(totals.nio, 'NIO')}</strong><strong data-money-currency="USD">{formatCashCountMoney(totals.nio / 36.4, 'USD')}</strong></div></section>
     </div>
     {isBoss && <PeriodFilterControl value={periodFilter} onChange={setPeriodFilter} includeDates />}
     <div className="table-toolbar"><label className="search-box"><Search size={17}/><input name="dollar-purchase-search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder={isBoss ? 'Buscar por ID, cajero o sucursal' : 'Buscar por ID o monto'}/></label></div>
@@ -5440,16 +5459,16 @@ function DollarPurchasesScreen({ currentUser }: { currentUser: AuthUser }) {
       <th className="number-column"><div className="th-stack"><span>N°</span></div></th>
       <th><div className="th-stack"><span>ID</span><input name="dollar-purchase-filter-id" value={filters.id ?? ''} onChange={(event)=>setFilters((current)=>({...current,id:event.target.value}))} placeholder="Filtrar"/></div></th>
       <th><div className="th-stack"><button type="button" className="th-sort-button" onClick={() => setSortDirection((current) => current === 'desc' ? 'asc' : 'desc')}>FECHA Y HORA{sortDirection === 'desc' ? <ArrowUpZA size={14}/> : <ArrowDownAZ size={14}/>}</button><input name="dollar-purchase-filter-fecha" value={filters.fecha ?? ''} onChange={(event)=>setFilters((current)=>({...current,fecha:event.target.value}))} placeholder="Filtrar"/></div></th>
-      <th><div className="th-stack"><span>MONTO</span><input name="dollar-purchase-filter-monto" value={filters.monto ?? ''} onChange={(event)=>setFilters((current)=>({...current,monto:event.target.value}))} placeholder="Filtrar"/></div></th>
-      <th><div className="th-stack"><span>DIFERENCIA</span><input name="dollar-purchase-filter-diferencia" value={filters.diferencia ?? ''} onChange={(event)=>setFilters((current)=>({...current,diferencia:event.target.value}))} placeholder="Filtrar"/></div></th>
+      <th data-money-currency="USD"><div className="th-stack"><span>MONTO</span><input name="dollar-purchase-filter-monto" value={filters.monto ?? ''} onChange={(event)=>setFilters((current)=>({...current,monto:event.target.value}))} placeholder="Filtrar"/></div></th>
+      <th data-money-currency="NIO"><div className="th-stack"><span>DIFERENCIA</span><input name="dollar-purchase-filter-diferencia" value={filters.diferencia ?? ''} onChange={(event)=>setFilters((current)=>({...current,diferencia:event.target.value}))} placeholder="Filtrar"/></div></th>
       {isBoss && <th><div className="th-stack"><span>CAJERO / SUCURSAL</span><input name="dollar-purchase-filter-operador" value={filters.operador ?? ''} onChange={(event)=>setFilters((current)=>({...current,operador:event.target.value}))} placeholder="Filtrar"/></div></th>}
     </tr></thead><tbody>
       {pageRows.map((row, index) => <tr key={row.database_id}>
         <td className="number-column">{filtered.length - ((page - 1) * pageSize + index)}</td>
         <td><strong>{row.id}</strong></td>
         <td className="multi-line-cell">{formatTransferDate(row.fecha_transaccion)}</td>
-        <td><span className="transaction-amount transaction-amount--in">{formatCashCountMoney(Number(row.monto_comprado_usd), 'USD')}</span></td>
-        <td><strong>{formatCashCountMoney(Number(row.diferencia_nio), 'NIO')}</strong></td>
+        <td data-money-currency="USD"><span className="transaction-amount transaction-amount--in">{formatCashCountMoney(Number(row.monto_comprado_usd), 'USD')}</span></td>
+        <td data-money-currency="NIO"><strong>{formatCashCountMoney(Number(row.diferencia_nio), 'NIO')}</strong></td>
         {isBoss && <td className="multi-line-cell transaction-operator-cell"><strong>{row.cajero}</strong><small>{row.sucursal}</small></td>}
       </tr>)}
       {!pageRows.length && <tr><td colSpan={isBoss ? 6 : 5} className="empty-table-cell">No hay compras de dolares para mostrar.</td></tr>}
@@ -5488,6 +5507,29 @@ function formatTransferDate(value: string) {
   const displayHour = hour % 12 || 12;
   const period = hour < 12 ? 'am' : 'pm';
   return <><span>{new Intl.DateTimeFormat('es-NI',{day:'2-digit',month:'2-digit',year:'numeric'}).format(date)}</span><small>{String(displayHour).padStart(2, '0')}:{String(date.getMinutes()).padStart(2, '0')} {period}</small></>;
+}
+
+function TransferCancellationModal({row,onClose,onSaved}:{row:TransferApiRow;onClose:()=>void;onSaved:()=>Promise<void>}) {
+  const [requestId]=useState(createFinancialRequestId);
+  const [reason,setReason]=useState('');
+  const [saving,setSaving]=useState(false);
+  const [error,setError]=useState('');
+  const submitting=useRef(false);
+  async function submit(event:FormEvent){
+    event.preventDefault();if(submitting.current)return;
+    submitting.current=true;setSaving(true);setError('');
+    try{
+      await apiRequest(`/transfers/${row.database_id}/void`,{method:'POST',body:JSON.stringify({requestId,reason:reason.trim(),expectedVersion:requireEditVersion(row.edit_version)})});
+      await onSaved();
+    }catch(cause){setError(cause instanceof Error?cause.message:'No fue posible anular la transferencia.');}
+    finally{submitting.current=false;setSaving(false);}
+  }
+  return <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label="Anular transferencia"><form className="modal-panel transfer-cancellation-modal" onSubmit={submit}>
+    <div className="modal-header"><div><p>{row.id} · {row.cajero}</p><h2>Anular transferencia</h2></div><strong className="modal-context-amount">{formatCashCountMoney(Number(row.monto),row.moneda)}</strong><button className="icon-button close-button" type="button" aria-label="Cerrar" disabled={saving} onClick={onClose}><X size={18}/></button></div>
+    <div className="transfer-form-grid"><div className="form-field transfer-form-description"><label htmlFor="transfer-cancellation-reason">Motivo de anulacion</label><textarea id="transfer-cancellation-reason" value={reason} onChange={event=>setReason(event.target.value)} required minLength={3} maxLength={500} disabled={saving}/></div></div>
+    {error&&<p className="login-error" role="alert">{error}</p>}
+    <div className="modal-actions"><button className="secondary-button" type="button" disabled={saving} onClick={onClose}><X size={17}/>Cancelar</button><button className="secondary-button danger-button" type="submit" disabled={saving||reason.trim().length<3}><Ban size={17}/>{saving?'Anulando...':'Anular transferencia'}</button></div>
+  </form></div>;
 }
 
 function TransferModal({ mode, row, context, isBoss, onClose, onSaved, onEdit }: { mode: ModalMode; row?: TransferApiRow; context: TransferContext; isBoss:boolean; onClose:()=>void; onSaved:()=>Promise<void>; onEdit?:()=>void }) {
@@ -5530,7 +5572,7 @@ function TransferModal({ mode, row, context, isBoss, onClose, onSaved, onEdit }:
   async function save(event:FormEvent){
     event.preventDefault();if(submitting.current)return;submitting.current=true;setSaving(true);setError('');
     try{
-      const payload={requestId:row?undefined:requestId,shiftId,type,direction,currency,accountId:type==='DIGITAL'?accountId:null,
+      const payload={requestId,expectedVersion:row?requireEditVersion(row.edit_version):undefined,shiftId,type,direction,currency,accountId:type==='DIGITAL'?accountId:null,
         amount:type==='EFECTIVO'?cashTotal:parseMoneyValue(amount),description,
         cashLines:type==='EFECTIVO'?cashDenominations[currency].map(item=>({denomination:item.value,piles25:Number(piles[item.id]?.groups)||0,loose:Number(piles[item.id]?.loose)||0})):[]};
       await apiRequest(row?`/transfers/${row.database_id}`:'/transfers',{method:row?'PUT':'POST',body:JSON.stringify(payload)});
@@ -5620,7 +5662,7 @@ function DirectoryScreen({ currentUser }: { currentUser: AuthUser }) {
     if (!await requestSystemConfirm(`El destinatario "${row.name}" se conservara en el sistema con estado inactivo.`, { title:'Anular destinatario', confirmLabel:'Anular', tone:'danger' })) return;
     try {
       setError('');
-      await apiRequest(`/directory/${row.database_id}`, { method:'PUT', body:JSON.stringify({ name:row.name, status:'INACTIVO', observations:row.observations, identifiers:row.identifiers, identities:row.identities, references:row.references }) });
+      await apiRequest(`/directory/${row.database_id}`, { method:'PUT', body:JSON.stringify({ name:row.name, status:'INACTIVO', observations:row.observations, identifiers:row.identifiers, identities:row.identities, references:row.references, expectedVersion:row.edit_version }) });
       await reload();
       announceOperationalDataChange();
     } catch (annulError) {
@@ -5668,7 +5710,7 @@ function DirectoryModal({ mode, row, onClose, onEdit, onSaved }: { mode: ModalMo
 
   function updateIdentifier(index:number, patch:Partial<DirectoryIdentifier>){setIdentifiers((current)=>current.map((item,itemIndex)=>itemIndex===index?{...item,...patch}:item));}
   function normalizeIdentityInput(value:string){const compact=value.replace(/[^0-9A-Za-z]/g,'').toUpperCase().slice(0,14);return [compact.slice(0,3),compact.slice(3,9),compact.slice(9)].filter(Boolean).join('-');}
-  async function save(event:FormEvent){event.preventDefault();setSaving(true);setError('');try{const payload={name:name.toUpperCase(),status,observations:observations.toUpperCase(),identifiers:identifiers.filter((item)=>item.number.trim()&&item.type.trim()).map((item)=>({...item,institution:item.institution.toUpperCase(),type:item.type.toUpperCase(),number:item.number.toUpperCase()})),identities:identities.filter((item)=>item.number.trim()).map((item)=>({...item,number:item.number.toUpperCase(),holder:item.holder.toUpperCase()})),references:references.filter((item)=>item.trim()).map((item)=>item.toUpperCase())};await apiRequest(row?`/directory/${row.database_id}`:'/directory',{method:row?'PUT':'POST',body:JSON.stringify(payload)});await onSaved();}catch(saveError){setError(saveError instanceof Error?saveError.message:'No fue posible guardar el registro.');}finally{setSaving(false)}}
+  async function save(event:FormEvent){event.preventDefault();if(saving)return;setSaving(true);setError('');try{const payload={name:name.toUpperCase(),status,observations:observations.toUpperCase(),identifiers:identifiers.filter((item)=>item.number.trim()&&item.type.trim()).map((item)=>({...item,institution:item.institution.toUpperCase(),type:item.type.toUpperCase(),number:item.number.toUpperCase()})),identities:identities.filter((item)=>item.number.trim()).map((item)=>({...item,number:item.number.toUpperCase(),holder:item.holder.toUpperCase()})),references:references.filter((item)=>item.trim()).map((item)=>item.toUpperCase()),...(row?{expectedVersion:row.edit_version}:{})};await apiRequest(row?`/directory/${row.database_id}`:'/directory',{method:row?'PUT':'POST',body:JSON.stringify(payload)});await onSaved();}catch(saveError){setError(saveError instanceof Error?saveError.message:'No fue posible guardar el registro.');}finally{setSaving(false)}}
 
   return <div className="modal-backdrop" role="dialog" aria-modal="true"><form className="modal-panel directory-modal" onSubmit={save} ref={modalRef}>
     <div className="modal-header"><div><p>{mode==='create'?'Nuevo registro':readOnly?'Vista de registro':'Editar registro'}</p><h2>Destinatario frecuente</h2></div><button type="button" className="icon-button icon-button--danger" onClick={onClose}><X size={18}/></button></div>
@@ -5688,10 +5730,11 @@ function DirectoryLookup({ onClose }: { onClose:()=>void }) {
   const matches=useMemo(()=>{const term=normalizeLookupValue(query);return rows.filter((row)=>row.status==='ACTIVO'&&(!term||directorySearchText(row).includes(term))).slice(0,30);},[query,rows]);
   function startDrag(event:ReactPointerEvent<HTMLElement>){if((event.target as HTMLElement).closest('button,input'))return;drag.current={x:event.clientX,y:event.clientY,left:position.x,top:position.y};event.currentTarget.setPointerCapture(event.pointerId);}
   function moveDrag(event:ReactPointerEvent<HTMLElement>){if(!drag.current)return;setPosition({x:Math.max(8,Math.min(window.innerWidth-320,drag.current.left+event.clientX-drag.current.x)),y:Math.max(8,Math.min(window.innerHeight-120,drag.current.top+event.clientY-drag.current.y))});}
-  return <section className="directory-lookup" style={{left:position.x,top:position.y}} role="dialog" aria-label="Directorio de destinatarios"><header onPointerDown={startDrag} onPointerMove={moveDrag} onPointerUp={()=>{drag.current=null}}><div><BookUser size={18}/><strong>Directorio</strong></div><button type="button" className="icon-button icon-button--danger" onClick={onClose}><X size={16}/></button></header><label className="search-box"><Search size={16}/><input autoFocus value={query} onChange={(event)=>setQuery(event.target.value)} placeholder="Nombre, cuenta, cedula o referencia"/></label>{error&&<p className="login-error">{error}</p>}<div className="directory-lookup__table"><table><thead><tr><th>Nombre</th><th>Tipo</th><th>Numero</th><th>Cedula / Ref.</th></tr></thead><tbody>{matches.map((row)=><tr key={row.database_id}><td><strong>{row.name}</strong></td><td className="directory-identifiers-cell directory-identifiers-cell--lookup" colSpan={2}><div className="directory-identifier-list">{row.identifiers.length ? row.identifiers.map((item,index)=><div className="directory-identifier-row directory-identifier-row--lookup" key={`${item.type}-${item.number}-${index}`}><span>{item.institution ? `${item.institution} · `:''}{item.type}</span><span className="directory-number">{item.number}{item.currency ? ` · ${item.currency}`:''}</span></div>) : <span>---</span>}</div></td><td className="directory-lines">{row.identities.map((item,index)=><span key={`i-${index}`}>{item.number}</span>)}{row.references.map((item,index)=><span key={`r-${index}`}>Ref. {item}</span>)}</td></tr>)}{!matches.length&&<tr><td colSpan={4} className="empty-table-cell">Sin coincidencias.</td></tr>}</tbody></table></div><footer>Mostrando {matches.length} de {rows.filter((row)=>row.status==='ACTIVO').length}</footer></section>;
+  return <section className="directory-lookup" style={{left:position.x,top:position.y}} role="dialog" aria-label="Directorio de destinatarios"><header onPointerDown={startDrag} onPointerMove={moveDrag} onPointerUp={()=>{drag.current=null}}><div><BookUser size={18}/><strong>Directorio</strong></div><button type="button" className="icon-button icon-button--danger" onClick={onClose}><X size={16}/></button></header><label className="search-box"><Search size={16}/><input autoFocus value={query} onChange={(event)=>setQuery(event.target.value)} placeholder="Nombre, cuenta, cedula o referencia"/></label>{error&&<p className="login-error">{error}</p>}<div className="directory-lookup__table"><table><thead><tr><th>Nombre</th><th>Tipo</th><th>Numero</th><th>Cedula / Ref.</th></tr></thead><tbody>{matches.map((row)=><tr key={row.database_id}><td><strong>{row.name}</strong></td><td className="directory-identifiers-cell directory-identifiers-cell--lookup" colSpan={2}><div className="directory-identifier-list">{row.identifiers.length ? row.identifiers.map((item,index)=><div className="directory-identifier-row directory-identifier-row--lookup" key={`${item.type}-${item.number}-${index}`}><span>{item.institution ? `${item.institution} · `:''}{item.type}</span><span className="directory-number">{item.number}{item.currency ? ` · ${item.currency}`:''}</span></div>) : <span>---</span>}</div></td><td className="directory-lines">{row.identities.map((item,index)=><span key={`i-${index}`}>{item.number}{item.holder?.trim()&&<small className="directory-lookup__identity-holder">{item.holder.trim()}</small>}</span>)}{row.references.map((item,index)=><span key={`r-${index}`}>Ref. {item}</span>)}</td></tr>)}{!matches.length&&<tr><td colSpan={4} className="empty-table-cell">Sin coincidencias.</td></tr>}</tbody></table></div><footer>Mostrando {matches.length} de {rows.filter((row)=>row.status==='ACTIVO').length}</footer></section>;
 }
 
 function PendingScreen({ currentUser }: { currentUser: AuthUser }) {
+  const [currencyFilter,setCurrencyFilter]=useState<CurrencySelection>(null);
   const [submissionLocked,setSubmissionLocked]=useState(false);
   const paymentSubmitting=useRef(false);
   const [rows, setRows] = useState<PendingApiRow[]>([]);
@@ -5784,6 +5827,7 @@ function PendingScreen({ currentUser }: { currentUser: AuthUser }) {
   const processedRows = useMemo(() => {
     const normalizedQuery = normalizeLookupValue(query);
     const filtered = rows.filter((row) => {
+      if(!currencyVisible(currencyFilter,row.moneda))return false;
       if (!showPaid && ['PAGADO', 'CANCELADO'].includes(row.estado)) {
         return false;
       }
@@ -5808,7 +5852,7 @@ function PendingScreen({ currentUser }: { currentUser: AuthUser }) {
       const comparison = firstValue.localeCompare(secondValue, 'es', { numeric: true });
       return sortDirection === 'asc' ? comparison : -comparison;
     });
-  }, [columns, filters, isBoss, periodFilter, query, rows, showPaid, sortDirection, sortKey]);
+  }, [currencyFilter, columns, filters, isBoss, periodFilter, query, rows, showPaid, sortDirection, sortKey]);
 
   const totalPages = Math.max(1, Math.ceil(processedRows.length / pageSize));
   const pageRows = processedRows.slice((page - 1) * pageSize, page * pageSize);
@@ -5828,7 +5872,7 @@ function PendingScreen({ currentUser }: { currentUser: AuthUser }) {
 
   useEffect(() => {
     setPage(1);
-  }, [filters, pageSize, periodFilter, query, showPaid]);
+  }, [currencyFilter, filters, pageSize, periodFilter, query, showPaid]);
 
   useEffect(() => {
     if (page > totalPages) {
@@ -6165,6 +6209,7 @@ function PendingScreen({ currentUser }: { currentUser: AuthUser }) {
             <p>Cuentas por cobrar y por pagar</p>
             <h2>Pendientes</h2>
           </div>
+          <CurrencyFilter value={currencyFilter} onChange={value=>{setCurrencyFilter(value);setSelectedPendingIds([]);}}/>
         </div>
 
         <div className="table-consolidation table-consolidation--pending" aria-label="Consolidado y acciones de pendientes">
@@ -6175,8 +6220,8 @@ function PendingScreen({ currentUser }: { currentUser: AuthUser }) {
             <section className={`table-consolidation__group table-consolidation__group--${key === 'POR_COBRAR' ? 'income' : 'expense'}`} key={key}>
               <header><SummaryIcon size={18}/><div><strong>{label}</strong><span>{pendingSummary[key].count} pendientes abiertos</span></div></header>
               <div className="table-consolidation__totals">
-                <strong>{formatCashCountMoney(pendingSummary[key].NIO, 'NIO')}</strong>
-                <strong>{formatCashCountMoney(pendingSummary[key].USD, 'USD')}</strong>
+                {currencyVisible(currencyFilter,'NIO')&&<strong>{formatCashCountMoney(pendingSummary[key].NIO, 'NIO')}</strong>}
+                {currencyVisible(currencyFilter,'USD')&&<strong>{formatCashCountMoney(pendingSummary[key].USD, 'USD')}</strong>}
               </div>
             </section>
           ))}
@@ -6512,6 +6557,7 @@ function ShiftConsolidation({ shift, onSaved, flushRef,locked=false }: { shift: 
 }
 
 function GeneralConsolidationScreen() {
+  const [currencyFilter,setCurrencyFilter]=useState<CurrencySelection>(null);
   const authenticatedUser = readAuthenticatedUser();
   const isCashier = authenticatedUser?.roleCode === 'CAJERO';
   const [currentShiftLoaded, setCurrentShiftLoaded] = useState(false);
@@ -6776,6 +6822,7 @@ function GeneralConsolidationScreen() {
             <p>Conciliacion por entidad</p>
             <h2>Consolidado de montos generales</h2>
           </div>
+          <CurrencyFilter value={currencyFilter} onChange={setCurrencyFilter}/>
           {!isCashier && <div className="consolidation-shift-groups">
             <label className="consolidation-shift-selector">
               Turnos abiertos
@@ -6809,7 +6856,7 @@ function GeneralConsolidationScreen() {
 
         {selectedShift ? (
           <div className="consolidation-stack">
-            <ConsolidationTable
+            {currencyVisible(currencyFilter,'NIO')&&<ConsolidationTable
               balances={balances}
               currency="NIO"
               entities={nioEntities}
@@ -6819,8 +6866,8 @@ function GeneralConsolidationScreen() {
               onMoneyInputKeyDown={handleMoneyInputKeyDown}
               onMoneyInputPaste={handleMoneyInputPaste}
               onBalanceChange={updateBalance}
-            />
-            <ConsolidationTable
+            />}
+            {currencyVisible(currencyFilter,'USD')&&<ConsolidationTable
               balances={balances}
               currency="USD"
               entities={usdEntities}
@@ -6830,7 +6877,7 @@ function GeneralConsolidationScreen() {
               onMoneyInputKeyDown={handleMoneyInputKeyDown}
               onMoneyInputPaste={handleMoneyInputPaste}
               onBalanceChange={updateBalance}
-            />
+            />}
           </div>
         ) : (
           <div className="empty-state">No hay turnos disponibles para mostrar saldos.</div>
@@ -7369,6 +7416,7 @@ function ShiftTable({
   config: CrudConfig;
   onOpenShiftClose: (shiftId: string) => Promise<void>;
 }) {
+  const [currencyFilter,setCurrencyFilter]=useState<CurrencySelection>(null);
   const [rows, setRows] = usePersistentRows(config.storageKey, config.rows);
   const [query, setQuery] = useState('');
   const [showInactive, setShowInactive] = useState(false);
@@ -7423,7 +7471,11 @@ function ShiftTable({
   );
 
   const columns = useMemo(() => getVisibleColumns(config), [config]);
-  const normalizedRows = useMemo(() => rows.map(normalizeShiftRow), [rows]);
+  const normalizedRows = useMemo(() => rows.map(row=>{
+    const normalized=normalizeShiftRow(row);
+    return currencyFilter?{...normalized,openingCash:formatCurrencyValue(normalized[currencyFilter==='NIO'?'openingNio':'openingUsd'],currencyFilter),
+      closingCash:normalized.closingCash?formatCurrencyValue(normalized[currencyFilter==='NIO'?'closingNio':'closingUsd'],currencyFilter):''}:normalized;
+  }), [rows,currencyFilter]);
 
   const processedRows = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase();
@@ -7652,6 +7704,7 @@ function ShiftTable({
             <h2>{config.title}</h2>
           </div>
           <div className="action-row">
+            <CurrencyFilter value={currencyFilter} onChange={value=>{setCurrencyFilter(value);setPage(1);}}/>
             <button type="button" className="secondary-button export-button export-button--excel" title="Exportar Excel" aria-label="Exportar Excel" onClick={() => void exportExcel(config, columns, processedRows)}>
               <FileSpreadsheet size={17} />
             </button>
@@ -8603,6 +8656,8 @@ function TransactionTable({ config, currentUser }: { config: CrudConfig; current
   const [showDigitalCalculator, setShowDigitalCalculator] = useState(false);
   const [showDirectoryLookup, setShowDirectoryLookup] = useState(false);
   const [isSavingTransactions, setIsSavingTransactions] = useState(false);
+  const [transactionsLoading, setTransactionsLoading] = useState(true);
+  const [transactionsLoadError, setTransactionsLoadError] = useState('');
   const batchRequestId=useRef('');
   const batchSubmitting=useRef(false);
   const voidRequestIds=useRef(new Map<string,{requestId:string;expectedVersion:string}>());
@@ -8638,21 +8693,25 @@ function TransactionTable({ config, currentUser }: { config: CrudConfig; current
   useEffect(() => {
     let cancelled = false;
     setRows([]);
+    setTransactionsLoading(true);
+    setTransactionsLoadError('');
+    void loadAllTransactions().then(databaseRows => {
+      if (!cancelled) setRows(databaseRows.map(mapApiTransactionRow));
+    }).catch(() => {
+      if (!cancelled) setTransactionsLoadError('No fue posible cargar las transacciones. Vuelva a abrir esta pantalla para reintentar.');
+    }).finally(() => { if (!cancelled) setTransactionsLoading(false); });
     Promise.all([
-      loadAllTransactions(),
       apiRequest<ShiftDetail | null>(transactionShiftPath),
       currentUser.roleCode==='CAJERO'?apiRequest<ShiftDetail[]>('/shifts'):Promise.resolve([]),
     ])
-      .then(([databaseRows, shift,shifts]) => {
+      .then(([shift,shifts]) => {
         if (!cancelled) {
-          setRows(databaseRows.map(mapApiTransactionRow));
           setCurrentShift(shift);
           setTransactionShifts(shifts.filter(item=>['ABIERTO','PENDIENTE_APROBACION','EN_REVISION'].includes(item.estado)));
         }
       })
       .catch(() => {
         if (!cancelled) {
-          setRows([]);
           setCurrentShift(null);
         }
       });
@@ -8668,8 +8727,9 @@ function TransactionTable({ config, currentUser }: { config: CrudConfig; current
     ]);
     if(transactionShiftSelection.current!==transactionShiftId)return;
     setRows(databaseRows.map(mapApiTransactionRow));
+    setTransactionsLoadError('');
     setCurrentShift(shift);
-  }, !modal && !isSavingTransactions);
+  }, !modal && !isSavingTransactions && !transactionsLoading);
 
   // Mantiene las guias de saldo y efectivo al dia sin cerrar el formulario ni
   // reemplazar los borradores que el cajero esta digitando.
@@ -9039,24 +9099,7 @@ function TransactionTable({ config, currentUser }: { config: CrudConfig; current
               <Calculator size={17} />
               Calculadora
             </button>
-            <div className="currency-filter currency-filter--header" aria-label="Filtrar por moneda">
-              <button
-                type="button"
-                className={`currency-filter__button currency-filter__button--nio ${currencyFilter === 'NIO' ? 'currency-filter__button--active' : ''}`}
-                onClick={() => setCurrencyFilter((current) => (current === 'NIO' ? null : 'NIO'))}
-                title="Filtrar transacciones en cordobas"
-              >
-                C$
-              </button>
-              <button
-                type="button"
-                className={`currency-filter__button currency-filter__button--usd ${currencyFilter === 'USD' ? 'currency-filter__button--active' : ''}`}
-                onClick={() => setCurrencyFilter((current) => (current === 'USD' ? null : 'USD'))}
-                title="Filtrar transacciones en dolares"
-              >
-                $
-              </button>
-            </div>
+            <CurrencyFilter value={currencyFilter} onChange={setCurrencyFilter}/>
             <button
               type="button"
               className="secondary-button"
@@ -9099,6 +9142,8 @@ function TransactionTable({ config, currentUser }: { config: CrudConfig; current
         </div>
 
         <PeriodFilterControl value={periodFilter} onChange={setPeriodFilter} includeDates={isBoss} />
+        {transactionsLoading && <p role="status">Cargando transacciones...</p>}
+        {transactionsLoadError && <p className="transaction-save-error" role="alert">{transactionsLoadError}</p>}
         {transactionSaveError && !modal && <p className="transaction-save-error" role="alert">{transactionSaveError}</p>}
         <div className="table-toolbar">
           <label className="search-box">
@@ -9898,6 +9943,18 @@ function TransactionModal({
             <p>{mode === 'create' ? 'Nuevo registro' : mode === 'edit' ? 'Editar registro' : mode === 'pay' ? 'Pago de pendiente' : 'Consulta de registro'}</p>
             <h2>{isReadOnly ? 'Detalle de transaccion' : isPayment ? 'Liquidar pendiente' : 'Registro de transaccion'}</h2>
           </div>
+          {draft.digitalSettlement !== '1' && <div
+            className={`transaction-group-change-summary transaction-group-change-summary--${customerBalanceTone}`}
+            role="status"
+            aria-live="polite"
+            aria-atomic="true"
+            aria-label={customerBalanceLabel}
+            title={customerBalanceLabel}
+          >
+            <span>{customerBalanceTone === 'deliver' ? 'Pendiente por entregar' : customerBalanceTone === 'receive' ? 'Pendiente por recibir' : 'Cuenta equilibrada'}</span>
+            <strong>{formatCashCountMoney(Math.abs(totalGroupBalanceNio), 'NIO')}</strong>
+            <strong>{formatCashCountMoney(Math.abs(totalGroupBalanceUsd), 'USD')}</strong>
+          </div>}
           <div className="modal-header__actions">
             {!isReadOnly && (
               <>
@@ -10157,14 +10214,6 @@ function TransactionModal({
             </fieldset>
           )}
           {draft.digitalSettlement !== '1' && <div className="transaction-cash-count-section">
-            <div
-              className={`transaction-group-change-summary transaction-group-change-summary--${customerBalanceTone}`}
-              aria-label={customerBalanceLabel}
-            >
-              <span>{customerBalanceLabel}</span>
-              <strong>{formatCashCountMoney(Math.abs(totalGroupBalanceNio), 'NIO')}</strong>
-              <strong>{formatCashCountMoney(Math.abs(totalGroupBalanceUsd), 'USD')}</strong>
-            </div>
             <div className="transaction-cash-carousel">
               <div className={`transaction-cash-carousel__track ${cashView === 'change' ? 'transaction-cash-carousel__track--change' : ''}`}>
                 <div
@@ -10705,6 +10754,8 @@ function CrudTable({
   onRowClick?: (row: CrudRow) => void;
   onRowsChange?: (rows: CrudRow[]) => void;
 }) {
+  const [currencyFilter,setCurrencyFilter]=useState<CurrencySelection>(null);
+  const hasCurrency=config.columns.some(column=>column.key==='currency');
   const [rows, setRows] = usePersistentRows(config.storageKey, config.rows);
   const [query, setQuery] = useState('');
   const [showInactive, setShowInactive] = useState(false);
@@ -10731,6 +10782,7 @@ function CrudTable({
   const processedRows = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase();
     const filtered = rows.filter((row) => {
+      if(hasCurrency&&!currencyVisible(currencyFilter,row.currency))return false;
       const matchesInactive = showInactive || !isInactive(row);
       const matchesStatusFilter =
         !showInactive ||
@@ -10758,7 +10810,7 @@ function CrudTable({
       const second = String(column ? getCellValue(b, column) : b[sortKey] ?? '').toLowerCase();
       return sortDirection === 'asc' ? first.localeCompare(second) : second.localeCompare(first);
     });
-  }, [filters, query, rows, showInactive, sortDirection, sortKey, statusFilter, visibleColumns]);
+  }, [currencyFilter, hasCurrency, filters, query, rows, showInactive, sortDirection, sortKey, statusFilter, visibleColumns]);
 
   const totalPages = Math.max(1, Math.ceil(processedRows.length / pageSize));
   const pageRows = processedRows.slice((page - 1) * pageSize, page * pageSize);
@@ -10766,7 +10818,7 @@ function CrudTable({
   // Reinicia la pagina cuando cambian filtros o cantidad de registros por pagina.
   useEffect(() => {
     setPage(1);
-  }, [query, showInactive, pageSize, filters, statusFilter]);
+  }, [currencyFilter, query, showInactive, pageSize, filters, statusFilter]);
 
   // Apaga el filtro de estado cuando se ocultan los inactivos.
   useEffect(() => {
@@ -11005,6 +11057,7 @@ function CrudTable({
           <h2>{config.title}</h2>
         </div>
         <div className="action-row">
+          {hasCurrency&&<CurrencyFilter value={currencyFilter} onChange={setCurrencyFilter}/>}
           <button type="button" disabled={!catalogEndpointByStorageKey[config.storageKey]} className="secondary-button export-button export-button--excel" title="Exportar Excel" aria-label="Exportar Excel" onClick={() => void exportExcel(config, visibleColumns, processedRows)}>
             <FileSpreadsheet size={17} />
           </button>
@@ -11017,6 +11070,8 @@ function CrudTable({
           </button>}
         </div>
       </div>
+
+      {config.storageKey==='audit'&&<AuditCaptureStatus request={apiRequest}/>}
 
       {/* Barra de busqueda, visibilidad de inactivos y tamano de pagina. */}
       <div className="table-toolbar">

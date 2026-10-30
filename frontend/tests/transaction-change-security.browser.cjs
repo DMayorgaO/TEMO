@@ -43,6 +43,23 @@ const shift={database_id:shiftId,id:'TUR-000100',estado:'ABIERTO',sucursal:'SUCU
       const row=page.locator('tbody tr').filter({hasText:'TRA-000100-01'});
       const modal=page.locator('.transaction-modal-panel');
       if(editing||size>1)await row.getByTitle('Editar',{exact:true}).click();
+      if(scenario==='edit-one'){
+        const status=modal.locator('.modal-top .transaction-group-change-summary');
+        const received=modal.locator('[data-cash-scope="received"][data-cash-currency="NIO"][data-cash-row="6"][data-cash-column="1"]');
+        await status.waitFor();
+        assert.equal(await status.count(),1,'Customer balance appears once, in the pinned header');
+        for(const [quantity,tone,label,color]of [
+          ['0','receive','Pendiente por recibir del cliente','rgb(255, 240, 237)'],
+          ['2','deliver','Pendiente por entregar al cliente','rgb(255, 244, 199)'],
+          ['1','settled','Cuenta del cliente equilibrada','rgb(233, 246, 239)'],
+        ]){
+          await received.fill(quantity);await received.blur();
+          await modal.getByRole('status',{name:label,exact:true}).waitFor();
+          assert.ok((await status.getAttribute('class')).endsWith(`--${tone}`));
+          assert.equal(await status.evaluate(e=>getComputedStyle(e).backgroundColor),color,'Existing balance-state colors are preserved');
+          assert.equal(await status.locator('strong').count(),2,'NIO and USD equivalents remain visible');
+        }
+      }
       if(scenario==='edit-many'){
         assert.ok((await modal.locator('.transaction-tab__amount').first().textContent()).includes('10.00'));
         assert.equal(await modal.locator('.transaction-tab__select small').first().textContent(),'BAC · DC');
@@ -55,6 +72,14 @@ const shift={database_id:shiftId,id:'TUR-000100',estado:'ABIERTO',sucursal:'SUCU
           await modal.evaluate(e=>{e.scrollTop=e.scrollHeight;});
           await page.waitForTimeout(80);
           const bounds=await modal.boundingBox(),top=await modal.locator('.modal-top').boundingBox(),bottom=await modal.locator('.modal-actions').boundingBox();
+          const status=modal.locator('.transaction-group-change-summary'),statusBounds=await status.boundingBox(),tabs=await modal.locator('.transaction-tabs').boundingBox();
+          assert.ok(statusBounds.y>=top.y&&statusBounds.y+statusBounds.height<=tabs.y+1,'Customer balance stays above tabs inside the pinned header');
+          assert.ok(await status.evaluate(e=>e.scrollWidth<=e.clientWidth+1),'Balance label and both currencies fit without overflow');
+          assert.ok(await modal.locator('.modal-header').evaluate(e=>e.scrollWidth<=e.clientWidth+1),'Tools and balance fit the header');
+          if(width>=900){
+            const tool=await modal.getByRole('button',{name:'Calculadora',exact:true}).boundingBox();
+            assert.ok(Math.abs(statusBounds.height-tool.height)<1,'Balance frame matches the adjacent tool button height');
+          }
           assert.ok(Math.abs(top.y-before.y)<2,`Header and tools stay pinned at ${width}`);
           assert.ok(bottom.y+bottom.height<=bounds.y+bounds.height+1,`Footer remains inside viewport at ${width}`);
           assert.ok(bottom.y>top.y+top.height+70,`Central content retains usable space at ${width}`);

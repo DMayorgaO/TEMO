@@ -114,8 +114,10 @@ export function ShiftHandovers({userId,shiftId,request,prepare,onChanged,onOpenC
       if(pending)return;
       if(!shiftId)return;
       await prepare?.();
-      const data=await request<{snapshot:Snapshot;version:string;requestId:string}>(`/shifts/${shiftId}/handover-preview`);
-      const available=await request<Array<{id:string;nombre:string}>>(`/shifts/${shiftId}/handover-candidates`);
+      const [data,available]=await Promise.all([
+        request<{snapshot:Snapshot;version:string;requestId:string}>(`/shifts/${shiftId}/handover-preview`),
+        request<Array<{id:string;nombre:string}>>(`/shifts/${shiftId}/handover-candidates`),
+      ]);
       setPreview(data);setCandidates(available);setReceiver('');requestId.current=data.requestId;
     }catch(failure){setError(failure instanceof Error?failure.message:'No fue posible preparar el traspaso.');}
     finally{setBusy(false);}
