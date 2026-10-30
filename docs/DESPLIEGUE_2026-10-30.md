@@ -1,6 +1,6 @@
 # Publicacion acumulada del 2026-10-30
 
-Zona horaria America/Managua. Usuario autoriza publicacion y confirma ausencia de usuarios operando TEMO. Estado intermedio: migracion productiva y API publicadas/verificadas; web pendiente.
+Zona horaria America/Managua. Usuario autoriza publicacion y confirma ausencia de usuarios operando TEMO. Estado final tecnico: API y web publicadas y verificadas en 6f39eb8d24f69abb8ec296b070db2523d9193d13. Confirmacion funcional autenticada por titulares pendiente, solicitada al usuario.
 
 ## Preparacion
 
@@ -19,13 +19,20 @@ Zona horaria America/Managua. Usuario autoriza publicacion y confirma ausencia d
 - 055_transfer_change_security.sql aplicada una sola vez; SHA256 89965398784fe3bce36504c3a551258d7973a616d2c3aa3cc2e82dab31d31f08. No se reejecutaron archivos anteriores.
 - Preflight posterior aprobado: 55 migraciones sin faltantes/cambios, dos Administradores activos, tres roles operativos, sin identidades duplicadas ni perfiles activos no soportados. backend_hop_tls=false representa el salto interno del pooler; el transporte TLS del cliente esta verificado.
 
-## Puertas restantes
+## Verificacion posterior
 
 - API da7d01cfe1901280b31be951a32d27c7a6925641 confirmada por health publico con database=ok. Siete rutas protegidas rechazan anonimos con 401/no-store; CORS propio permitido y origen ajeno sin autorizacion. No se probaron credenciales ni se escribieron operaciones financieras.
 - Regresion completa final: 317 backend sin fallos ni omisiones, 34 frontend y doce recorridos de navegador aprobados. Los cambios de verificadores no alteran comportamiento de la API.
 - Titular confirma Compute Plan 0.5c-512mb y Node 22.23.4 en ambos servicios el 2026-10-30. No se modifica configuracion privada ni se solicita cambiar claves.
+- API final 6f39eb8d24f69abb8ec296b070db2523d9193d13 confirmada por health con PostgreSQL saludable. Repetidos siete rechazos de anonimos/no-store y preflight CORS permitido/ajeno.
+- Web con HTTP 200, anti-framing DENY, nosniff y CSP que permite API propia y frame-ancestors none. Assets publicados coinciden byte por byte con build explicito productivo: index-CVHxXaCL.js, SHA256 773bcf5a201dc764d0be598658332d747145416546b804b7d24faa6091119b11; index-dHDym9mW.css, SHA256 feabac8ffc971232cc2305b20e2d4c5afc0a7069fe77dc72066afb49ba0b51ab.
+- Preflight productivo final sigue aprobado con 55 migraciones sin cambios/faltantes. Comprobacion de solo lectura adicional confirma version_edicion BIGINT NOT NULL, dos triggers habilitados y cero versiones menores a uno.
+- Arbol funcional publicado sin Control de gastos, informe privado, configuracion privada, certificados o respaldos. Auditoria de dependencias de ejecucion: cero; completa: tres entradas bajas de herramientas de compilacion, sin nuevas modificaciones de dependencias.
+- No se dispone de conexion administrativa a Render ni se extrajeron sesiones del navegador. La confirmacion del titular sobre plan/runtime y la revision publica no se presentan como prueba negativa de CA desde Render.
+- El commit posterior exclusivamente documental usa [skip render] para registrar esta evidencia sin reconstruir servicios. Revision funcional verificada permanece 6f39eb8. Referencia: [omision de autodespliegue en Render](https://render.com/docs/deploys#skipping-an-auto-deploy).
 
-- Publicar API primero, comprobar revision/health y despues web compatible. Confirmar assets exactos, CSP/CORS/no-store y rechazo de anonimos sin registrar operaciones de prueba reales.
-- Confirmacion de configuracion efectiva en Render por titular: Compute Plan 0.5c-512mb y Node 22.23.4. La prueba negativa de CA desde Render sigue pendiente; no se inventa una conexion de administracion que no existe.
-- Titulares verifican login/MFA/logout, recuperacion con codigo nuevo y operaciones habituales. No extraer sesiones/OTP ni suplantar cuentas.
+## Pendientes y reapertura
+
+- Disponibilidad tecnica confirmada; usuarios pueden ingresar con recarga completa para comprobar funcionalidad autenticada. Se solicito confirmacion de login/VIP Access, Transacciones/Arqueo/Saldos y exportacion habitual, sin inventar movimientos reales de caja. No se afirma haber probado todas las operaciones productivas.
+- Recuperacion con codigo nuevo, QA administrativo/cajeros y prueba negativa de CA desde Render siguen pendientes de sus titulares o acceso autorizado apropiado.
 - No restaurar este respaldo encima de movimientos posteriores ni retirar 055 automaticamente. Ante problemas mantener pausa, identificar revision y revisar retorno compatible de API/web.

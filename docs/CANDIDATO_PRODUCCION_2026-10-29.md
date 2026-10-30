@@ -2,6 +2,8 @@
 
 Actualizado: 2026-10-30, America/Managua. Preparado y comprobado en desarrollo. Sin commit, push, SQL productivo ni despliegue por esta preparacion. Requiere autorizacion posterior.
 
+Publicacion posterior autorizada y completada tecnicamente el 2026-10-30: API/web 6f39eb8, migracion 055 aplicada y preflight de 55 migraciones aprobado. Ver DESPLIEGUE_2026-10-30.md para evidencia final y QA autenticado pendiente. Las listas inferiores conservan el alcance y las puertas del candidato original.
+
 ## Paquete
 
 - Identidad de caja: version exacta obligatoria en operaciones/recibos y Directorio; cuatro escrituras de apertura/correccion de turno revalidan al actor dentro de la transaccion. Traspasos rechazan identidades mal formadas antes de bloquear. Ver IDENTIDAD_OPERACIONES_2026-10-30.md.
