@@ -72,7 +72,7 @@ test('HTTP query pollution, repeated parameters and forged scope fail before SQL
   try{
     await app.listen(0,'127.0.0.1');const base=await app.getUrl();
     const get=(path,token='admin')=>fetch(base+'/api/'+path,{headers:token?{Authorization:`Bearer ${token}`}:{},signal:AbortSignal.timeout(5000)});
-    for(const path of ['transactions?limit=10&limit=20','transactions?offset=1&offset=2',
+    for(const path of ['transactions/table?limit=201','transactions/table?limit=10&limit=20','transactions/table?userId='+id,'transactions/table?sort=secret', 'transactions?limit=10&limit=20','transactions?offset=1&offset=2',
       'transactions?limit%5Bvalue%5D=20','transactions?offset=1e3','transactions?userId='+id,
       'transactions?limit=10private-query-marker','transactions?limit=201',
       'shifts/dashboard?from=2026-10-01&to=2026-10-31&from=2026-09-01',
@@ -81,7 +81,7 @@ test('HTTP query pollution, repeated parameters and forged scope fail before SQL
       const response=await get(path);assert.equal(response.status,400,path);
       assert.ok(!(await response.text()).includes('private-query-marker'));
     }
-    for(const [token,status]of [[null,401],['revoked',401],['change',403],['transfer',403]])assert.equal((await get('transactions',token)).status,status);
+    for(const [token,status]of [[null,401],['revoked',401],['change',403],['transfer',403]]){assert.equal((await get('transactions',token)).status,status);assert.equal((await get('transactions/table',token)).status,status);}
     assert.equal(calls.length,0,'No rejected request queries the database');
     for(const token of ['admin','cashier']){
       assert.equal((await get('transactions?limit=200&offset=0',token)).status,200);

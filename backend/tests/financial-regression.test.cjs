@@ -491,6 +491,166 @@ test('financial regression in local preview with rollback', { skip: !process.env
       await transfers.void(id, 'Reversion de prueba aislada', cashier);
       near((await summary()).expectedCash.NIO, before.expectedCash.NIO);
     });
+    for (const scenario of [
+      {name:'NIO withdrawal to USD debt',currency:'NIO',amount:500,debt:{USD:10},purchase:10,kind:'VENTA'},
+      {name:'USD withdrawal to NIO debt',currency:'USD',amount:15,debt:{NIO:364},purchase:0,kind:'COMPRA'},
+      {name:'NIO deposit change to USD debt',currency:'NIO',amount:100,received:600,debt:{USD:10},purchase:10,kind:'VENTA'},
+      {name:'USD deposit change to NIO debt',currency:'USD',amount:5,received:20,debt:{NIO:364},purchase:0,kind:'COMPRA'},
+      {name:'mixed debts share one withdrawal',currency:'NIO',amount:500,debt:{NIO:130,USD:10},purchase:10,kind:'VENTA'},
+    ]) await t.test(`Cross-currency ${scenario.name}: save, replay, edit and void reconcile`, async()=>{
+      const credits=[],pendingIds=[];
+      for(const [currencyCode,amount] of Object.entries(scenario.debt)){
+        const credit=await transactions.createBatch(batch([{currencyCode,amount,pendingName:'CROSS CURRENCY QA'}],settlement()),{});
+        credits.push(credit.transactions[0].id);
+        pendingIds.push((await client.query('select id_pendiente as id from temo.pagos_pendientes where id_transaccion=$1',[credits.at(-1)])).rows[0].id);
+      }
+      const before=await summary();
+      const primary={NIO:[],USD:[]};
+      if(scenario.received)primary[scenario.currency]=[{denomination:scenario.currency==='NIO'?100:20,piles25:0,loose:scenario.received/(scenario.currency==='NIO'?100:20)}];
+      const cash={...settlement(),primaryCounts:primary,primaryRateKind:scenario.currency==='NIO'?'COMPRA':scenario.received?'VENTA':'COMPRA',changeRateKind:scenario.kind};
+      const input=batch([{currencyCode:scenario.currency,movementCode:scenario.received?'DC':'RE',amount:scenario.amount,settlement:cash}],cash);
+      input.pendingSettlementIds=pendingIds;input.requestId=randomUUID();
+      const group=await transactions.createBatch(input,{actor:cashier}),id=group.transactions[0].id;
+      const after=await summary();assert.deepEqual(await transactions.createBatch(input,{actor:cashier}),group);assert.deepEqual(await summary(),after);
+      const payments=()=>client.query('select ap.*,m.codigo as currency from temo.abonos_pendientes ap join temo.monedas m using(id_moneda) where id_pendiente=any($1::uuid[]) order by id_abono',[pendingIds]);
+      const paid=await payments();assert.equal(paid.rows.length,pendingIds.length);
+      for(const payment of paid.rows){near(payment.monto,scenario.debt[payment.currency]);near(payment.tasa_compra_usada,36.4);near(payment.tasa_venta_usada,37);}
+      for(const currency of ['NIO','USD'])near(after.cashCounts.ACTUAL[currency].total-before.cashCounts.ACTUAL[currency].total,scenario.currency===currency?(scenario.received||0):0);
+      const netNominal=(scenario.received?1:-1)*scenario.amount*(scenario.currency==='USD'?36.4:1)+(scenario.debt.NIO||0)+(scenario.debt.USD||0)*36.4;
+      near(after.expectedCash.NIO-before.expectedCash.NIO,netNominal);
+      const report=()=>purchases.list(cashier).then(rows=>rows.filter(row=>row.database_id===id));
+      near((await report()).reduce((sum,row)=>sum+Number(row.monto_comprado_usd),0),scenario.purchase);
+      near((await report()).reduce((sum,row)=>sum+Number(row.diferencia_nio),0),scenario.purchase*.6);
+      const history=(await client.query("select motivo from temo.historial_pendientes where id_pendiente=any($1::uuid[]) and estado_nuevo='PAGADO'",[pendingIds])).rows;
+      assert.ok(history.every(row=>row.motivo.includes('conversiones del grupo:')&&row.motivo.includes(scenario.kind)));
+      assert.equal((await client.query('select count(*)::int n from temo.movimientos_cuentas where id_transaccion=$1',[id])).rows[0].n,1);
+      const edit={requestId:randomUUID(),updates:[{id,data:{...input.transactions[0],rates}}],voidIds:[],preferential:false};
+      await transactions.updateGroup(id,edit,cashier);await transactions.updateGroup(id,edit,cashier);
+      assert.deepEqual((await summary()).cashCounts,after.cashCounts);assert.equal((await payments()).rows.length,pendingIds.length);
+      near((await report()).reduce((sum,row)=>sum+Number(row.monto_comprado_usd),0),scenario.purchase);
+      const snapshot={summary:await summary(),payments:(await payments()).rows,report:await report()};
+      const bad=structuredClone(edit);bad.requestId=randomUUID();
+      if(scenario.received)bad.updates[0].data.settlement.primaryCounts={NIO:[],USD:[]};else bad.updates[0].data.amount=1;
+      await assert.rejects(transactions.updateGroup(id,bad,cashier),e=>e.getStatus()===409);
+      assert.deepEqual({summary:await summary(),payments:(await payments()).rows,report:await report()},snapshot);
+      await transactions.updateGroup(id,{requestId:randomUUID(),updates:[],voidIds:[id],preferential:false},cashier);
+      const restored=await summary();near(restored.expectedCash.NIO,before.expectedCash.NIO);assert.deepEqual(restored.cashCounts,before.cashCounts);
+      assert.equal((await report()).length,0);assert.equal((await payments()).rows.length,0);
+      for(const row of (await client.query('select pp.*,m.codigo as currency from temo.pagos_pendientes pp join temo.monedas m using(id_moneda) where id_pendiente=any($1::uuid[])',[pendingIds])).rows){assert.equal(row.estado,'PENDIENTE');near(row.saldo_pendiente,scenario.debt[row.currency]);}
+      for(const credit of credits)await transactions.void(credit,cashier);
+    });
+    await t.test('Cross-currency group partial void reanchors its debt and cannot remove its funding',async()=>{
+      const credit=await transactions.createBatch(batch([{currencyCode:'USD',amount:10,pendingName:'CROSS ANCHOR QA'}],settlement()),{});
+      const pending=(await client.query('select id_pendiente as id from temo.pagos_pendientes where id_transaccion=$1',[credit.transactions[0].id])).rows[0];
+      const before=await summary(),cash={...settlement(),changeRateKind:'VENTA'};
+      const input=batch([{movementCode:'RE',amount:500,settlement:cash},{amount:50,settlement:cash}],cash);
+      input.pendingSettlementIds=[pending.id];
+      const group=await transactions.createBatch(input,{actor:cashier}),ids=group.transactions.map(row=>row.id);
+      const after=await summary();
+      await assert.rejects(transactions.updateGroup(ids[0],{updates:[{id:ids[1],data:{...input.transactions[1],rates}}],voidIds:[ids[0]],preferential:false},cashier),/no cubre/);
+      assert.deepEqual(await summary(),after);
+      await transactions.updateGroup(ids[0],{updates:[{id:ids[0],data:{...input.transactions[0],rates}}],voidIds:[ids[1]],preferential:false},cashier);
+      const payment=(await client.query('select * from temo.abonos_pendientes where id_pendiente=$1',[pending.id])).rows;
+      assert.equal(payment.length,1);assert.equal(payment[0].id_transaccion,ids[0]);near(payment[0].monto,10);
+      const report=(await purchases.list(cashier)).filter(row=>ids.includes(row.database_id));assert.equal(report.length,1);assert.equal(report[0].database_id,ids[0]);near(report[0].monto_comprado_usd,10);
+      assert.deepEqual((await summary()).cashCounts,before.cashCounts);
+      await transactions.updateGroup(ids[0],{updates:[{id:ids[0],data:{...input.transactions[0],rates:{buy:36.55,sell:37}}}],voidIds:[],preferential:true},cashier);
+      near((await summary()).expectedGeneralRate,before.expectedGeneralRate);
+      near((await client.query('select tasa_compra_usada from temo.abonos_pendientes where id_pendiente=$1',[pending.id])).rows[0].tasa_compra_usada,36.55);
+      near((await purchases.list(cashier)).find(row=>row.database_id===ids[0]).diferencia_nio,4.5);
+      await transactions.updateGroup(ids[0],{updates:[],voidIds:[ids[0]],preferential:false},cashier);
+      near((await summary()).expectedCash.NIO,before.expectedCash.NIO);
+      near((await client.query('select saldo_pendiente from temo.pagos_pendientes where id_pendiente=$1',[pending.id])).rows[0].saldo_pendiente,10);
+      await transactions.void(credit.transactions[0].id,cashier);
+    });
+    for (const withdrawal of [34.31, 34.34]) await t.test(`USD withdrawal ${withdrawal}, pending 26.92, deposit 40 and mixed cash reconcile atomically`, async () => {
+      const credit = await transactions.createBatch(batch([{ currencyCode:'USD', amount:26.92, pendingName:'USD COMPENSATION QA' }], settlement()), {});
+      const pending = (await client.query('select id_pendiente as id from temo.pagos_pendientes where id_transaccion=$1', [credit.transactions[0].id])).rows[0];
+      const before = await summary();
+      const mixed = { NIO:[{denomination:20,piles25:0,loose:1},{denomination:1,piles25:0,loose:3}],
+        USD:[{denomination:20,piles25:0,loose:1},{denomination:5,piles25:0,loose:2},{denomination:1,piles25:0,loose:2}] };
+      const make = amount => {
+        const change = 23 - (40 + 26.92 - amount - 32) * 37;
+        const first = {...settlement(), primaryRateKind:'COMPRA',changeRateKind:'COMPRA',expectedChange:{NIO:amount*36.4,USD:amount}};
+        const second = {...settlement(),primaryRateKind:'VENTA',changeRateKind:'VENTA',primaryCounts:mixed,expectedChange:{NIO:change,USD:change/37}};
+        const input = batch([{movementCode:'RE',currencyCode:'USD',amount,settlement:first},{currencyCode:'USD',amount:40,settlement:second}],second);
+        input.pendingSettlementIds=[pending.id];input.requestId=randomUUID();return input;
+      };
+      const input=make(withdrawal);
+      const snapshot=async()=>({summary:await summary(),payments:(await client.query('select * from temo.abonos_pendientes where id_pendiente=$1 order by id_abono',[pending.id])).rows,
+        groups:(await client.query('select count(*)::int n from temo.grupos_transacciones where id_turno=$1',[shiftId])).rows[0].n});
+      const initial=await snapshot();
+      for(const mutate of [x=>x.transactions[1].settlement.changeRateKind='COMPRA',x=>x.transactions[1].settlement.primaryCounts={...mixed,USD:[{denomination:20,piles25:0,loose:1}]},x=>x.pendingSettlementIds.push(pending.id)]){
+        const invalid=structuredClone(input);invalid.requestId=randomUUID();mutate(invalid);
+        await assert.rejects(transactions.createBatch(invalid,{actor:cashier}),e=>e.getStatus()===409);
+        assert.deepEqual(await snapshot(),initial,'Rejected create must leave no partial payments, bank/cash changes or groups');
+      }
+      const group=await transactions.createBatch(input,{actor:cashier}),ids=group.transactions.map(row=>row.id);
+      const after=await snapshot();
+      assert.deepEqual(await transactions.createBatch(input,{actor:cashier}),group);
+      assert.deepEqual(await snapshot(),after,'Replay must not duplicate cash, balances or payment');
+      await assert.rejects(transactions.update(ids[0],{...input.transactions[0],amount:1,rates},cashier),/desde el grupo/);
+      await assert.rejects(transactions.void(ids[0],cashier),/edicion del grupo/);
+      assert.deepEqual(await snapshot(),after,'An unlinked funding tab cannot be changed outside its compensated group');
+      assert.equal(after.payments.length,1);near(after.payments[0].monto,26.92);
+      const paid=(await client.query('select estado,saldo_pendiente from temo.pagos_pendientes where id_pendiente=$1',[pending.id])).rows[0];assert.equal(paid.estado,'PAGADO');near(paid.saldo_pendiente,0);
+      near(after.summary.cashCounts.ACTUAL.NIO.total-before.cashCounts.ACTUAL.NIO.total,23);
+      near(after.summary.cashCounts.ACTUAL.USD.total-before.cashCounts.ACTUAL.USD.total,32);
+      near(after.summary.expectedCash.NIO-before.expectedCash.NIO,(40+26.92-withdrawal)*36.4);
+      const rows=(await purchases.list(cashier)).filter(row=>ids.includes(row.database_id));assert.equal(rows.length,1);
+      near(rows[0].monto_comprado_usd,40+26.92-withdrawal-32);near(rows[0].diferencia_nio,(40+26.92-withdrawal-32)*.6);
+      assert.equal((await client.query('select count(*)::int n from temo.movimientos_cuentas where id_transaccion=any($1::uuid[])',[ids])).rows[0].n,2);
+      const alternate=withdrawal===34.31?34.34:34.31, edited=make(alternate);
+      const edit={requestId:randomUUID(),updates:edited.transactions.map((row,index)=>({id:ids[index],data:{...row,rates}})),voidIds:[],preferential:false};
+      await transactions.updateGroup(ids[0],edit,cashier);const editState=await snapshot();
+      assert.deepEqual(editState.summary.cashCounts,after.summary.cashCounts);near(editState.payments[0].monto,26.92);
+      near((await purchases.list(cashier)).filter(row=>ids.includes(row.database_id))[0].monto_comprado_usd,40+26.92-alternate-32);
+      await transactions.updateGroup(ids[0],edit,cashier);assert.deepEqual(await snapshot(),editState);
+      const wrongEdit=structuredClone(edit);wrongEdit.requestId=randomUUID();wrongEdit.updates[1].data.settlement.changeRateKind='COMPRA';
+      await assert.rejects(transactions.updateGroup(ids[0],wrongEdit,cashier),e=>e.getStatus()===409);assert.deepEqual(await snapshot(),editState);
+      const shortEdit=structuredClone(edit);shortEdit.requestId=randomUUID();shortEdit.updates[1].data.settlement.primaryCounts.USD=[];
+      await assert.rejects(transactions.updateGroup(ids[0],shortEdit,cashier),e=>e.getStatus()===409);assert.deepEqual(await snapshot(),editState);
+      await transactions.updateGroup(ids[0],{requestId:randomUUID(),updates:[],voidIds:ids,preferential:false},cashier);
+      const reopened=(await client.query('select estado,saldo_pendiente from temo.pagos_pendientes where id_pendiente=$1',[pending.id])).rows[0];assert.equal(reopened.estado,'PENDIENTE');near(reopened.saldo_pendiente,26.92);
+      const restored=await summary();near(restored.expectedCash.NIO,before.expectedCash.NIO);assert.deepEqual(restored.cashCounts,before.cashCounts);
+      assert.equal((await purchases.list(cashier)).filter(row=>ids.includes(row.database_id)).length,0);
+      await transactions.void(credit.transactions[0].id,cashier);
+    });
+    await t.test('D applies only to USD actually converted to settle a NIO debt, including cash expectation',async()=>{
+      const credit=await transactions.createBatch(batch([{amount:365.5,pendingName:'D CROSS PENDING QA'}],settlement()),{});
+      const pending=(await client.query('select id_pendiente as id from temo.pagos_pendientes where id_transaccion=$1',[credit.transactions[0].id])).rows[0];
+      const before=await summary();
+      const input=batch([{movementCode:'RE',currencyCode:'USD',amount:15,settlement:settlement()}],settlement());
+      input.specialExchangeRate=36.55;input.pendingSettlementIds=[pending.id];
+      const group=await transactions.createBatch(input,{actor:cashier});
+      const after=await summary();near(before.expectedCash.NIO-after.expectedCash.NIO,182);
+      near(after.expectedGeneralRate,36.4);assert.deepEqual(after.cashCounts,before.cashCounts);
+      await transactions.updateGroup(group.transactions[0].id,{updates:[],voidIds:group.transactions.map(row=>row.id),preferential:false},cashier);
+      near((await summary()).expectedCash.NIO,before.expectedCash.NIO);
+      await transactions.void(credit.transactions[0].id,cashier);
+    });
+    await t.test('Legacy D rate never contaminates cash count; retained 42550 funds all four USD deposits for 690',async()=>{
+      const before=await summary();
+      await client.query("insert into temo.tipos_cambio(tasa_compra,tasa_venta,id_usuario_creacion,observaciones,vigente_desde) values(36.55,37,$1,'Legacy D QA',now()+interval '1 day')",[cashier.id]);
+      near((await summary()).expectedGeneralRate,36.4);
+      near((await summary()).expectedCash.NIO,before.expectedCash.NIO);
+      const cash={...settlement(),changeRateKind:'VENTA'};
+      const input=batch([{movementCode:'RE',amount:42550,settlement:cash},...[100,50,800,200].map(amount=>({currencyCode:'USD',amount,settlement:{...cash,primaryRateKind:'VENTA'}}))],cash);
+      const group=await transactions.createBatch(input,{actor:cashier}),ids=group.transactions.map(row=>row.id),after=await summary();
+      assert.deepEqual(after.cashCounts,before.cashCounts);
+      near(before.expectedCash.NIO-after.expectedCash.NIO,690);
+      near(after.dollarPurchases.differenceNio-before.dollarPurchases.differenceNio,690);
+      near(after.dollarPurchases.usd-before.dollarPurchases.usd,1150);
+      const rateCount=(await client.query('select count(*)::int n from temo.tipos_cambio')).rows[0].n;
+      const rateId=await transactions.resolveExchangeRate(client,{rates:{buy:36.55,sell:37}},cashier.id);
+      near((await client.query('select tasa_compra from temo.tipos_cambio where id_tipo_cambio=$1',[rateId])).rows[0].tasa_compra,36.4);
+      assert.equal((await client.query('select count(*)::int n from temo.tipos_cambio')).rows[0].n,rateCount);
+      await transactions.updateGroup(ids[0],{updates:input.transactions.map((row,index)=>({id:ids[index],data:{...row,rates}})),voidIds:[],preferential:false},cashier);
+      near((await summary()).expectedCash.NIO,after.expectedCash.NIO);
+      await transactions.updateGroup(ids[0],{updates:[],voidIds:ids,preferential:false},cashier);
+      near((await summary()).expectedCash.NIO,before.expectedCash.NIO);
+      await client.query("delete from temo.tipos_cambio where observaciones='Legacy D QA' and id_usuario_creacion=$1",[cashier.id]);
+    });
     await t.test('Withdrawal 380 pays pending 180 and deposit 200 without reducing physical cash', async () => {
       const credit = await transactions.createBatch(batch([{ amount: 180, pendingName: 'SECURITY COMPENSATION' }], settlement()), {});
       const pending = (await client.query('select id_pendiente as id from temo.pagos_pendientes where id_transaccion=$1', [credit.transactions[0].id])).rows[0];

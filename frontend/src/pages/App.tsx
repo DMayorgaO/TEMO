@@ -2126,18 +2126,11 @@ function mapApiTransactionRow(row: TransactionApiRow): CrudRow {
   });
 }
 
-async function loadAllTransactions() {
-  const pageSize = 200;
-  const rows: TransactionApiRow[] = [];
-
-  for (let offset = 0; ; offset += pageSize) {
-    const page = await apiRequest<TransactionApiRow[]>(
-      `/transactions?limit=${pageSize}&offset=${offset}`,
-    );
-    rows.push(...page);
-    if (page.length < pageSize) return rows;
-  }
-}
+type TransactionTableResponse = {
+  rows: TransactionApiRow[];
+  total: number;
+  totals: Record<string, { income: string; expense: string }>;
+};
 
 function isPayableTransaction(row: CrudRow) {
   return Boolean(row.pendingDatabaseId) && ['PENDIENTE', 'ABONADO', 'VENCIDO'].includes(row.pendingStatus);
@@ -2232,6 +2225,7 @@ type TransactionCustomerBalanceStep = {
   rateValue: number;
   changeRateKind: ExchangeRateKind;
   changeRateValue: number;
+  conversions: Array<{ from: CashCurrency; to: CashCurrency; amount: number; converted: number; rate: number; kind: ExchangeRateKind }>;
 };
 
 // Permite residuos menores a la moneda fisica minima sin descartar su valor contable.
@@ -2245,6 +2239,7 @@ function calculateTransactionCustomerBalanceSteps(
 ) {
   let balanceNio = 0;
   let balanceUsd = 0;
+  let conversions: TransactionCustomerBalanceStep['conversions'] = [];
   const lastEffectiveIndex = rows.reduce(
     (lastIndex, row, index) => row.direction && row.movement && !row.pendingName.trim() ? index : lastIndex,
     -1,
@@ -2255,17 +2250,20 @@ function calculateTransactionCustomerBalanceSteps(
     if (balanceNio < 0 && balanceUsd > 0) {
       const rateValue = getTransactionRateValue(rate, 'Compra') || 1;
       const usdUsed = Math.min(balanceUsd, -balanceNio / rateValue);
+      if (usdUsed > 1e-8) conversions.push({ from: 'USD', to: 'NIO', amount: usdUsed, converted: usdUsed * rateValue, rate: rateValue, kind: 'Compra' });
       balanceUsd -= usdUsed;
       balanceNio += usdUsed * rateValue;
     } else if (balanceUsd < 0 && balanceNio > 0) {
       const rateValue = getTransactionRateValue(rate, 'Venta') || 1;
       const nioUsed = Math.min(balanceNio, -balanceUsd * rateValue);
+      if (nioUsed > 1e-8) conversions.push({ from: 'NIO', to: 'USD', amount: nioUsed, converted: nioUsed / rateValue, rate: rateValue, kind: 'Venta' });
       balanceNio -= nioUsed;
       balanceUsd += nioUsed / rateValue;
     }
   }
 
   return rows.map<TransactionCustomerBalanceStep>((row, index) => {
+    conversions = [];
     const currency: CashCurrency = row.currency === 'USD' ? 'USD' : 'NIO';
     const direction = row.direction === 'Salida' ? 'Salida' : 'Ingreso';
     const rateKind = getTransactionExchangeRateKind(direction, currency);
@@ -2281,6 +2279,7 @@ function calculateTransactionCustomerBalanceSteps(
         rateValue,
         changeRateKind: rateKind,
         changeRateValue: rateValue,
+        conversions,
       };
     }
 
@@ -2333,6 +2332,7 @@ function calculateTransactionCustomerBalanceSteps(
       rateValue,
       changeRateKind,
       changeRateValue,
+      conversions,
     };
   });
 }
@@ -4961,7 +4961,7 @@ function CashCountScreen({ currentUser }: { currentUser: AuthUser }) {
             </div>
             <div className="cash-rate-chip" aria-label="Tasa de cambio global">
               <span>Tasa global USD</span>
-              <strong>Compra C$ {formatRateDisplay(exchangeRate.buy)}</strong>
+              <strong>Compra C$ {formatRateDisplay(String(generalRate))}</strong>
               <strong>Venta C$ {formatRateDisplay(exchangeRate.sell)}</strong>
             </div>
             <div className="cash-opening-chip" aria-label="Montos iniciales del turno">
@@ -5035,7 +5035,7 @@ function CashCountScreen({ currentUser }: { currentUser: AuthUser }) {
             denominations={cashDenominations.NIO}
             focusScope="general-cash-count"
             pileDrafts={pileDrafts}
-            conversionRate={buyRate}
+            conversionRate={generalRate}
             readOnly={isBoss||submitted||requestingClose||handoverOpen}
             nextFocusSelector={'[data-cash-scope="general-cash-count"][data-cash-currency="USD"][data-cash-row="0"][data-cash-column="0"]'}
             onPileFieldChange={updatePileField}
@@ -5046,7 +5046,7 @@ function CashCountScreen({ currentUser }: { currentUser: AuthUser }) {
             denominations={cashDenominations.USD}
             focusScope="general-cash-count"
             pileDrafts={pileDrafts}
-            conversionRate={buyRate}
+            conversionRate={generalRate}
             readOnly={isBoss||submitted||requestingClose||handoverOpen}
             nextFocusSelector='[data-general-cash-change]'
             onPileFieldChange={updatePileField}
@@ -8668,7 +8668,24 @@ function TransactionTable({ config, currentUser }: { config: CrudConfig; current
     () => getVisibleColumns(config).filter((column) => isBoss || column.key !== 'operatorBranch'),
     [config, isBoss],
   );
-  const normalizedRows = useMemo(() => rows.map(normalizeTransactionRow), [rows]);
+  const [tableTotal, setTableTotal] = useState<number | null>(null);
+  const requestGeneration = useRef(0);
+  const tableRequest = useRef<Promise<CrudRow[]> | null>(null);
+  const tableAbort = useRef<AbortController | null>(null);
+  const tableQuery = useMemo(() => {
+    const value: Record<string, string> = {
+      limit: String(pageSize), offset: String((page - 1) * pageSize),
+      inactive: String(showInactive), sort: sortKey || 'id', direction: sortDirection || 'desc',
+    };
+    if (query.trim()) value.search = query.trim();
+    if (currencyFilter) value.currency = currencyFilter;
+    for (const [key, filter] of Object.entries(filters)) if (filter) value[key] = filter;
+    for (const [key, filter] of Object.entries(periodFilter)) if (filter && (isBoss || !key.endsWith('Date'))) value[key] = filter;
+    return value;
+  }, [pageSize, page, showInactive, sortKey, sortDirection, query, currencyFilter, filters, periodFilter, isBoss]);
+  const tablePath = `/transactions/table?${new URLSearchParams(tableQuery)}`;
+  const tablePathRef = useRef(tablePath); tablePathRef.current = tablePath;
+  const tableOwner = useRef(currentUser.id); tableOwner.current = currentUser.id;
   const shiftCashDifference = useMemo(() => {
     if (!currentShift) return null;
     const rate = currentShift.expectedGeneralRate ?? parseExchangeRate(readExchangeRate().buy);
@@ -8684,22 +8701,56 @@ function TransactionTable({ config, currentUser }: { config: CrudConfig; current
   }, [currentShift]);
 
   async function reloadTransactions() {
-    const databaseRows = await loadAllTransactions();
-    const latest=databaseRows.map(mapApiTransactionRow);
-    setRows(latest);
-    return latest;
+    // Writes wait for an older read, then request fresh data; polling shares the active request.
+    if (tableRequest.current) await tableRequest.current.catch(() => undefined);
+    return requestTransactionPage(tablePathRef.current);
+  }
+
+  function requestTransactionPage(path: string) {
+    const generation = ++requestGeneration.current;
+    const owner = currentUser.id;
+    const token = window.sessionStorage.getItem(authTokenStorageKey);
+    tableAbort.current?.abort();
+    const abort = new AbortController(); tableAbort.current = abort;
+    const pending = apiRequest<TransactionTableResponse>(path, { signal: abort.signal }).then(result => {
+      const latest = result.rows.map(mapApiTransactionRow);
+      if (generation === requestGeneration.current && path === tablePathRef.current && owner === tableOwner.current
+        && token === window.sessionStorage.getItem(authTokenStorageKey)) {
+        setRows(latest); setTableTotal(result.total); setTransactionsLoadError('');
+        setPage(current => Math.min(current, Math.max(1, Math.ceil(result.total / pageSize))));
+      }
+      return latest;
+    }).catch(error => {
+      if (generation === requestGeneration.current && token === window.sessionStorage.getItem(authTokenStorageKey)) {
+        setTransactionsLoadError('No fue posible actualizar las transacciones. Se conservan los ultimos datos recibidos y se reintentara automaticamente.');
+      }
+      throw error;
+    }).finally(() => {
+      if (generation === requestGeneration.current) { tableRequest.current = null; setTransactionsLoading(false); }
+    });
+    tableRequest.current = pending;
+    return pending;
   }
 
   useEffect(() => {
+    setTransactionsLoading(true); setTransactionsLoadError('');
+    const timer = window.setTimeout(() => {
+      const generation = requestGeneration.current + 1;
+      void requestTransactionPage(tablePath).catch(() => {
+        if (generation === requestGeneration.current) setTransactionsLoadError('No fue posible actualizar las transacciones. Se reintentara automaticamente.');
+      });
+    }, 180);
+    return () => {
+      window.clearTimeout(timer); requestGeneration.current++; tableAbort.current?.abort(); tableRequest.current = null;
+    };
+  }, [tablePath, currentUser.id]);
+
+  useEffect(() => {
+    setRows([]); setTableTotal(null); setMarkedTransactionIds(new Set()); setSelectedRowId(null);
+  }, [currentUser.id]);
+
+  useEffect(() => {
     let cancelled = false;
-    setRows([]);
-    setTransactionsLoading(true);
-    setTransactionsLoadError('');
-    void loadAllTransactions().then(databaseRows => {
-      if (!cancelled) setRows(databaseRows.map(mapApiTransactionRow));
-    }).catch(() => {
-      if (!cancelled) setTransactionsLoadError('No fue posible cargar las transacciones. Vuelva a abrir esta pantalla para reintentar.');
-    }).finally(() => { if (!cancelled) setTransactionsLoading(false); });
     Promise.all([
       apiRequest<ShiftDetail | null>(transactionShiftPath),
       currentUser.roleCode==='CAJERO'?apiRequest<ShiftDetail[]>('/shifts'):Promise.resolve([]),
@@ -8721,13 +8772,13 @@ function TransactionTable({ config, currentUser }: { config: CrudConfig; current
   }, [currentUser.id,transactionShiftId]);
 
   useOperationalRefresh(async () => {
-    const [databaseRows, shift] = await Promise.all([
-      loadAllTransactions(),
+    if (tableRequest.current) return;
+    const selection = transactionShiftId;
+    const [, shift] = await Promise.all([
+      requestTransactionPage(tablePathRef.current),
       apiRequest<ShiftDetail | null>(transactionShiftPath),
     ]);
-    if(transactionShiftSelection.current!==transactionShiftId)return;
-    setRows(databaseRows.map(mapApiTransactionRow));
-    setTransactionsLoadError('');
+    if (transactionShiftSelection.current !== selection) return;
     setCurrentShift(shift);
   }, !modal && !isSavingTransactions && !transactionsLoading);
 
@@ -8739,38 +8790,25 @@ function TransactionTable({ config, currentUser }: { config: CrudConfig; current
     setCurrentShift(shift);
   }, Boolean(modal) && !isSavingTransactions, 5000);
 
-  const processedRows = useMemo(() => {
-    const normalizedQuery = query.trim().toLowerCase();
-    const filtered = normalizedRows.filter((row) => {
-      const matchesInactive = showInactive || !isInactive(row);
-      const matchesCurrency = !currencyFilter || row.currency === currencyFilter;
-      const matchesPeriod = matchesPeriodFilter(row.registeredTimestamp || row.registeredAt, periodFilter, isBoss);
-      const matchesQuery =
-        !normalizedQuery ||
-        Object.values(row).some((value) => String(value).toLowerCase().includes(normalizedQuery));
-      const matchesColumnFilters = Object.entries(filters).every(([key, value]) => {
-        const column = columns.find((item) => item.key === key);
-        const cellValue = column ? getCellValue(row, column) : row[key] ?? '';
-        return !value || String(cellValue).toLowerCase().includes(value.toLowerCase());
-      });
-      return matchesInactive && matchesCurrency && matchesPeriod && matchesQuery && matchesColumnFilters;
-    });
+  const processedRows = rows;
+  const totalPages = Math.max(1, Math.ceil((tableTotal ?? 0) / pageSize));
+  const pageRows = rows;
+  const visibleMarkedCount = rows.filter(row => markedTransactionIds.has(row.id)).length;
 
-    if (!sortKey || !sortDirection) {
-      return filtered;
-    }
-
-    return [...filtered].sort((a, b) => {
-      const column = columns.find((item) => item.key === sortKey);
-      const first = String(column ? getCellValue(a, column) : a[sortKey] ?? '').toLowerCase();
-      const second = String(column ? getCellValue(b, column) : b[sortKey] ?? '').toLowerCase();
-      return sortDirection === 'asc' ? first.localeCompare(second) : second.localeCompare(first);
-    });
-  }, [columns, currencyFilter, filters, isBoss, normalizedRows, periodFilter, query, showInactive, sortDirection, sortKey]);
-
-  const totalPages = Math.max(1, Math.ceil(processedRows.length / pageSize));
-  const pageRows = processedRows.slice((page - 1) * pageSize, page * pageSize);
-  const visibleMarkedCount = processedRows.filter((row) => markedTransactionIds.has(row.id)).length;
+  async function navigateTransactionPage(nextPage: number, edge: 'first' | 'last') {
+    const generation = ++detailRequestRef.current;
+    const pathBefore = tablePathRef.current;
+    const token = window.sessionStorage.getItem(authTokenStorageKey);
+    try {
+      const path = `/transactions/table?${new URLSearchParams({ ...tableQuery, offset: String((nextPage - 1) * pageSize) })}`;
+      const result = await apiRequest<TransactionTableResponse>(path);
+      if (generation !== detailRequestRef.current || pathBefore !== tablePathRef.current
+        || token !== window.sessionStorage.getItem(authTokenStorageKey)) return;
+      const next = result.rows.map(mapApiTransactionRow);
+      const row = edge === 'first' ? next[0] : next[next.length - 1];
+      if (row) { setPage(nextPage); await openTransactionModal(row, 'view'); }
+    } catch { setTransactionSaveError('No fue posible cargar la siguiente pagina.'); }
+  }
 
   function toggleMarkedTransaction(id: string) {
     setMarkedTransactionIds((current) => {
@@ -8792,7 +8830,7 @@ function TransactionTable({ config, currentUser }: { config: CrudConfig; current
 
   useEffect(() => {
     setPage(1);
-  }, [currencyFilter, filters, pageSize, query, showInactive]);
+  }, [currencyFilter, filters, pageSize, query, showInactive, periodFilter, sortKey, sortDirection]);
 
   function cycleSort(columnKey: string) {
     if (sortKey !== columnKey) {
@@ -9051,7 +9089,8 @@ function TransactionTable({ config, currentUser }: { config: CrudConfig; current
       if (!row.databaseId) throw new Error('La transacción no tiene un identificador válido para anularse.');
       if(!voidRequestIds.current.has(row.databaseId))voidRequestIds.current.set(row.databaseId,{requestId:createFinancialRequestId(),expectedVersion:requireEditVersion(row.editVersion)});
       const result=await apiRequest<{historical?:boolean}>(`/transactions/${row.databaseId}/void`, { method: 'POST',body:JSON.stringify(voidRequestIds.current.get(row.databaseId)) });
-      const latest=(await reloadTransactions()).find(item=>item.databaseId===row.databaseId);
+      await reloadTransactions();
+      const latest=mapApiTransactionDetail(await apiRequest<TransactionDetailApi>(`/transactions/${row.databaseId}/detail`));
       const shift = await apiRequest<ShiftDetail | null>(transactionShiftPath);
       setCurrentShift(shift);
       voidRequestIds.current.delete(row.databaseId);
@@ -9125,10 +9164,10 @@ function TransactionTable({ config, currentUser }: { config: CrudConfig; current
               <CheckCircle2 size={17} />
               Modo marcador{markerMode ? ` (${visibleMarkedCount})` : ''}
             </button>
-            <button type="button" className="secondary-button export-button export-button--excel transaction-export-icon" title="Exportar Excel" aria-label="Exportar Excel" onClick={() => void exportExcel(config, columns, processedRows)}>
+            <button type="button" className="secondary-button export-button export-button--excel transaction-export-icon" title="Exportar Excel" aria-label="Exportar Excel" onClick={() => void exportExcel(config, columns, processedRows, tableQuery)}>
               <FileSpreadsheet size={17} />
             </button>
-            <button type="button" className="secondary-button export-button export-button--pdf transaction-export-icon" title="Exportar PDF" aria-label="Exportar PDF" onClick={() => void exportPdf(config, columns, processedRows)}>
+            <button type="button" className="secondary-button export-button export-button--pdf transaction-export-icon" title="Exportar PDF" aria-label="Exportar PDF" onClick={() => void exportPdf(config, columns, processedRows, tableQuery)}>
               <FileText size={17} />
             </button>
             {currentUser.roleCode==='CAJERO'&&transactionShifts.some(item=>item.estado==='EN_REVISION')&&<label className="form-field">Turno de la transacción<select aria-label="Turno de la transacción" value={transactionShiftId||currentShift?.database_id||''} disabled={Boolean(modal)||isSavingTransactions} onChange={event=>{setCurrentShift(null);setTransactionShiftId(event.target.value);}}>
@@ -9207,7 +9246,7 @@ function TransactionTable({ config, currentUser }: { config: CrudConfig; current
                   {...touchRowDetail(() => { if (!markerMode) void openTransactionModal(row, 'view'); })}
                 >
                   {markerMode && <td className="marker-column"><input aria-label={`Marcar ${row.id} como revisada`} type="checkbox" checked={markedTransactionIds.has(row.id)} onClick={(event)=>event.stopPropagation()} onChange={()=>toggleMarkedTransaction(row.id)}/></td>}
-                  <td className="number-column">{processedRows.length - ((page - 1) * pageSize + index)}</td>
+                  <td className="number-column">{(tableTotal ?? 0) - ((page - 1) * pageSize + index)}</td>
                   <td>{row.id}</td>
                   <td className="multi-line-cell">{formatTransferDate(row.registeredAt)}</td>
                   <td>{row.entity}</td>
@@ -9257,7 +9296,7 @@ function TransactionTable({ config, currentUser }: { config: CrudConfig; current
 
         <div className="pagination-bar">
           <span>
-            Mostrando {pageRows.length} de {processedRows.length} registros
+            {tableTotal === null ? (transactionsLoading ? 'Cargando registros...' : 'Registros no disponibles') : `Mostrando ${pageRows.length} de ${tableTotal} registros`}
           </span>
           <div className="action-row">
             <label className="page-size-control page-size-control--pagination">
@@ -9302,6 +9341,7 @@ function TransactionTable({ config, currentUser }: { config: CrudConfig; current
           saveError={transactionSaveError}
           onCancel={() => {
             if (!isSavingTransactions) {
+              detailRequestRef.current++;
               setModal(null);
             }
           }}
@@ -9311,15 +9351,17 @@ function TransactionTable({ config, currentUser }: { config: CrudConfig; current
             ? () => void openPendingPayment(modal.row)
             : undefined}
           navigation={modal.mode === 'view' ? {
-            currentIndex: processedRows.findIndex((transaction) => transaction.databaseId === modal.row.databaseId),
-            total: processedRows.length,
+            currentIndex: (page - 1) * pageSize + processedRows.findIndex((transaction) => transaction.databaseId === modal.row.databaseId),
+            total: tableTotal ?? 0,
             onPrevious: () => {
               const index = processedRows.findIndex((transaction) => transaction.databaseId === modal.row.databaseId);
               if (index > 0) void openTransactionModal(processedRows[index - 1], 'view');
+              else if (page > 1) void navigateTransactionPage(page - 1, 'last');
             },
             onNext: () => {
               const index = processedRows.findIndex((transaction) => transaction.databaseId === modal.row.databaseId);
               if (index >= 0 && index < processedRows.length - 1) void openTransactionModal(processedRows[index + 1], 'view');
+              else if (page < totalPages) void navigateTransactionPage(page + 1, 'first');
             },
           } : undefined}
         />
@@ -9553,10 +9595,10 @@ function TransactionModal({
       pending.fecha_creacion,
     ].join(' ')).includes(normalizedPendingSettlementQuery),
   );
-  const pendingCompensation = selectedSettlementPendings.length ? {
-    currency: selectedSettlementPendings[0].moneda,
-    amount: selectedSettlementPendings.reduce((sum, pending) => sum + Number(pending.saldo_pendiente), 0),
-  } : undefined;
+  const selectedCompensation = selectedSettlementPendings.reduce<Record<CashCurrency, number>>((totals, pending) => {
+    totals[pending.moneda] += Number(pending.saldo_pendiente);
+    return totals;
+  }, { NIO: 0, USD: 0 });
   // Al liquidar, el nombre identifica el pendiente pero el monto sí debe participar en el balance físico.
   const balanceDrafts = isPayment
     ? drafts.map((transactionDraft) => ({ ...transactionDraft, pendingName: '' }))
@@ -9566,8 +9608,8 @@ function TransactionModal({
       totals[payment.moneda] = (totals[payment.moneda] || 0) + Number(payment.monto);
     }
     return totals;
-  }, {});
-  const customerBalanceSteps = calculateTransactionCustomerBalanceSteps(balanceDrafts, transactionExchangeRate, pendingCompensation, recordedCompensation);
+  }, { ...selectedCompensation });
+  const customerBalanceSteps = calculateTransactionCustomerBalanceSteps(balanceDrafts, transactionExchangeRate, undefined, recordedCompensation);
   const activeBalanceStep = customerBalanceSteps[activeTabIndex];
   const activeRate = activeBalanceStep?.changeRateValue || activeBalanceStep?.rateValue || 1;
   const activeBalanceBeforeChangeNio = activeBalanceStep?.balanceBeforeChangeNio || 0;
@@ -9576,7 +9618,7 @@ function TransactionModal({
   const transactionDifference = {
     differenceNio: activeBalanceEquivalentNio,
     differenceUsd: activeBalanceBeforeChangeUsd + activeBalanceBeforeChangeNio / activeRate,
-    rateKind: activeBalanceStep?.rateKind || 'Compra' as ExchangeRateKind,
+    rateKind: activeBalanceStep?.changeRateKind || activeBalanceStep?.rateKind || 'Compra' as ExchangeRateKind,
     rateValue: activeRate,
   };
   const changeRateKind = activeBalanceStep?.changeRateKind || transactionDifference.rateKind;
@@ -9887,7 +9929,7 @@ function TransactionModal({
       );
       return;
     }
-    const customerBalanceSteps = calculateTransactionCustomerBalanceSteps(balanceDrafts, transactionExchangeRate, pendingCompensation, recordedCompensation);
+    const customerBalanceSteps = calculateTransactionCustomerBalanceSteps(balanceDrafts, transactionExchangeRate, undefined, recordedCompensation);
     onSave(
       drafts.map((transactionDraft, index) => {
         const currency: CashCurrency = transactionDraft.currency === 'USD' ? 'USD' : 'NIO';
@@ -10192,13 +10234,10 @@ function TransactionModal({
               <div className="transaction-pending-settlement__list">
                 {visibleSettlementPendings.map((pending) => {
                   const checked = selectedSettlementPendingIds.includes(pending.database_id);
-                  const selectedCurrency = selectedSettlementPendings[0]?.moneda;
-                  const incompatible = Boolean(selectedCurrency && selectedCurrency !== pending.moneda && !checked);
                   return <label key={pending.database_id}>
                     <input
                       type="checkbox"
                       checked={checked}
-                      disabled={incompatible}
                       onChange={(event) => setSelectedSettlementPendingIds((current) =>
                         event.target.checked
                           ? [...current, pending.database_id]
@@ -10210,7 +10249,19 @@ function TransactionModal({
                 })}
                 {!visibleSettlementPendings.length && <p className="transaction-pending-settlement__empty">No hay pendientes que coincidan con la búsqueda.</p>}
               </div>
-              {pendingCompensation && <p>Se aplicarán {formatCashCountMoney(pendingCompensation.amount, pendingCompensation.currency)} del saldo a favor, sin registrar efectivo ni movimiento digital adicional.</p>}
+              {selectedSettlementPendings.length > 0 && <p>
+                Se liquidarán {(['NIO', 'USD'] as const).filter(currency => selectedCompensation[currency] > 0)
+                  .map(currency => formatCashCountMoney(selectedCompensation[currency], currency)).join(' y ')} del saldo a favor.
+                Si hace falta convertir: córdobas a dólares a Venta C$ {transactionExchangeRate.sell}; dólares a córdobas a Compra C$ {transactionExchangeRate.buy}.
+                Sólo se convierte lo necesario. El saldo global muestra el restante; no se agrega efectivo ni movimiento bancario.
+              </p>}
+              {selectedSettlementPendings.length > 0 && customerBalanceSteps.some(step => step.conversions.length > 0) && <div className="transaction-pending-conversions">
+                <strong>Conversiones del grupo</strong>
+                {customerBalanceSteps.flatMap(step => step.conversions).map((conversion, index) => <p key={index}>
+                  {formatCashCountMoney(conversion.amount, conversion.from)} → {formatCashCountMoney(conversion.converted, conversion.to)}
+                  {' · '}{conversion.kind} C$ {formatRateDisplay(String(conversion.rate))}
+                </p>)}
+              </div>}
             </fieldset>
           )}
           {draft.digitalSettlement !== '1' && <div className="transaction-cash-count-section">
@@ -11745,9 +11796,16 @@ function FormFieldControl({ field }: { field: ProcessField }) {
 // Exporta la tabla filtrada como archivo compatible con Excel.
 const activeExports = new Set<string>();
 
-async function loadExportRows(config: CrudConfig, rows: CrudRow[], format: 'EXCEL' | 'PDF') {
+async function loadExportRows(config: CrudConfig, rows: CrudRow[], format: 'EXCEL' | 'PDF', transactionQuery?: Record<string, string>) {
   const token = window.sessionStorage.getItem(authTokenStorageKey);
   if (!token) throw new Error('Inicie sesion nuevamente antes de exportar.');
+  if (transactionQuery && config.storageKey === 'transactions') {
+    const result = await apiRequest<TransactionApiRow[]>('/transactions/export-filtered', {
+      method: 'POST', body: JSON.stringify({ format, query: transactionQuery }),
+    });
+    if (token !== window.sessionStorage.getItem(authTokenStorageKey)) throw new Error('La sesion cambio; vuelva a solicitar la exportacion.');
+    return result.map(mapApiTransactionRow);
+  }
   const ids = rows.map(row => row.databaseId);
   if (rows.length > 5000 || ids.some(id => !id)) throw new Error('Actualice la tabla y seleccione hasta 5000 registros por archivo.');
   const path = config.storageKey === 'transactions' ? '/transactions/export' : config.storageKey === 'shifts'
@@ -11761,11 +11819,11 @@ async function loadExportRows(config: CrudConfig, rows: CrudRow[], format: 'EXCE
   return mapped.map(row => ({ ...row, id: visibleIds.get(row.databaseId) ?? row.id }));
 }
 
-async function exportExcel(config: CrudConfig, columns: TableColumn[], rows: CrudRow[]) {
+async function exportExcel(config: CrudConfig, columns: TableColumn[], rows: CrudRow[], transactionQuery?: Record<string, string>) {
   if (activeExports.has(config.storageKey)) return;
   activeExports.add(config.storageKey);
   try {
-    const verified = await loadExportRows(config, rows, 'EXCEL');
+    const verified = await loadExportRows(config, rows, 'EXCEL', transactionQuery);
     const tableHtml = buildExportTable(config.title, columns, verified, true);
     const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'"></head><body>${tableHtml}</body></html>`;
     downloadExport(new Blob(['\uFEFF', html], { type: 'application/vnd.ms-excel;charset=utf-8' }), exportFilename(config.title, 'xls'));
@@ -11775,7 +11833,7 @@ async function exportExcel(config: CrudConfig, columns: TableColumn[], rows: Cru
 }
 
 // Abre una vista imprimible para que el usuario guarde el resultado como PDF.
-async function exportPdf(config: CrudConfig, columns: TableColumn[], rows: CrudRow[]) {
+async function exportPdf(config: CrudConfig, columns: TableColumn[], rows: CrudRow[], transactionQuery?: Record<string, string>) {
   if (activeExports.has(config.storageKey)) return;
   const printable = window.open('', '_blank', 'width=1000,height=720');
   if (!printable) {
@@ -11785,7 +11843,7 @@ async function exportPdf(config: CrudConfig, columns: TableColumn[], rows: CrudR
   printable.opener = null;
   activeExports.add(config.storageKey);
   try {
-    const verified = await loadExportRows(config, rows, 'PDF');
+    const verified = await loadExportRows(config, rows, 'PDF', transactionQuery);
     if (printable.closed) return;
     printable.document.write(`
     <!DOCTYPE html><html lang="es">

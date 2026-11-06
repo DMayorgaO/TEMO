@@ -1,3 +1,4 @@
+const {transactionTableFixture}=require('./transaction-table-fixture.cjs');
 // No real accounts or writes: all API requests are intercepted.
 const {chromium}=require(process.env.PLAYWRIGHT_MODULE_PATH||'playwright');
 const assert=require('node:assert/strict');
@@ -32,10 +33,10 @@ const shift={database_id:shiftId,id:'TUR-000100',estado:'ABIERTO',sucursal:'SUCU
         else if(p==='/shifts/access')body={active:shift,prepared:null};
         else if(p==='/shifts/current'||p===`/shifts/${shiftId}`)body=shift;
         else if(p==='/shifts')body=[shift];
-        else if(p==='/transactions')body=Array.from({length:size},(_,index)=>transaction(index));
+        else if(p==='/transactions/table')body=Array.from({length:size},(_,index)=>transaction(index));
         else if(p.endsWith('/group-detail'))body={editVersion:confirmed?'2':'1',details:Array.from({length:size},(_,index)=>detail(index)),compensations:[]};
         else if(p.endsWith('/detail'))body=detail(0);
-        await route.fulfill({status:200,contentType:'application/json',body:JSON.stringify(body)});
+        await route.fulfill({status:200,contentType:'application/json',body:JSON.stringify(transactionTableFixture(route.request().url(),body))});
       });
       const page=await context.newPage();page.on('pageerror',e=>errors.push(e.message));
       await page.goto('http://127.0.0.1:3188/#/transacciones');

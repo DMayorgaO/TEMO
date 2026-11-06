@@ -46,3 +46,14 @@ test('errors, cancellation, synchronous failures and repeated subscriptions neve
   subscription.unsubscribe();
   assert.equal(limiter.activeActors.size,0);assert.equal(limiter.active,0);
 });
+
+test('table pages and filtered exports share the heavy-read budget',async()=>{
+ const limiter=new ReadWorkloadInterceptor(),source=new Subject(),subscriptions=[];
+ try{
+  for(let i=0;i<4;i++)subscriptions.push(limiter.intercept(host('actor',i%2?'/api/transactions/table':'/api/transactions/export-filtered',i%2?'GET':'POST'),{handle:()=>source}).subscribe());
+  await assert.rejects(lastValueFrom(limiter.intercept(host('actor','/api/transactions/table'),{handle:()=>of([])})),e=>e.getStatus()===429);
+  await assert.rejects(lastValueFrom(limiter.intercept(host('actor','/api/transactions/export-filtered','POST'),{handle:()=>of([])})),e=>e.getStatus()===429);
+  await lastValueFrom(limiter.intercept(host('actor','/api/transactions/batch','POST'),{handle:()=>of([])}));
+ }finally{subscriptions.forEach(s=>s.unsubscribe());}
+ assert.equal(limiter.active,0);
+});

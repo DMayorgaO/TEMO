@@ -8,7 +8,9 @@ Actualizado: 2026-10-30. Referencia local privada: INFORME_SEGURIDAD_TEMO_2026-1
 - [x] 055 aplicada en produccion; preflight posterior aprobado con 55 hashes coincidentes, TLS e identidades/roles/indices correctos. Archivos internos de gastos excluidos.
 - [x] API da7d01c confirmada con PostgreSQL saludable, siete rutas rechazan anonimos/no-store y CORS propio/ajeno comprobados. Titular confirma Compute Plan 0.5c-512mb y Node 22.23.4 en ambos servicios. Regresion completa final: 317 backend, 34 frontend y doce recorridos locales aprobados.
 - [x] API y web 6f39eb8 publicadas: health/database correctos, JS/CSS exactos al build productivo, CSP/anti-framing/nosniff, CORS y siete rutas anonimas comprobados. Preflight final y triggers productivos aprobados. Disponibilidad tecnica confirmada.
-- [ ] QA autenticado por titulares: login/VIP Access, Transacciones/Arqueo/Saldos, exportacion habitual y recuperacion con codigo nuevo. Solicitado al usuario sin crear movimientos reales de prueba. CA desde Render y el resto del checklist siguen pendientes.
+- [x] Titular confirma acceso con VIP Access y exportacion habitual sin problemas despues de publicar. Inicio rapido reportado tras inactividad, pero cercano al despliegue; no acredita por si solo comportamiento estable tras inactividad.
+- [ ] Rendimiento de Transacciones: titular reporta carga superior a 30 segundos en produccion. Prioridad de optimizacion en desarrollo; medir peticiones/API/SQL y sustituir descarga secuencial del historial por consultas paginadas con totales/exportaciones equivalentes. No se declara resuelto.
+- [ ] Confirmacion explicita de Arqueo/Saldos y recuperacion con codigo nuevo. CA desde Render y el resto del checklist siguen pendientes.
 
 ## Identidad en operaciones de caja: 2026-10-30 (solo desarrollo)
 

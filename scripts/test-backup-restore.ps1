@@ -36,7 +36,7 @@ $createdCluster = $false
 New-Item -ItemType Directory -Path (Split-Path $cluster -Parent) -Force | Out-Null
 
 try {
-  if (Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue) {
+  if (Get-NetTCPConnection -LocalPort $port -ErrorAction SilentlyContinue) {
     throw 'El puerto de restauracion esta ocupado; no se modifico ningun servidor.'
   }
   if (Test-Path -LiteralPath $cluster) { throw 'La carpeta temporal ya existe; no se reutilizara.' }
@@ -47,7 +47,7 @@ try {
     -WindowStyle Hidden -PassThru -RedirectStandardOutput $processOutput -RedirectStandardError $processError
   $deadline = (Get-Date).AddSeconds(30)
   do {
-    $listener = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue
+    $listener = Get-NetTCPConnection -LocalPort $port -ErrorAction SilentlyContinue
     if ($listener) { break }
     if ($start.HasExited -and $start.ExitCode -ne 0) { throw "No se pudo iniciar PostgreSQL: $(Get-Content $processError -Raw)" }
     Start-Sleep -Milliseconds 250

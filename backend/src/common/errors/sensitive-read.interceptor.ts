@@ -6,7 +6,7 @@ import { DeniedAccessAudit } from './denied-access-audit';
 const sensitiveRoutes = new Set([
   '/api/catalogs/usuarios', '/api/catalogs/roles', '/api/catalogs/cuentas-bancarias',
   '/api/catalogs/auditoria', '/api/catalogs/auditoria/:id',
-  '/api/transactions', '/api/transactions/:id/detail', '/api/transactions/:id/group-detail',
+  '/api/transactions', '/api/transactions/table', '/api/transactions/:id/detail', '/api/transactions/:id/group-detail',
   '/api/transactions/pending', '/api/transactions/pending/:id/payments',
   '/api/shifts', '/api/shifts/current', '/api/shifts/:id', '/api/shifts/dashboard',
   '/api/shifts/handovers', '/api/shifts/:id/handover-preview', '/api/shifts/:id/handover-candidates',

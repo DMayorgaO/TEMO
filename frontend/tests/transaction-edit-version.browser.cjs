@@ -1,3 +1,4 @@
+const {transactionTableFixture}=require('./transaction-table-fixture.cjs');
 // Independent synthetic sessions and a shared intercepted backend; never sends real financial writes.
 const {chromium}=require(process.env.PLAYWRIGHT_MODULE_PATH||'playwright');
 const assert=require('node:assert/strict');
@@ -40,10 +41,10 @@ const detail=(s,missing=false)=>({editVersion:missing?undefined:s.version,transa
         else if(p==='/shifts/access')body={active:shift,prepared:null};
         else if(p==='/shifts/current'||p===`/shifts/${shiftId}`)body=shift;
         else if(p==='/shifts')body=[shift];
-        else if(p==='/transactions')body=[transaction(freezeList&&!freshList?frozen:snapshot(),missing)];
+        else if(p==='/transactions/table')body=[transaction(freezeList&&!freshList?frozen:snapshot(),missing)];
         else if(p.endsWith('/group-detail')){const s=snapshot();body={editVersion:missing?undefined:s.version,details:[detail(s,missing)],compensations:[]};}
         else if(p.endsWith('/detail'))body=detail(snapshot(),missing);
-        await route.fulfill({status:200,contentType:'application/json',body:JSON.stringify(body)});
+        await route.fulfill({status:200,contentType:'application/json',body:JSON.stringify(transactionTableFixture(route.request().url(),body))});
       });
       const page=await context.newPage();page.on('pageerror',e=>errors.push(e.message));
       await page.goto('http://127.0.0.1:3188/#/transacciones');await page.getByText('Mostrar inactivos',{exact:true}).click();

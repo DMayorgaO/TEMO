@@ -1,3 +1,4 @@
+const {transactionTableFixture}=require('./transaction-table-fixture.cjs');
 // Synthetic records and intercepted requests only. No financial operations are sent.
 const {chromium}=require(process.env.PLAYWRIGHT_MODULE_PATH||'playwright');
 const assert=require('node:assert/strict');
@@ -27,18 +28,19 @@ const shift={database_id:id,id:'TUR-000001',estado:'ABIERTO',id_sucursal:id,sucu
    else if(p==='/catalogs/sucursales')body=[{id_sucursal:id,nombre:shift.sucursal,estado:'ACTIVO'}];
    else if(p==='/catalogs/cuentas-bancarias')body=currencies.map((moneda,index)=>({id:index?other:id,alias:`CUENTA QA ${moneda}`,entidad:'BAC',moneda,estado:'ACTIVO'}));
    else if(p==='/catalogs/reglas-comisiones')body=currencies.map((moneda,index)=>({id:index?other:id,entidad_bancaria:'BAC',movimiento:`COMISION QA ${moneda}`,moneda,moneda_comision:moneda,tipo_calculo:'FIJA',monto_fijo:'10',estado:'ACTIVO'}));
-   else if(p==='/transactions')body=currencies.map((moneda,index)=>({database_id:index?other:id,id:`TRA-000001-0${index+1}`,edit_version:'1',id_grupo_transacciones:id,codigo_operacion:'1',orden_grupo:index+1,shift_id:id,fecha_transaccion:now,monto:'100',moneda,direccion:'ENTRA',estado:'REGISTRADA',entidad:'BAC',codigo_movimiento:'DC',movimiento:'Deposito',cajero:shift.cajero,sucursal:shift.sucursal,descripcion:''}));
+   else if(p==='/transactions/table')body=currencies.map((moneda,index)=>({database_id:index?other:id,id:`TRA-000001-0${index+1}`,edit_version:'1',id_grupo_transacciones:id,codigo_operacion:'1',orden_grupo:index+1,shift_id:id,fecha_transaccion:now,monto:'100',moneda,direccion:'ENTRA',estado:'REGISTRADA',entidad:'BAC',codigo_movimiento:'DC',movimiento:'Deposito',cajero:shift.cajero,sucursal:shift.sucursal,descripcion:''}));
    else if(p==='/transfers')body=currencies.map((moneda,index)=>({database_id:index?other:id,id:`TRF-00000${index+1}`,edit_version:'1',id_turno:id,fecha_transferencia:now,tipo:'EFECTIVO',direccion:'SALE',moneda,monto:'100',estado:'ACTIVO',cajero:shift.cajero,sucursal:shift.sucursal,caja:shift.caja}));
    else if(p==='/transfers/context')body={shifts:[],accounts:[]};
    else if(p==='/transactions/pending')body=currencies.map((moneda,index)=>({database_id:index?other:id,id:`PEN-00000${index+1}`,transaction_database_id:id,shift_database_id:id,transaction_id:'TRA-000001-01',tipo:'POR_COBRAR',estado:'PENDIENTE',monto_original:'100',saldo_pendiente:'100',fecha_creacion:now,fecha_modificacion:now,contraparte:`CLIENTE ${moneda}`,moneda,entidad:'BAC',codigo_movimiento:'DC',movimiento:'Deposito',cajero:shift.cajero,sucursal:shift.sucursal,estado_turno:'ABIERTO'}));
    else if(p==='/dollar-purchases')body=[{database_id:id,id:'TRA-000001-01',fecha_transaccion:now,monto_comprado_usd:'10',diferencia_nio:'6',tasa_compra_usada:'36.4',tasa_venta_usada:'37',cajero:shift.cajero,sucursal:shift.sucursal}];
-   await route.fulfill({status:200,contentType:'application/json',body:JSON.stringify(body)});
+   await route.fulfill({status:200,contentType:'application/json',body:JSON.stringify(transactionTableFixture(route.request().url(),body))});
   });
   const page=await context.newPage();page.on('pageerror',error=>errors.push(error.message));
   holdCurrent=true;
   await page.goto('http://127.0.0.1:3188/#/transacciones');
   await page.locator('tbody tr').first().waitFor();
-  assert.equal(await page.locator('tbody tr').count(),2,'Transaction rows do not wait for the shift detail');
+  await page.waitForFunction(()=>document.querySelectorAll('tbody tr').length===2);
+   assert.equal(await page.locator('tbody tr').count(),2,'Transaction rows do not wait for the shift detail');
   assert.equal(typeof releaseCurrent,'function','Shift detail is still pending');
   holdCurrent=false;releaseCurrent();
   holdDetail=true;detailRequests=0;
@@ -59,10 +61,12 @@ const shift={database_id:id,id:'TUR-000001',estado:'ABIERTO',id_sucursal:id,sucu
     assert.equal(await filter.getByRole('button',{name:currency,exact:true}).getAttribute('aria-pressed'),'true');
     const code=currency==='C$'?'000001':'000002';
     assert.ok((await page.locator('tbody').last().innerText()).includes(route==='transacciones'?`0${currency==='C$'?1:2}`:code));
+    await page.waitForFunction(()=>document.querySelectorAll('tbody tr').length===1);
     assert.equal(await page.locator('tbody tr').count(),1,`${route} filters rows by ${currency}`);
    }
    if(route==='pendientes')assert.equal(await page.getByRole('button',{name:'Digital',exact:true}).isDisabled(),true,'Changing currency clears pending bulk selections');
    await filter.getByRole('button',{name:'$',exact:true}).click();
+   await page.waitForFunction(()=>document.querySelectorAll('tbody tr').length===2);
    assert.equal(await page.locator('tbody tr').count(),2,`${route} restores both currencies`);
   }
   for(const route of ['cuentas','comisiones','reportes/comisiones']){
@@ -70,12 +74,15 @@ const shift={database_id:id,id:'TUR-000001',estado:'ABIERTO',id_sucursal:id,sucu
    const filter=page.getByRole('group',{name:'Filtrar por moneda',exact:true});await filter.waitFor();
    await page.waitForFunction(()=>document.querySelectorAll('tbody tr').length===2);
    await filter.getByRole('button',{name:'C$',exact:true}).click();
-   assert.equal(await page.locator('tbody tr').count(),1,`${route}: NIO only`);
+   await page.waitForFunction(()=>document.querySelectorAll('tbody tr').length===1);
+    assert.equal(await page.locator('tbody tr').count(),1,`${route}: NIO only`);
    assert.ok((await page.locator('tbody').innerText()).includes('NIO'),`${route}: ${await page.locator('tbody').innerText()}`);
    await filter.getByRole('button',{name:'$',exact:true}).click();
-   assert.equal(await page.locator('tbody tr').count(),1,`${route}: USD only`);
+   await page.waitForFunction(()=>document.querySelectorAll('tbody tr').length===1);
+    assert.equal(await page.locator('tbody tr').count(),1,`${route}: USD only`);
    assert.ok((await page.locator('tbody').innerText()).includes('USD'),`${route}: ${await page.locator('tbody').innerText()}`);
    await filter.getByRole('button',{name:'$',exact:true}).click();
+   await page.waitForFunction(()=>document.querySelectorAll('tbody tr').length===2);
    assert.equal(await page.locator('tbody tr').count(),2,`${route}: reset both`);
   }
   await page.goto('http://127.0.0.1:3188/#/arqueo');

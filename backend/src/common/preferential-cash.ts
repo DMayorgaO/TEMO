@@ -11,6 +11,8 @@ export interface PreferentialCashRow {
   primary_usd: string;
   change_nio: string;
   change_usd: string;
+  compensation_nio?: string;
+  compensation_usd?: string;
 }
 
 // Replay the customer's two currency balances; only USD -> NIO uses D.
@@ -18,7 +20,8 @@ export interface PreferentialCashRow {
 export function preferentialCashAdjustment(rows: PreferentialCashRow[], baseRate: number) {
   const balances = new Map<string, { NIO: number; USD: number }>();
   let adjustment = 0;
-  for (const row of rows) {
+  const last = new Map(rows.map((row,index) => [row.group_id,index]));
+  for (const [index,row] of rows.entries()) {
     const balance = balances.get(row.group_id) ?? { NIO: 0, USD: 0 };
     balances.set(row.group_id, balance);
     const buy = Number(row.buy_rate);
@@ -39,6 +42,10 @@ export function preferentialCashAdjustment(rows: PreferentialCashRow[], baseRate
     balance[row.currency] -= sign * Number(row.amount);
     balance.NIO += sign * Number(row.primary_nio);
     balance.USD += sign * Number(row.primary_usd);
+    if (last.get(row.group_id) === index) {
+      balance.NIO -= Number(row.compensation_nio || 0);
+      balance.USD -= Number(row.compensation_usd || 0);
+    }
     offset();
     balance.NIO -= Number(row.change_nio);
     balance.USD -= Number(row.change_usd);

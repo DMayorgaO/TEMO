@@ -28,3 +28,16 @@ for(const [name,rows,expected] of cases)test(`purchase ledger: ${name}`,()=>{
   assert.ok(Math.abs(total-expected)<0.0001,`${total} != ${expected}`);
   for(const row of result)assert.ok(Number(row.monto_comprado_usd)<=Number(rows.find(item=>item.database_id===row.database_id).amount)+0.0001);
 });
+
+for(const [name,rows,expected] of [
+ ['retained NIO withdrawal pays USD debt without deposit',[step(1,{currency:'NIO',direction:'SALE',amount:500,sale_eligible:false,compensation_usd:10})],10],
+ ['NIO deposit change pays USD debt',[step(1,{currency:'NIO',amount:100,primary_nio:600,sale_eligible:false,compensation_usd:10,change_nio:130})],10],
+ ['USD withdrawal pays NIO debt at buy rate',[step(1,{direction:'SALE',amount:15,compensation_nio:364})],0],
+ ['deposit and debt are distinct obligations',[step(1,{currency:'NIO',direction:'SALE',amount:5000}),step(2,{amount:40,compensation_usd:26.92})],66.92],
+ ['both debt currencies use NIO only once',[step(1,{currency:'NIO',direction:'SALE',amount:500,compensation_nio:130,compensation_usd:10})],10],
+ ['returned excess USD is included only within actual debt conversion',[step(1,{currency:'NIO',direction:'SALE',amount:500,compensation_usd:10,change_usd:1})],10],
+])test(`cross-currency purchase ledger: ${name}`,()=>{
+ const result=calculatePurchaseLedger(rows);
+ assert.ok(Math.abs(result.reduce((sum,row)=>sum+Number(row.monto_comprado_usd),0)-expected)<.0001);
+ assert.ok(Math.abs(result.reduce((sum,row)=>sum+Number(row.diferencia_nio),0)-expected*.6)<.0001);
+});

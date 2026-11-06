@@ -4,6 +4,8 @@ Fecha: 2026-10-29. Trabajo por etapas en desarrollo; no autoriza cambios product
 
 ## Estado y alcance
 
+Seguimiento 2026-10-30 despues de publicar 6f39eb8: el titular confirma VIP Access y exportacion correctos, pero Transacciones sigue tardando mas de 30 segundos. Es una observacion del usuario, no una medicion instrumentada de p95 ni evidencia de causa. Login rapido tras inactividad cerca del despliegue no permite atribuir el comportamiento al plan o descartar otros factores. Prioridad inmediata en desarrollo: medir una visita completa y refrescos, separar tiempos de API/pool/SQL de descarga/render, y abordar la etapa 2 sin recortar historiales, totales ni exportaciones. No se autorizan mas cambios productivos por este reporte.
+
 El titular confirma cambio de Compute Plan de Render tras mostrar Free y posteriormente identifica 0.5c-512mb (0.5 CPU, 512 MB). Blueprint local ajustado para conservar ese plan al sincronizar. Pendiente medir comportamiento despues del cambio; no se inspecciono directamente el dashboard ni se modificaron planes remotos desde el agente. No actualizar el control interno de gastos con importes supuestos.
 
 La mejora de infraestructura elimina una limitacion distinta de las consultas y de la interfaz. No se promete que pagar otro plan resuelva todas las demoras. Evidencia inicial en REVISION_CARGA_2026-10-29.md; tres health publicos son una observacion, no una linea base de operaciones autenticadas.
@@ -62,3 +64,9 @@ Hecho en desarrollo: cargas independientes de lista/contexto, estado inicial hon
 Refuerzo posterior del mismo dia: contrato de paginacion/fechas estricto y presupuesto de consultas pesadas simultaneas (4 por actor, 16 por proceso). Es contencion de carga, no cumplimiento de la etapa de paginacion/filtros/totales; observar 429 y uso legitimo antes de ajustar limites. Ver SEGURIDAD_CONSULTAS_2026-10-29.md.
 
 Pendiente: linea base autenticada despues del cambio de plan y etapas 2-5. El cambio de plan fue realizado por el titular, no es un despliegue de las mejoras locales.
+
+## Avance local posterior: tabla paginada (2026-10-30)
+
+Se implemento en desarrollo la consulta ligera con filtros/ordenacion/paginacion SQL, cantidad y totales del filtro completo, exportacion filtrada con identidad/auditoria y proteccion frente a respuestas antiguas. Se conservaron detalle financiero, alcance de permisos y limite previo de exportacion. No hubo publicacion ni migracion nueva.
+
+Mediciones sinteticas locales, pruebas, limites y pendientes en [TRANSACCIONES_PAGINADAS_2026-10-30.md](TRANSACCIONES_PAGINADAS_2026-10-30.md). Este avance reemplaza la anotacion previa de que toda la etapa 2 estaba pendiente; no cierra las mediciones productivas, la capacidad concurrente ni las etapas 3-5. La 055 ya fue aplicada en la publicacion anterior, como registra el despliegue; no se debe reaplicar ni retirar como parte de este cambio.

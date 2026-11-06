@@ -1,7 +1,7 @@
 import { CallHandler, ExecutionContext, HttpException, NestInterceptor } from '@nestjs/common';
 import { defer, finalize } from 'rxjs';
 
-const reports = new Set(['/api/transactions','/api/shifts/dashboard','/api/dollar-purchases']);
+const reports = new Set(['/api/transactions','/api/transactions/table','/api/transactions/export-filtered','/api/shifts/dashboard','/api/dollar-purchases']);
 
 export class ReadWorkloadInterceptor implements NestInterceptor {
   private readonly activeActors = new Map<string, number>();
@@ -13,7 +13,7 @@ export class ReadWorkloadInterceptor implements NestInterceptor {
       method: string; user?: { id: string }; baseUrl?: string; route?: { path?: string };
     }>();
     const route = `${request.baseUrl ?? ''}${request.route?.path ?? ''}`;
-    if (request.method !== 'GET' || !request.user?.id || !reports.has(route)) return next.handle();
+    if ((request.method !== 'GET' && !(request.method === 'POST' && route === '/api/transactions/export-filtered')) || !request.user?.id || !reports.has(route)) return next.handle();
     const actor = request.user.id;
 
     // Bound only concurrent heavy reads, not financial writes or records per day.

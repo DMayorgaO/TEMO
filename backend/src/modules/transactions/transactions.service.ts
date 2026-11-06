@@ -22,6 +22,7 @@ import {
 type CurrencyCode = 'NIO' | 'USD';
 type MoneyDirection = 'ENTRA' | 'SALE';
 type RateKind = 'COMPRA' | 'VENTA';
+type BalanceConversion = { from: CurrencyCode; to: CurrencyCode; amount: number; converted: number; rate: number; kind: RateKind };
 
 interface ShiftRow extends QueryResultRow {
   id_turno: string;
@@ -115,6 +116,7 @@ export class TransactionsService {
     },async()=>{
       const shift = await this.resolveShift(client, input,audit.actor);
       const userId = await this.resolveUser(client, input.userId, shift.id_cajero);
+      const selectedPendings = await this.loadPendingCompensations(client, input.pendingSettlementIds, shift);
       const currencies = await this.loadCurrencies(client);
       const rateId = await this.resolveExchangeRate(client, input, userId);
       const methods = await this.loadPaymentMethods(client);
@@ -188,7 +190,7 @@ export class TransactionsService {
         }
 
         const direction = movement.direccion_efectivo;
-        this.assertChangeRateRule(input, transaction, direction, customerBalance);
+        if (!selectedPendings.length) this.assertChangeRateRule(input, transaction, direction, customerBalance);
         const sign = direction === 'ENTRA' ? 1 : -1;
         const rateKind = this.transactionRateKind(
           direction,
@@ -353,6 +355,7 @@ export class TransactionsService {
         shift,
         rateId,
         userId,
+        selectedPendings,
       );
       const denominations = await this.loadDenominations(client);
       const primaryDirection: MoneyDirection =
@@ -830,6 +833,7 @@ export class TransactionsService {
     user: AuthenticatedUser,
     groupClient?: PoolClient,
     balance?: Record<CurrencyCode, number>,
+    deferCompensatedRateValidation = false,
   ) {
     const work = async (client: PoolClient) => {
       const transaction = await this.loadEditableTransaction(
@@ -846,8 +850,10 @@ export class TransactionsService {
         await this.updateDigitalPayment(client, transaction, input, user);
         return { id: transactionId, updated: true };
       }
-      if (!groupClient && (await client.query(`select 1 from temo.abonos_pendientes where id_transaccion=$1 and observaciones=$2 limit 1`,
-        [transactionId,'Compensación con saldo a favor de una transacción en curso'])).rowCount) {
+      if (!groupClient && (await client.query(`select 1 from temo.abonos_pendientes ap
+        join temo.transacciones t on t.id_transaccion=ap.id_transaccion
+        where t.id_grupo_transacciones=$1 and ap.observaciones=$2 limit 1`,
+        [transaction.id_grupo_transacciones,'Compensación con saldo a favor de una transacción en curso'])).rowCount) {
         throw new ConflictException('Edite esta operacion desde el grupo para recalcular sus pendientes vinculados.');
       }
       const previousSettlement = await this.loadStoredSettlement(
@@ -880,7 +886,7 @@ export class TransactionsService {
           `El movimiento ${input.movementCode} no tiene direccion de efectivo configurada.`,
         );
       }
-      this.assertChangeRateRule(input, {
+      if (!deferCompensatedRateValidation) this.assertChangeRateRule(input, {
         currencyCode: input.currencyCode,
         amount: input.amount,
         pendingName: input.pendingName,
@@ -1081,8 +1087,10 @@ export class TransactionsService {
       if (await this.isDigitalPayment(client, transactionId)) {
         await this.releasePayments(client, [transactionId], user);
       } else if (!groupClient) {
-        const compensation = await client.query(`select 1 from temo.abonos_pendientes
-          where id_transaccion=$1 and observaciones=$2 limit 1`, [transactionId, 'Compensación con saldo a favor de una transacción en curso']);
+        const compensation = await client.query(`select 1 from temo.abonos_pendientes ap
+          join temo.transacciones t on t.id_transaccion=ap.id_transaccion
+          where t.id_grupo_transacciones=$1 and ap.observaciones=$2 limit 1`,
+          [transaction.id_grupo_transacciones, 'Compensación con saldo a favor de una transacción en curso']);
         if (compensation.rowCount) throw new ConflictException('Anule esta operacion desde la edicion del grupo para recalcular sus pendientes.');
       }
       if (transaction.id_pendiente) {
@@ -1244,16 +1252,27 @@ export class TransactionsService {
         const change = input.updates.find(item => item.id === row.id_transaccion);
         if (change) {
           if (input.preferential !== (change.data.rates.buy === 36.55)) throw new ConflictException('La marca D y la tasa no coinciden.');
-          await this.update(change.id, change.data, user, client, balance);
+          await this.update(change.id, change.data, user, client, balance, Boolean(compensation.rowCount));
         } else await this.void(row.id_transaccion, user, client);
       }
+      let compensationConversions: BalanceConversion[] = [];
       if (input.updates.length && compensation.rowCount) {
-        for (const currency of ['NIO','USD'] as const) {
-          const amount = compensation.rows.filter(row => row.moneda === currency).reduce((sum, row) => sum + Number(row.monto), 0);
-          if (balance[currency] + 0.005 < amount) throw new ConflictException(`El saldo del grupo no cubre los pendientes liquidados en ${currency}. No se guardo ningun cambio.`);
-        }
-        const last = members.rows.filter(row => !input.voidIds.includes(row.id_transaccion)).at(-1)!;
-        await client.query('update temo.abonos_pendientes set id_transaccion=$2 where id_abono=any($1::uuid[])', [compensation.rows.map(row => row.id_abono), last.id_transaccion]);
+        // Resolve effective directions from the updated ledger, never from client labels.
+        const effective = await client.query<{ id_transaccion: string; direccion: MoneyDirection } & QueryResultRow>(
+          `select t.id_transaccion,tm.direccion from temo.transacciones t
+           join temo.transacciones_montos tm using(id_transaccion)
+           where t.id_grupo_transacciones=$1 and t.estado<>'ANULADA' and tm.medio='EFECTIVO'
+           order by t.orden_grupo`, [anchor.id_grupo_transacciones]);
+        const changes = effective.rows.map(row => input.updates.find(change => change.id === row.id_transaccion)!.data);
+        if (!changes.length) throw new ConflictException('El grupo no tiene fondos para conservar los pendientes liquidados.');
+        compensationConversions = this.validateCompensatedGroup({ rates: changes[0].rates, transactions: changes, settlement: changes[0].settlement },
+          effective.rows.map(row => row.direccion), this.compensationTotals(compensation.rows));
+        const lastIndex = changes.reduce((last, row, index) => row.pendingName ? last : index, -1);
+        const last = effective.rows[lastIndex];
+        const lastRates = changes[lastIndex].rates;
+        await client.query(`update temo.abonos_pendientes set id_transaccion=$2,tasa_compra_usada=$3,tasa_venta_usada=$4,
+          id_tipo_cambio=(select id_tipo_cambio from temo.transacciones where id_transaccion=$2) where id_abono=any($1::uuid[])`,
+          [compensation.rows.map(row => row.id_abono), last.id_transaccion, lastRates.buy, lastRates.sell]);
       }
       const after: StoredSettlement[] = [];
       for (const row of members.rows) if (!input.voidIds.includes(row.id_transaccion)) after.push(await this.loadStoredSettlement(client, anchor.id_grupo_transacciones, row.id_transaccion));
@@ -1264,7 +1283,7 @@ export class TransactionsService {
         values($1,'ACTUALIZAR','grupos_transacciones',$2,$3::jsonb,$4::jsonb)`,
       [user.id,anchor.id_grupo_transacciones,
         JSON.stringify({transactions:originalRows.rows.map(row=>row.data),settlements:before,auditTransactions:auditBefore}),
-        JSON.stringify({...input,auditTransactions:await this.groupAuditSnapshot(client,anchor.id_grupo_transacciones)})]);
+        JSON.stringify({...input,compensationConversions,auditTransactions:await this.groupAuditSnapshot(client,anchor.id_grupo_transacciones)})]);
       return {updated:input.updates.length,voided:input.voidIds.length};
     },()=>this.authorizeTransactionReplay(client,transactionId,user)));
   }
@@ -2214,15 +2233,8 @@ export class TransactionsService {
     });
   }
 
-  private async applyPendingCompensations(
-    client: PoolClient,
-    input: CreateTransactionBatchInput,
-    persisted: PersistedTransaction[],
-    shift: ShiftRow,
-    rateId: string,
-    userId: string,
-  ) {
-    if (!input.pendingSettlementIds.length) return;
+  private async loadPendingCompensations(client: PoolClient, pendingIds: string[], shift: ShiftRow) {
+    if (!pendingIds.length) return [];
     const selected = await client.query<{
       id_pendiente: string;
       estado: string;
@@ -2241,11 +2253,11 @@ export class TransactionsService {
        where pp.id_pendiente = any($1::uuid[])
          and source_transaction.id_sucursal = $3
          and source_shift.fecha_apertura::date = active_shift.fecha_apertura::date
-       order by pp.fecha_creacion
+       order by pp.id_pendiente
        for update of pp`,
-      [input.pendingSettlementIds, shift.id_turno, shift.id_sucursal],
+      [pendingIds, shift.id_turno, shift.id_sucursal],
     );
-    if (selected.rowCount !== input.pendingSettlementIds.length) {
+    if (selected.rowCount !== pendingIds.length) {
       throw new ConflictException(
         'Los pendientes seleccionados deben pertenecer al día y sucursal del turno activo.',
       );
@@ -2259,35 +2271,24 @@ export class TransactionsService {
       );
     }
 
-    const available: Record<CurrencyCode, number> = { NIO: 0, USD: 0 };
-    for (const [index, transaction] of input.transactions.entries()) {
-      const direction = persisted[index].direction;
-      const settlement = transaction.settlement ?? input.settlement;
-      const primary = this.cashTotals(settlement.primaryCounts);
-      const change = this.cashTotals(settlement.changeCounts);
-      available[transaction.currencyCode] += direction === 'SALE' ? transaction.amount : -transaction.amount;
-      for (const currency of ['NIO', 'USD'] as const) {
-        available[currency] += direction === 'ENTRA' ? primary[currency] : -primary[currency];
-        available[currency] -= change[currency];
-      }
-    }
-    const selectedTotals = selected.rows.reduce<Record<CurrencyCode, number>>(
-      (totals, pending) => {
-        totals[pending.moneda] += Number(pending.saldo_pendiente);
-        return totals;
-      },
-      { NIO: 0, USD: 0 },
-    );
-    for (const currency of ['NIO', 'USD'] as const) {
-      if (selectedTotals[currency] > Math.max(0, available[currency]) + 0.005) {
-        throw new ConflictException(
-          `El saldo a favor en ${currency} no cubre los pendientes seleccionados. Disponible: ${available[currency].toFixed(2)}.`,
-        );
-      }
-    }
+    return selected.rows;
+  }
 
-    const paymentTransactionId = persisted[persisted.length - 1].id;
-    for (const pending of selected.rows) {
+  private async applyPendingCompensations(
+    client: PoolClient,
+    input: CreateTransactionBatchInput,
+    persisted: PersistedTransaction[],
+    shift: ShiftRow,
+    rateId: string,
+    userId: string,
+    selected: Awaited<ReturnType<TransactionsService['loadPendingCompensations']>>,
+  ) {
+    if (!selected.length) return;
+    const totals = this.compensationTotals(selected.map(row => ({ moneda: row.moneda, monto: row.saldo_pendiente })));
+    const conversions = this.validateCompensatedGroup(input, persisted.map(row => row.direction), totals);
+    const lastEffective = input.transactions.reduce((last, row, index) => row.pendingName ? last : index, -1);
+    const paymentTransactionId = persisted[lastEffective].id;
+    for (const pending of selected) {
       const payment = await client.query<{ id_abono: string } & QueryResultRow>(
         `insert into temo.abonos_pendientes (
            id_pendiente, id_transaccion, id_turno_aplicacion, id_moneda, monto,
@@ -2296,7 +2297,7 @@ export class TransactionsService {
          ) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,'Compensación con saldo a favor de una transacción en curso',$2)
          returning id_abono`,
         [pending.id_pendiente, paymentTransactionId, shift.id_turno, pending.id_moneda,
-          Number(pending.saldo_pendiente), rateId, input.rates.buy, input.rates.sell, userId],
+          Number(pending.saldo_pendiente), rateId, input.specialExchangeRate ?? input.rates.buy, input.rates.sell, userId],
       );
       await client.query(
         `update temo.pagos_pendientes
@@ -2309,7 +2310,7 @@ export class TransactionsService {
            id_pendiente, estado_anterior, estado_nuevo, id_usuario, motivo
          ) values ($1,$2::temo.estado_pendiente,'PAGADO',$3,$4)`,
         [pending.id_pendiente, pending.estado, userId,
-          `Compensado dentro de la transacción ${paymentTransactionId}; abono ${payment.rows[0].id_abono}`],
+          `Compensado dentro de la transacción ${paymentTransactionId}; abono ${payment.rows[0].id_abono}; conversiones del grupo: ${JSON.stringify(conversions)}`],
       );
     }
   }
@@ -2899,7 +2900,7 @@ export class TransactionsService {
     const current = await client.query<{ id_tipo_cambio: string } & QueryResultRow>(
       `select id_tipo_cambio
        from temo.tipos_cambio
-       where tasa_compra = $1 and tasa_venta = $2
+       where tasa_compra <> 36.55 and ($1::numeric = 36.55 or tasa_compra = $1) and tasa_venta = $2
        order by vigente_desde desc
        limit 1`,
       [input.rates.buy, input.rates.sell],
@@ -2915,7 +2916,8 @@ export class TransactionsService {
        )
        values ($1, $2, $3, 'Registrada al guardar grupo de transacciones')
        returning id_tipo_cambio`,
-      [input.rates.buy, input.rates.sell, userId],
+      // 36.55 is reserved for D. Store it on the operation, never as a general rate.
+      [input.rates.buy === 36.55 ? 36.4 : input.rates.buy, input.rates.sell, userId],
     );
     return inserted.rows[0].id_tipo_cambio;
   }
@@ -3447,6 +3449,47 @@ export class TransactionsService {
     return 'VENTA';
   }
 
+  private compensationTotals(rows: Array<{ moneda: CurrencyCode; monto: string | number }>) {
+    const totals = { NIO: 0, USD: 0 };
+    for (const row of rows) totals[row.moneda] += Number(row.monto);
+    return totals;
+  }
+
+  private validateCompensatedGroup(
+    input: Pick<CreateTransactionBatchInput, 'rates' | 'specialExchangeRate' | 'settlement'> & {
+      transactions: Array<CreateTransactionBatchInput['transactions'][number] & { rates?: CreateTransactionBatchInput['rates'] }>;
+    },
+    directions: MoneyDirection[],
+    compensation: Record<CurrencyCode, number>,
+  ) {
+    const balance = { NIO: 0, USD: 0 };
+    const conversions: BalanceConversion[] = [];
+    const last = input.transactions.reduce((value, row, index) => row.pendingName ? value : index, -1);
+    if (last < 0) throw new ConflictException('El grupo no tiene fondos para liquidar los pendientes seleccionados.');
+    const independent = input.transactions.some(row => row.settlement);
+    const net = input.transactions.reduce((total, row, index) => total + (directions[index] === 'ENTRA' ? 1 : -1)
+      * row.amount * (row.currencyCode === 'USD' ? this.rateValue(input, this.transactionRateKind(directions[index], row.currencyCode)) : 1), 0);
+    const primaryDirection: MoneyDirection = net < 0 ? 'SALE' : 'ENTRA';
+    const primaryIndex = input.transactions.findIndex((row, index) => !row.pendingName && directions[index] === primaryDirection);
+    for (const [index, row] of input.transactions.entries()) {
+      const settlement = independent ? row.settlement ?? input.settlement : {
+        ...input.settlement,
+        primaryCounts: index === primaryIndex ? input.settlement.primaryCounts : { NIO: [], USD: [] },
+        changeCounts: index === last ? input.settlement.changeCounts : { NIO: [], USD: [] },
+      };
+      this.assertChangeRateRule(row.rates ? { rates: row.rates } : input, { ...row, settlement }, directions[index], balance,
+        index === last ? compensation : { NIO: 0, USD: 0 }, independent, conversions);
+    }
+    for (const currency of ['NIO', 'USD'] as const) {
+      // Debt keeps its denomination. Only opposite currency balances are converted,
+      // at the stored buy/sell rate, before checking funds for the entire group.
+      if (balance[currency] < -0.005) {
+        throw new ConflictException(`El saldo del grupo no cubre las transacciones y los pendientes liquidados en ${currency}. No se guardo ningun cambio.`);
+      }
+    }
+    return conversions;
+  }
+
   private assertChangeRateRule(
     input: { rates: { buy: number; sell: number } },
     transaction: {
@@ -3457,6 +3500,9 @@ export class TransactionsService {
     },
     direction: MoneyDirection,
     balance: Record<CurrencyCode, number> = { NIO: 0, USD: 0 },
+    compensation: Record<CurrencyCode, number> = { NIO: 0, USD: 0 },
+    validateRate = true,
+    conversions?: BalanceConversion[],
   ) {
     if (transaction.pendingName || !transaction.settlement) return;
     const settlement = transaction.settlement;
@@ -3470,7 +3516,9 @@ export class TransactionsService {
     }
     balance.NIO += direction === 'ENTRA' ? primaryTotals.NIO : -primaryTotals.NIO;
     balance.USD += direction === 'ENTRA' ? primaryTotals.USD : -primaryTotals.USD;
-    this.offsetCustomerBalance(balance, input);
+    balance.NIO -= compensation.NIO;
+    balance.USD -= compensation.USD;
+    this.offsetCustomerBalance(balance, input, conversions);
 
     const expectedKind: RateKind = balance.USD > 0.0001
       ? 'COMPRA'
@@ -3483,7 +3531,7 @@ export class TransactionsService {
             : settlement.changeRateKind;
     const hasChange = changeTotals.NIO > 0 || changeTotals.USD > 0 ||
       settlement.expectedChange.NIO > 0 || settlement.expectedChange.USD > 0;
-    if (hasChange && settlement.changeRateKind !== expectedKind) {
+    if (validateRate && hasChange && settlement.changeRateKind !== expectedKind) {
       throw new ConflictException(
         `La tasa del vuelto debe ser ${expectedKind === 'COMPRA' ? 'Compra' : 'Venta'} C$ ${this.rateValue(input, expectedKind).toFixed(2)} según el sentido del efectivo.`,
       );
@@ -3491,20 +3539,23 @@ export class TransactionsService {
 
     balance.NIO -= changeTotals.NIO;
     balance.USD -= changeTotals.USD;
-    this.offsetCustomerBalance(balance, input);
+    this.offsetCustomerBalance(balance, input, conversions);
   }
 
   private offsetCustomerBalance(
     balance: Record<CurrencyCode, number>,
     input: { rates: { buy: number; sell: number }; specialExchangeRate?: number },
+    conversions?: BalanceConversion[],
   ) {
     if (balance.NIO < 0 && balance.USD > 0) {
       const buyRate = input.specialExchangeRate ?? input.rates.buy;
       const usdUsed = Math.min(balance.USD, -balance.NIO / buyRate);
+      if (usdUsed > 1e-8) conversions?.push({ from: 'USD', to: 'NIO', amount: usdUsed, converted: usdUsed * buyRate, rate: buyRate, kind: 'COMPRA' });
       balance.USD -= usdUsed;
       balance.NIO += usdUsed * buyRate;
     } else if (balance.USD < 0 && balance.NIO > 0) {
       const nioUsed = Math.min(balance.NIO, -balance.USD * input.rates.sell);
+      if (nioUsed > 1e-8) conversions?.push({ from: 'NIO', to: 'USD', amount: nioUsed, converted: nioUsed / input.rates.sell, rate: input.rates.sell, kind: 'VENTA' });
       balance.NIO -= nioUsed;
       balance.USD += nioUsed / input.rates.sell;
     }

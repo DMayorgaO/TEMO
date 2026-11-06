@@ -35,3 +35,9 @@ test('public, polling notifications, writes and failed reads do not produce succ
     { handle: () => throwError(() => new Error('denied')) })));
   assert.equal(calls.length, 0);
 });
+
+test('paginated transaction reads retain auxiliary audit without recording filters',async()=>{
+ const calls=[];const interceptor=new SensitiveReadInterceptor({query:async(...args)=>{calls.push(args);return {rowCount:1};}});
+ await lastValueFrom(interceptor.intercept(host({method:'GET',user:{id:actor},route:{path:'/api/transactions/table'},originalUrl:'/api/transactions/table?search=private-search',ip:'127.0.0.1'}),{handle:()=>of({rows:[],total:0})}));
+ assert.equal(calls.length,1);assert.equal(calls[0][1][2],'/api/transactions/table');assert.ok(!JSON.stringify(calls).includes('private-search'));
+});

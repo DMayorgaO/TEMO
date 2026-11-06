@@ -1456,6 +1456,7 @@ export class ShiftsService {
     ), database.query<{ buy_rate: string } & QueryResultRow>(
       `select coalesce((
          select tasa_compra from temo.tipos_cambio
+         where tasa_compra <> 36.55 /* D belongs only to its operation, including legacy rate rows. */
          order by vigente_desde desc, fecha_creacion desc limit 1
        ), 36.40) as buy_rate`,
     )]);
@@ -1473,7 +1474,8 @@ export class ShiftsService {
          tm.direccion as direction, tm.monto as amount,
          tr.tasa_compra_usada as buy_rate, tr.tasa_venta_usada as sell_rate,
          coalesce(c.primary_nio, 0) as primary_nio, coalesce(c.primary_usd, 0) as primary_usd,
-         coalesce(c.change_nio, 0) as change_nio, coalesce(c.change_usd, 0) as change_usd
+         coalesce(c.change_nio, 0) as change_nio, coalesce(c.change_usd, 0) as change_usd,
+         coalesce(comp.nio,0) as compensation_nio, coalesce(comp.usd,0) as compensation_usd
        from temo.transacciones tr
        join temo.grupos_transacciones g using (id_grupo_transacciones)
        join temo.transacciones_montos tm using (id_transaccion)
@@ -1487,7 +1489,16 @@ export class ShiftsService {
          from temo.arqueos a join temo.monedas am using (id_moneda)
          where a.id_transaccion = tr.id_transaccion and a.id_abono_pendiente is null
        ) c on true
+       left join lateral (
+         select sum(ap.monto) filter(where cm.codigo='NIO') as nio,
+           sum(ap.monto) filter(where cm.codigo='USD') as usd
+         from temo.abonos_pendientes ap join temo.transacciones source on source.id_transaccion=ap.id_transaccion
+         join temo.monedas cm on cm.id_moneda=ap.id_moneda
+         where source.id_grupo_transacciones=tr.id_grupo_transacciones and source.estado<>'ANULADA'
+           and ap.observaciones='Compensación con saldo a favor de una transacción en curso'
+       ) comp on true
        where tr.id_turno = $1 and tr.estado <> 'ANULADA' and tm.medio = 'EFECTIVO'
+         and not exists(select 1 from temo.pagos_pendientes pp where pp.id_transaccion=tr.id_transaccion)
          and g.observaciones = $2 and tr.tasa_compra_usada = 36.55
        order by tr.id_grupo_transacciones, tr.orden_grupo`,
       [shiftId, preferentialGroupMarker],

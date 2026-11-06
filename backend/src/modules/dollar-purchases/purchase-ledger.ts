@@ -15,6 +15,7 @@ export function calculatePurchaseLedger(rows: PurchaseLedgerRow[]) {
   for (const steps of groups.values()) {
     let nio = 0, usd = 0, netNio = 0, nominalNio = 0, soldNio = 0;
     const purchases: Array<{ row: PurchaseLedgerRow; amount: number; cost: number }> = [];
+    let compensationPurchased = 0;
     const shared = steps.find(row => row.shared);
     const sharedPrimary = shared ? steps.findIndex(row => row.direction === shared.primary_direction) : -1;
     function offset(row: PurchaseLedgerRow) {
@@ -34,6 +35,15 @@ export function calculatePurchaseLedger(rows: PurchaseLedgerRow[]) {
           if (amount > 1e-8) purchases.push({ row: owner, amount, cost: amount * sell });
           remaining -= amount;
           if (remaining < 1e-8) break;
+        }
+        // A USD debt is also a USD obligation, even without a new USD deposit.
+        // Attribute only the still-unallocated conversion to its payment anchor.
+        if (row === steps.at(-1) && remaining > 1e-8) {
+          const amount = Math.min(remaining, Math.max(0, Number(row.compensation_usd || 0) - compensationPurchased));
+          if (amount > 1e-8) {
+            purchases.push({ row, amount, cost: amount * sell });
+            compensationPurchased += amount;
+          }
         }
       }
     }

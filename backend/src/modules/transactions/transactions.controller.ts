@@ -22,7 +22,9 @@ import {
   voidTransactionSchema,
 } from './transaction-batch.schema';
 import { TransactionsService } from './transactions.service';
-import { authorizedExport, parseExportSelection, requireExportRole } from '../../common/export-selection';
+import { authorizedExport, parseExportSelection, requireExportRole, recordAuthorizedExport } from '../../common/export-selection';
+import { readTransactionTable } from './transaction-table.query';
+import { z } from 'zod';
 import { RecordIdPipe } from '../../common/record-id.pipe';
 import { parseTransactionQuery, requireTransactionReader } from '../../common/read-query';
 
@@ -33,6 +35,22 @@ export class TransactionsController {
     private readonly db: DatabaseService,
     private readonly transactions: TransactionsService,
   ) {}
+
+  @Get('table')
+  table(@Query() query: unknown, @Req() request: { user: AuthenticatedUser }) {
+    return readTransactionTable(this.db, request.user, query);
+  }
+
+  @Post('export-filtered')
+  async exportFiltered(@Body() body: unknown, @Req() request: { user: AuthenticatedUser; ip?: string }) {
+    requireExportRole(request.user);
+    const parsed = z.object({ format: z.enum(['EXCEL', 'PDF']), query: z.record(z.string(), z.unknown()) }).strict().safeParse(body);
+    if (!parsed.success) throw new BadRequestException('La solicitud de exportacion no es valida.');
+    const result = await readTransactionTable(this.db, request.user, parsed.data.query, true);
+    if (result.total > 5000) throw new BadRequestException('El filtro contiene mas de 5000 registros. Ajuste el periodo para exportar un archivo completo.');
+    await recordAuthorizedExport(this.db, request, 'Transacciones', parsed.data.format, result.rows.length);
+    return result.rows;
+  }
 
   @Post('export')
   async exportRows(@Body() body: unknown, @Req() request: { user: AuthenticatedUser; ip?: string }) {

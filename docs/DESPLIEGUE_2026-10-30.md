@@ -33,6 +33,8 @@ Zona horaria America/Managua. Usuario autoriza publicacion y confirma ausencia d
 
 ## Pendientes y reapertura
 
+- Confirmacion posterior del titular: acceso con VIP Access y exportacion habitual correctos. Reporta Transacciones demorando mas de 30 segundos; rendimiento NO aprobado ni resuelto. Inicio de sesion rapido tras inactividad observado cerca del despliegue, sin separar efecto de instancia reciente ni causa de latencia. Seguimiento en desarrollo segun PLAN_OPTIMIZACION_TEMO_2026-10-29.md.
+
 - Disponibilidad tecnica confirmada; usuarios pueden ingresar con recarga completa para comprobar funcionalidad autenticada. Se solicito confirmacion de login/VIP Access, Transacciones/Arqueo/Saldos y exportacion habitual, sin inventar movimientos reales de caja. No se afirma haber probado todas las operaciones productivas.
 - Recuperacion con codigo nuevo, QA administrativo/cajeros y prueba negativa de CA desde Render siguen pendientes de sus titulares o acceso autorizado apropiado.
 - No restaurar este respaldo encima de movimientos posteriores ni retirar 055 automaticamente. Ante problemas mantener pausa, identificar revision y revisar retorno compatible de API/web.

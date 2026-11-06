@@ -1,3 +1,4 @@
+const {transactionTableFixture}=require('./transaction-table-fixture.cjs');
 // Synthetic sessions and intercepted APIs only; no financial requests leave this browser fixture.
 const {chromium}=require(process.env.PLAYWRIGHT_MODULE_PATH||'playwright');
 const assert=require('node:assert/strict');
@@ -40,9 +41,9 @@ const transaction=index=>({database_id:transactionIds[index],id:`TRA-00000${inde
         else if(p==='/shifts/current'||p===`/shifts/${shiftId}`)body=shift;
         else if(p==='/shifts')body=[shift];
         else if(p==='/transactions/pending'){pendingReads++;body=[0,1].map(index=>({...pending(index),...(paid?{estado:'PAGADO',saldo_pendiente:'0'}:{})}));}
-        else if(p==='/transactions')body=[transaction(0)];
+        else if(p==='/transactions/table')body=[transaction(0)];
         else if(p.endsWith('/detail'))body={transaction:transaction(0),rates:{buy:36.4,sell:37},settlement:{primaryRateKind:'COMPRA',changeRateKind:'COMPRA',expectedChange:{NIO:0,USD:0},primaryCounts:{NIO:[],USD:[]},changeCounts:{NIO:[],USD:[]}}};
-        await route.fulfill({status:200,contentType:'application/json',body:JSON.stringify(body)});
+        await route.fulfill({status:200,contentType:'application/json',body:JSON.stringify(transactionTableFixture(route.request().url(),body))});
       });
       const page=await context.newPage();page.on('pageerror',e=>errors.push(e.message));
       await page.goto(`${base}/#/${mode==='transaction'?'transacciones':'pendientes'}`);

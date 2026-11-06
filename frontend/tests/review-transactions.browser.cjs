@@ -1,3 +1,4 @@
+const {transactionTableFixture}=require('./transaction-table-fixture.cjs');
 const {chromium}=require(process.env.PLAYWRIGHT_MODULE_PATH||'playwright');
 const assert=require('node:assert/strict');
 const userId='11111111-1111-4111-8111-111111111111';
@@ -22,7 +23,7 @@ const open={...review,database_id:openId,id:'TUR-000101',estado:'ABIERTO'};
       else if(p==='/shifts')body=[open,review];
       else if(p==='/shifts/current'||p===`/shifts/${openId}`)body=open;
       else if(p===`/shifts/${reviewId}`)body=review;
-      else if(p==='/transactions'&&acknowledge)body=[{database_id:'55555555-5555-4555-8555-555555555555',id:'TRA-000042-01',id_grupo_transacciones:'44444444-4444-4444-8444-444444444444',codigo_operacion:'42',orden_grupo:1,fecha_transaccion:new Date().toISOString(),monto:'30',moneda:'NIO',direccion:'ENTRA',estado:'REGISTRADA',entidad:'BAC',codigo_movimiento:'DC',movimiento:'Deposito',cajero:'SALIENTE QA',sucursal:'SUCURSAL QA',descripcion:'Estado actual verificado',liquidacion:{}}];
+      else if(p==='/transactions/table'&&acknowledge)body=[{database_id:'55555555-5555-4555-8555-555555555555',id:'TRA-000042-01',id_grupo_transacciones:'44444444-4444-4444-8444-444444444444',codigo_operacion:'42',orden_grupo:1,fecha_transaccion:new Date().toISOString(),monto:'30',moneda:'NIO',direccion:'ENTRA',estado:'REGISTRADA',entidad:'BAC',codigo_movimiento:'DC',movimiento:'Deposito',cajero:'SALIENTE QA',sucursal:'SUCURSAL QA',descripcion:'Estado actual verificado',liquidacion:{}}];
       else if(p==='/transfers/context')body={shifts:[{id:openId,code:open.id,branch_id:reviewId,branch:open.sucursal,cashier:open.cajero,register:open.caja}],accounts:[]};
       else if(p==='/transfers'&&r.method()==='POST'){
         transferAttempts.push(r.postDataJSON());
@@ -35,12 +36,12 @@ const open={...review,database_id:openId,id:'TUR-000101',estado:'ABIERTO'};
           acknowledgements.push(sent);
           if(acknowledgements.length===1){await route.abort('connectionclosed');return;}
           body={groupId:'44444444-4444-4444-8444-444444444444',operationCode:42,createdAt:new Date().toISOString(),transactions:[{id:'55555555-5555-4555-8555-555555555555',order:1,entityCode:'BAC',movementCode:'DC',movement:'Deposito',currencyCode:'NIO',amount:10,direction:'ENTRA',pendingName:'',description:''}],settlement:{primaryDirection:'ENTRA',primaryTotals:{NIO:10,USD:0},changeTotals:{NIO:0,USD:0}}};
-          await route.fulfill({status:200,contentType:'application/json',body:JSON.stringify(body)});return;
+          await route.fulfill({status:200,contentType:'application/json',body:JSON.stringify(transactionTableFixture(route.request().url(),body))});return;
         }
         if(attempts.length===1){await route.abort('connectionclosed');return;}
         await route.fulfill({status:400,contentType:'application/json',body:JSON.stringify({message:'Envio interceptado para comprobar el turno, sin guardar datos.'})});return;
       }
-      await route.fulfill({status:200,contentType:'application/json',body:JSON.stringify(body)});
+      await route.fulfill({status:200,contentType:'application/json',body:JSON.stringify(transactionTableFixture(route.request().url(),body))});
     });
     const page=await context.newPage();page.on('pageerror',error=>errors.push(error.message));
     await page.goto('http://127.0.0.1:3188/#/transacciones');
