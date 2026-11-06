@@ -30,4 +30,11 @@ Preflight productivo: TLS verificado, 55 migraciones coincidentes sin faltantes 
 
 El primer intento de pruebas encontró preview apagado; se inició conservando sus datos y se repitió la batería completa. La primera restauración temporal tropezó con el filtro de estado TCP del verificador; al corregir su detección de puerto/PID se restauró el respaldo exitosamente.
 
-Pendiente de registrar la revisión publicada y el smoke público posterior. No se realizan movimientos financieros ficticios ni autenticaciones suplantadas en producción.
+Revisión funcional publicada y verificada: `0a6b23ca93522c51a37f43e5740b49fe0f0eb7f4`. `git push origin HEAD:main` completado sin force. API y web actualizaron por autodespliegue; la API estuvo lista primero y se esperó a la web antes de dar por terminada la publicación.
+
+Smoke público final aprobado: health muestra la revisión exacta y PostgreSQL `ok`; siete rutas protegidas rechazan acceso anónimo con 401/no-store; CORS propio permitido y origen ajeno no autorizado. Web HTTP 200, DENY, nosniff y CSP verificados. JS/CSS coinciden byte por byte con el build productivo explícito:
+
+- `index-ZRJUAAvW.js`: SHA256 `c66275e6df66527e22160db7ab6217f42a4a0616dfea48a473c90729db189350`.
+- `index-dHDym9mW.css`: SHA256 `feabac8ffc971232cc2305b20e2d4c5afc0a7069fe77dc72066afb49ba0b51ab`.
+
+Se requiere recarga completa del navegador para usar el nuevo formulario. La comprobación autenticada del arqueo actual corresponde al titular: hubo operaciones posteriores a las capturas y no se afirma que el saldo total actual deba ser exactamente C$ 690. Sí se verificó el aporte de C$ 690 del grupo reproducido. No se realizaron movimientos financieros ficticios ni autenticaciones suplantadas en producción. El commit posterior sólo documental utiliza `[skip render]`.
