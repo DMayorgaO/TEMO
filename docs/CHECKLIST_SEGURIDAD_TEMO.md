@@ -2,14 +2,15 @@
 
 Actualizado: 2026-11-23. Referencia local privada: INFORME_SEGURIDAD_TEMO_2026-10-06.md (no publicado).
 
-## Candidato acumulado y seguridad de publicación: 2026-11-23 (sin publicar)
+## Candidato acumulado y seguridad de publicación: 2026-11-23 (publicado)
 
 - [x] Control del árbol candidato mediante SHA-256, base/rama Git, índice y archivos de trabajo; rechaza rutas privadas, secretos conocidos de producción/piloto, enlaces, conflictos y flags que ocultan cambios. Cuatro pruebas nuevas aprobadas.
 - [x] Herramientas de lint actualizadas a 8.73.0, instalación limpia y build/lint aprobados. Auditoría runtime sin vulnerabilidades reportadas; tres moderadas de herramientas Nest/glob/minimatch siguen pendientes, sin salto mayor forzado.
 - [x] Regresión de 477 backend, 37 frontend y 21 suites de navegador aprobada. Repetición de 79 comprobaciones financieras/Directorio/ámbito/turnos con rol restringido en los casos que lo admiten.
 - [x] Respaldo nuevo restaurado y migración 056 ensayada solo en clúster aislado: 62 tablas de datos y siete secuencias intactas; solo el CHECK previsto cambió.
 - [x] Preparados artefactos productivos, secuencia de despliegue y retorno. Evidencia: [CANDIDATO_PRODUCCION_2026-11-23.md](CANDIDATO_PRODUCCION_2026-11-23.md).
-- [ ] Falta autorización de publicación, pausa coordinada, comprobaciones/respaldo vigentes y aplicación productiva de 056 antes de API/web. No se modificó producción. El rol efectivo de Render y los controles externos siguen pendientes.
+- [x] Publicado con autorización y pausa: respaldo vigente restaurado, 056 aplicada antes de API/web, revisión y assets comprobados, 16 rechazos anónimos y cabeceras/CORS correctos. Véase [DESPLIEGUE_2026-11-23.md](DESPLIEGUE_2026-11-23.md).
+- [ ] Confirmación autenticada del titular, rol efectivo de Render y controles externos pendientes. Las menciones «solo desarrollo» de bloques anteriores describen su estado en la fecha de preparación; el paquete acumulado ya fue publicado.
 
 ## Bloqueo de login tras espera: 2026-11-22 (solo desarrollo)
 

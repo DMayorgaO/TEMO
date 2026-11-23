@@ -2,7 +2,7 @@
 
 Preparación iniciada el 22 y cerrada el 23 de noviembre de 2026, America/Managua.
 
-Estado: preparación local; no publicado. La petición actual autoriza completar otro bloque y preparar el paquete, no ejecutar el despliegue.
+Estado: publicado con autorización y pausa confirmadas, revisión 608d10d163533b5f7849ff534e2a50a63d52b3a2. Resultado vigente en [DESPLIEGUE_2026-11-23.md](DESPLIEGUE_2026-11-23.md). Las secciones siguientes conservan la evidencia y condiciones de preparación previas a la publicación.
 
 ## Referencias y alcance
 
