@@ -41,3 +41,14 @@ test('paginated transaction reads retain auxiliary audit without recording filte
  await lastValueFrom(interceptor.intercept(host({method:'GET',user:{id:actor},route:{path:'/api/transactions/table'},originalUrl:'/api/transactions/table?search=private-search',ip:'127.0.0.1'}),{handle:()=>of({rows:[],total:0})}));
  assert.equal(calls.length,1);assert.equal(calls[0][1][2],'/api/transactions/table');assert.ok(!JSON.stringify(calls).includes('private-search'));
 });
+
+test('HEAD sensitive reads retain their actual method, grouping and privacy; failures are not successes',async()=>{
+ const calls=[];const interceptor=new SensitiveReadInterceptor({query:async(...args)=>{calls.push(args);return {rowCount:1};}});
+ const request={method:'HEAD',user:{id:actor},route:{path:'/api/transactions/:id/detail'},params:{id:target},ip:'127.0.0.1',originalUrl:'?search=private-marker',headers:{authorization:'private-marker'}};
+ for(let i=0;i<2;i++)await lastValueFrom(interceptor.intercept(host(request),{handle:()=>of({secret:'private-marker'})}));
+ assert.equal(calls.length,1);assert.equal(calls[0][1][1],'HEAD');assert.equal(calls[0][1][5],target);
+ await lastValueFrom(interceptor.intercept(host({...request,method:'GET'}),{handle:()=>of([])}));
+ assert.equal(calls.length,2);assert.equal(calls[1][1][1],'GET');assert.ok(!JSON.stringify(calls).includes('private-marker'));
+ await assert.rejects(lastValueFrom(interceptor.intercept(host({...request,params:{id:actor}}),{handle:()=>throwError(()=>Error('denied'))})),/denied/);
+ assert.equal(calls.length,2);
+});

@@ -231,6 +231,7 @@ export class CatalogsService {
                debe_cambiar_contrasena = case when $8 <> '' then true else debe_cambiar_contrasena end,
                version_sesion = case when $8 <> '' or id_rol is distinct from $2
                  or estado is distinct from $7::temo.estado_usuario or usuario is distinct from $5::varchar
+                 or correo is distinct from nullif($6, '')
                  then version_sesion + 1 else version_sesion end,
                contrasena_modificada_en = case when $8 <> '' then now() else contrasena_modificada_en end,
                intentos_fallidos = case when $8 <> '' then 0 else intentos_fallidos end,

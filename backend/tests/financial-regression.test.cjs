@@ -464,6 +464,53 @@ test('financial regression in local preview with rollback', { skip: !process.env
       await transactions.updateGroup(ids[0],{updates:[],voidIds:ids,preferential:false},cashier);
       near((await summary()).dollarPurchases.usd,before.dollarPurchases.usd);
     });
+    await t.test('First NIO deposit accepts USD at D without changing dollar purchases or later clients',async()=>{
+      const before=await summary();
+      const cash={primaryRateKind:'COMPRA',changeRateKind:'COMPRA',expectedChange:{NIO:182.75,USD:5},
+        primaryCounts:{NIO:[],USD:[{denomination:100,piles25:0,loose:1},{denomination:5,piles25:0,loose:1}]},changeCounts:{NIO:[],USD:[{denomination:5,piles25:0,loose:1}]}};
+      const input=createTransactionBatchSchema.parse({...batch([{amount:3655,settlement:cash}],cash),specialExchangeRate:36.55});
+      const group=await transactions.createBatch(input,{actor:cashier}),id=group.transactions[0].id;
+      const detail=await transactions.detail(id,cashier);near(detail.rates.buy,36.55);near(detail.rates.sell,37);
+      let after=await summary();near(after.cashCounts.ACTUAL.USD.total-before.cashCounts.ACTUAL.USD.total,100);
+      near(after.expectedCash.NIO-before.expectedCash.NIO,3640);
+      near(after.expectedGeneralRate,36.4);
+      near(after.dollarPurchases.usd,before.dollarPurchases.usd);near(after.dollarPurchases.differenceNio,before.dollarPurchases.differenceNio);
+      await transactions.updateGroup(id,{updates:[{id,data:{...input.transactions[0],rates:{buy:36.55,sell:37}}}],voidIds:[],preferential:true},cashier);
+      near((await summary()).expectedCash.NIO,after.expectedCash.NIO);
+      await transactions.updateGroup(id,{updates:[{id,data:{...input.transactions[0],amount:3640,rates,settlement:{...cash,expectedChange:{NIO:182,USD:5}}}}],voidIds:[],preferential:false},cashier);
+      near((await transactions.detail(id,cashier)).rates.buy,36.4);
+      const ordinary={...cash,primaryRateKind:'VENTA',changeRateKind:'VENTA',expectedChange:{NIO:0,USD:0},changeCounts:{NIO:[],USD:[]},primaryCounts:{NIO:[{denomination:100,piles25:0,loose:37}],USD:[]}};
+      const next=await transactions.createBatch(batch([{currencyCode:'USD',amount:100,settlement:ordinary}],ordinary),{actor:cashier});
+      near((await transactions.detail(next.transactions[0].id,cashier)).rates.sell,37);
+      after=await summary();near(after.dollarPurchases.usd-before.dollarPurchases.usd,100);near(after.dollarPurchases.differenceNio-before.dollarPurchases.differenceNio,60);
+      await transactions.updateGroup(id,{updates:[],voidIds:[id],preferential:false},cashier);
+      await transactions.updateGroup(next.transactions[0].id,{updates:[],voidIds:[next.transactions[0].id],preferential:false},cashier);
+      near((await summary()).expectedCash.NIO,before.expectedCash.NIO);
+      near((await summary()).cashCounts.ACTUAL.USD.total,before.cashCounts.ACTUAL.USD.total);
+    });
+    await t.test('Initial NIO D supports mixed cash, multiple deposits and pending compensation while sale stays 37',async()=>{
+      const before=await summary(),empty={NIO:[],USD:[]};
+      const cash=primaryCounts=>({primaryRateKind:'COMPRA',changeRateKind:'COMPRA',expectedChange:{NIO:0,USD:0},primaryCounts,changeCounts:empty});
+      const mixed=cash({NIO:[{denomination:1,piles25:0,loose:1827},{denomination:.5,piles25:0,loose:1}],USD:[{denomination:50,piles25:0,loose:1}]});
+      const first=await transactions.createBatch(createTransactionBatchSchema.parse({...batch([{amount:3655,settlement:mixed}],mixed),specialExchangeRate:36.55}),{actor:cashier});
+      near((await summary()).dollarPurchases.usd,before.dollarPurchases.usd);
+      near((await summary()).expectedCash.NIO-before.expectedCash.NIO,3647.5);
+      await transactions.updateGroup(first.transactions[0].id,{updates:[],voidIds:[first.transactions[0].id],preferential:false},cashier);
+      const primary=cash({NIO:[],USD:[{denomination:100,piles25:0,loose:1}]});
+      const multi=await transactions.createBatch(createTransactionBatchSchema.parse({...batch([{amount:1827.5,settlement:primary},{amount:1827.5,settlement:cash(empty)}],primary),specialExchangeRate:36.55}),{actor:cashier});
+      near((await summary()).dollarPurchases.usd,before.dollarPurchases.usd);
+      near((await summary()).expectedCash.NIO-before.expectedCash.NIO,3640);
+      await transactions.updateGroup(multi.transactions[0].id,{updates:[],voidIds:multi.transactions.map(row=>row.id),preferential:false},cashier);
+      const credit=await transactions.createBatch(batch([{amount:365.5,pendingName:'PREFERENTIAL DEBT QA'}],settlement()),{actor:cashier});
+      const pending=(await client.query('select id_pendiente as id from temo.pagos_pendientes where id_transaccion=$1',[credit.transactions[0].id])).rows[0];
+      const received=cash({NIO:[],USD:[{denomination:10,piles25:0,loose:11}]});
+      const paid=await transactions.createBatch(createTransactionBatchSchema.parse({...batch([{amount:3655,settlement:received}],received),specialExchangeRate:36.55,pendingSettlementIds:[pending.id]}),{actor:cashier});
+      near((await summary()).dollarPurchases.usd,before.dollarPurchases.usd);
+      const payment=(await client.query('select tasa_compra_usada,tasa_venta_usada from temo.abonos_pendientes where id_pendiente=$1',[pending.id])).rows[0];near(payment.tasa_compra_usada,36.55);near(payment.tasa_venta_usada,37);
+      await transactions.updateGroup(paid.transactions[0].id,{updates:[],voidIds:[paid.transactions[0].id],preferential:false},cashier);
+      near((await client.query('select saldo_pendiente from temo.pagos_pendientes where id_pendiente=$1',[pending.id])).rows[0].saldo_pendiente,365.5);
+      await transactions.void(credit.transactions[0].id,cashier);near((await summary()).expectedCash.NIO,before.expectedCash.NIO);
+    });
     await t.test('Preferential USD withdrawal offsets NIO deposit without fictitious cash deficit', async () => {
       const before = await summary();
       const input = batch([{ movementCode: 'RE', amount: 100, currencyCode: 'USD' }, { amount: 3655 }], settlement());

@@ -42,7 +42,7 @@ export class HandoversService {
   }
 
   async list(user: AuthenticatedUser) {
-    if (!['CAJERO','JEFA'].includes(user.roleCode)) throw new ForbiddenException();
+    if (!['CAJERO','JEFA'].includes(user.roleCode) || user.mustChangePassword) throw new ForbiddenException();
     await this.expire(this.db);
     const rows = await this.db.query(`select h.*,u.nombre_completo as emisor,v.nombre_completo as receptor,
       concat('TUR-',lpad(t.codigo_turno::text,6,'0')) as turno_origen,s.nombre as sucursal,c.nombre as caja

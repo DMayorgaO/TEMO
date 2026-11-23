@@ -130,6 +130,7 @@ test('send failures invalidate the code, retain abuse history and generic public
   const db = { query: async (sql, params) => {
     statements.push({ sql, params });
     if (sql.includes('select u.id_usuario')) return { rows: [{ id: 'user-id', email: 'registered@example.invalid', full_name: 'Admin' }] };
+    if (sql.includes('select 1 from temo.usuarios')) return { rowCount: 1, rows: [{}] };
     if (sql.includes('cooling_down')) return { rows: [{ requests: 0, cooling_down: false }] };
     if (sql.includes('returning id_recuperacion')) return { rows: [{ id: 'recovery-id' }] };
     return { rows: [] };
@@ -155,16 +156,17 @@ test('account cooldown and rolling quota do not send, mutate codes or reveal ide
     const db = { query: async (sql, params) => {
       statements.push({ sql, params });
       if (sql.includes('select u.id_usuario')) return { rows: [{ id: 'same-account' }] };
-      if (sql.includes('cooling_down')) return { rows: [recent] };
+      if (sql.includes('select 1 from temo.usuarios')) return { rowCount: 1, rows: [{}] };
+    if (sql.includes('cooling_down')) return { rows: [recent] };
       assert.match(sql, /pg_advisory_xact_lock/);
-      assert.deepEqual(params, ['same-account']);
+      if (sql.includes('hashtextextended')) assert.deepEqual(params, ['same-account']);
       return { rows: [] };
     } };
     db.transaction = work => work(db);
     const auth = service(db);
     t.mock.method(auth, 'sendRecoveryEmail', async () => assert.fail('throttled account must not send'));
     assert.equal((await auth.requestPasswordRecovery('ADMIN', '127.0.0.2', 'test')).success, true);
-    assert.equal(statements.length, 3);
+    assert.equal(statements.length, 5);
   }
 });
 
@@ -172,7 +174,8 @@ test('audit preparation failure returns generic response without sending any unu
   let rolledBack = false;
   const db = { query: async () => ({ rows: [{ id: 'user-id' }] }), transaction: async work => {
     try { return await work({ query: async sql => {
-      if (sql.includes('cooling_down')) return { rows: [{ requests: 0, cooling_down: false }] };
+      if (sql.includes('select 1 from temo.usuarios')) return { rowCount: 1, rows: [{}] };
+    if (sql.includes('cooling_down')) return { rows: [{ requests: 0, cooling_down: false }] };
       if (sql.includes('returning id_recuperacion')) return { rows: [{ id: 'recovery-id' }] };
       if (sql.includes('insert into temo.bitacora')) throw new Error('private database detail');
       return { rows: [] };
@@ -210,7 +213,7 @@ test('preview: emailed recovery survives audit, newest code works once and MFA r
       const first = (await client.query('select * from temo.recuperaciones_contrasena where id_usuario=$1', [user.id])).rows;
       assert.equal(first.length, 1, 'audit must not delete the already emailed code');
       assert.equal(first[0].consumido_en, null);
-      assert.equal(first[0].codigo_hash, auth.hashRecoveryCode(user.id, sent[0].code));
+      assert.equal(first[0].codigo_hash, auth.hashRecoveryCode(user.id, sent[0].code, user.version_sesion, email));
       const audit = (await client.query(`select accion,datos_nuevos from temo.bitacora
         where id_registro=$1 and tabla='recuperaciones_contrasena'`, [first[0].id_recuperacion])).rows;
       assert.equal(audit.length, 1);

@@ -6,7 +6,18 @@ import { DatabaseService } from '../../modules/database/database.service';
 import { DeniedAccessAudit } from './denied-access-audit';
 
 type DatabaseError = Error & { code?: string; constraint?: string; detail?: string };
-type HttpErrorBody = { code?: string; message?: string | string[] };
+type HttpErrorBody = { code?: unknown; message?: unknown };
+const publicCodes = new Map([
+  ['TUR-SOL-409', 409], ['TRA-VER-409', 409], ['TRF-VER-409', 409],
+  ['GEN-REQ-400', 400], ['GEN-REQ-413', 413], ['GEN-REQ-415', 415],
+]);
+
+function publicMessage(value: unknown, fallback: string) {
+  if (typeof value === 'string' && value.length > 0 && value.length <= 2000) return value;
+  if (Array.isArray(value) && value.length > 0 && value.length <= 20
+    && value.every(item => typeof item === 'string' && item.length <= 200)) return value.join(' ');
+  return fallback;
+}
 
 @Catch()
 export class AppExceptionFilter implements ExceptionFilter {
@@ -32,15 +43,15 @@ export class AppExceptionFilter implements ExceptionFilter {
           .catch(() => this.logger.warn('No se pudo persistir un evento de acceso denegado.'));
       }
       const body = exception.getResponse();
-      const parsed = typeof body === 'string' ? { message: body } : body as HttpErrorBody;
+      const parsed: HttpErrorBody = typeof body === 'string' ? { message: body }
+        : body && typeof body === 'object' && !Array.isArray(body) ? body as HttpErrorBody : {};
       const catalog = catalogHttpError(status, path);
-      const message = status >= 500
-        ? catalog.message
-        : Array.isArray(parsed.message) ? parsed.message.join(' ') : parsed.message || catalog.message;
-      this.log(exception, request, requestId, parsed.code || catalog.code);
+      const code = typeof parsed.code === 'string' && publicCodes.get(parsed.code) === status ? parsed.code : catalog.code;
+      const message = status >= 500 ? catalog.message : publicMessage(parsed.message, catalog.message);
+      this.log(exception, request, requestId, code);
       response.status(status).json({
         statusCode: status,
-        code: parsed.code || catalog.code,
+        code,
         message,
         requestId,
         timestamp: new Date().toISOString(),
@@ -70,7 +81,8 @@ export class AppExceptionFilter implements ExceptionFilter {
         code,
         method: request.method,
         path: typeof request.route?.path === 'string' ? `${request.baseUrl || ''}${request.route.path}` : '/ruta-no-identificada',
-        postgresCode: databaseError?.code,
+        postgresCode: typeof databaseError?.code === 'string' && /^[0-9A-Z]{5}$/.test(databaseError.code)
+          ? databaseError.code : undefined,
       }),
     );
   }

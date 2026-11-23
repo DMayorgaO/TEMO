@@ -2,6 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { randomUUID } = require('node:crypto');
 const { CatalogsService } = require('../dist/modules/catalogs/catalogs.service');
+const { CatalogsController } = require('../dist/modules/catalogs/catalogs.controller');
 const { AuthService } = require('../dist/modules/auth/auth.service');
 const { AuthGuard } = require('../dist/modules/auth/auth.guard');
 const { auditChanges } = require('../dist/modules/catalogs/audit-changes');
@@ -89,6 +90,7 @@ test('preview identity lifecycle: role/status revoke tokens, audit is atomic and
   await client.connect();
   try {
     await client.query('begin');
+    if(process.env.TEMO_TEST_RESTRICTED_ROLE==='1')await require('./helpers/restricted-role.cjs').useRestrictedPreviewRole(client);
     let index = 0;
     const db = { query: (sql, args) => client.query(sql, args), transaction: async work => {
       const name = `identity_${++index}`;
@@ -134,12 +136,24 @@ test('preview identity lifecycle: role/status revoke tokens, audit is atomic and
       await catalogs.save('users', target, edit, admin);
       await assert.rejects(auth.validateAccessToken(session.token), e => e.getStatus() === 401);
     });
+    await t.test('temporary-password HTTP contract rejects coercion and extra fields without changing identity or audit', async () => {
+      const controller=new CatalogsController(db,catalogs),request={user:admin,headers:{},ip:''};
+      const before=(await client.query('select contrasena_hash,version_sesion,debe_cambiar_contrasena from temo.usuarios where id_usuario=$1',[target])).rows[0];
+      const auditBefore=(await client.query('select count(*)::int n from temo.bitacora where id_registro=$1',[target])).rows[0].n;
+      for(const body of [null,[],{}, {temporaryPassword:['TemporaryPassword123!']}, {temporaryPassword:'TemporaryPassword123!',roleCode:'JEFA'}, {temporaryPassword:'Aa1'+ 'ñ'.repeat(36)}]){
+        assert.throws(()=>controller.resetUserPassword(target,body,request),e=>e.getStatus()===400);
+      }
+      const after=(await client.query('select contrasena_hash,version_sesion,debe_cambiar_contrasena from temo.usuarios where id_usuario=$1',[target])).rows[0];
+      assert.ok(before.contrasena_hash===after.contrasena_hash,'Password hash stays unchanged');
+      assert.equal(after.version_sesion,before.version_sesion);assert.equal(after.debe_cambiar_contrasena,before.debe_cambiar_contrasena);
+      assert.equal((await client.query('select count(*)::int n from temo.bitacora where id_registro=$1',[target])).rows[0].n,auditBefore);
+    });
     await t.test('disable/reactivate cannot revive tokens; password reset is cashier-only', async () => {
       const current = await auth.login(username, input.password, '', 'Identity test');
       await catalogs.save('users', target, { ...edit, status: 'Inactivo' }, admin);
       await catalogs.save('users', target, edit, admin);
       await assert.rejects(auth.validateAccessToken(current.token), e => e.getStatus() === 401);
-      await catalogs.resetUserPassword(target, 'TemporaryPassword123!', admin, '', 'Identity test');
+      await new CatalogsController(db,catalogs).resetUserPassword(target,{temporaryPassword:'TemporaryPassword123!'},{user:admin,ip:'',headers:{'user-agent':'Identity test'}});
       const reset = (await client.query('select debe_cambiar_contrasena from temo.usuarios where id_usuario=$1', [target])).rows[0];
       assert.equal(reset.debe_cambiar_contrasena, true);
       await assert.rejects(catalogs.resetUserPassword(admin.id, 'TemporaryPassword123!', admin, '', ''), e => e.getStatus() === 400);
@@ -186,7 +200,7 @@ test('preview identity lifecycle: role/status revoke tokens, audit is atomic and
       await client.query('update temo.usuarios set correo=$2 where id_usuario=$1', [admin.id, `${username}_admin@example.invalid`]);
       const recovery = (await client.query(`insert into temo.recuperaciones_contrasena(id_usuario,codigo_hash,vence_en)
         values($1,$2,now()+interval '10 minutes') returning id_recuperacion as id`,
-      [admin.id, auth.hashRecoveryCode(admin.id, '123456')])).rows[0];
+      [admin.id, auth.hashRecoveryCode(admin.id, '123456', admin.sessionVersion, `${username}_admin@example.invalid`)])).rows[0];
       await assert.rejects(auth.confirmPasswordRecovery(`${username}_admin`, '000000', 'RecoveredPassword123!', '', ''), e => e.getStatus() === 400);
       assert.equal((await client.query('select intentos from temo.recuperaciones_contrasena where id_recuperacion=$1', [recovery.id])).rows[0].intentos, 1);
       await auth.confirmPasswordRecovery(`${username}_admin`, '123456', 'RecoveredPassword123!', '', 'Identity test');

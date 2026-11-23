@@ -29,6 +29,7 @@ export class TransfersService {
   constructor(private readonly db: DatabaseService) {}
 
   async list(user: AuthenticatedUser) {
+    this.requireReader(user);
     const canManageAnyShift = this.canManageAnyShift(user);
     const result = await this.db.query(
       `${this.selectTransfer()}
@@ -40,6 +41,7 @@ export class TransfersService {
   }
 
   async context(user: AuthenticatedUser) {
+    this.requireReader(user);
     const canManageAnyShift = this.canManageAnyShift(user);
     const shifts = await this.db.query(
       `select t.id_turno as id, t.id_sucursal as branch_id, concat('TUR-', lpad(t.codigo_turno::text, 6, '0')) as code,
@@ -68,6 +70,7 @@ export class TransfersService {
   }
 
   async detail(id: string, user: AuthenticatedUser) {
+    this.requireReader(user);
     return this.findAuthorized(id, user, this.db, true);
   }
 
@@ -331,6 +334,12 @@ export class TransfersService {
   // Administrador y Operador de transferencias trabajan sobre cualquier turno activo.
   private canManageAnyShift(user: AuthenticatedUser) {
     return ['JEFA', 'TRANSFERISTA'].includes(user.roleCode);
+  }
+
+  private requireReader(user: AuthenticatedUser) {
+    if (!['JEFA', 'CAJERO', 'TRANSFERISTA'].includes(user.roleCode) || user.mustChangePassword) {
+      throw new ForbiddenException('Su perfil no permite consultar transferencias.');
+    }
   }
 
   private async adjustCurrentCash(client: PoolClient, shift: Record<string,string>, currencyId: string, lines: Array<{denomination:number;piles25:number;loose:number}>, sign: number) {

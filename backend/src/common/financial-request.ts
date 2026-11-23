@@ -15,7 +15,7 @@ export async function validateFinancialActor(client: PoolClient, actor: Authenti
 }
 
 export async function financialRequest<T>(client: PoolClient,
-  input: {actor?:AuthenticatedUser;operation:'CREAR_TRANSACCIONES'|'CREAR_TRANSFERENCIA'|'LIQUIDAR_PENDIENTE'|'LIQUIDAR_PENDIENTES'|'EDITAR_TRANSACCION'|'ANULAR_TRANSACCION'|'EDITAR_GRUPO'|'EDITAR_TRANSFERENCIA'|'ANULAR_TRANSFERENCIA';requestId?:string;payload:unknown;roles:string[]},
+  input: {actor?:AuthenticatedUser;operation:'CREAR_TRANSACCIONES'|'CREAR_TRANSFERENCIA'|'LIQUIDAR_PENDIENTE'|'LIQUIDAR_PENDIENTES'|'EDITAR_TRANSACCION'|'ANULAR_TRANSACCION'|'EDITAR_GRUPO'|'EDITAR_TRANSFERENCIA'|'ANULAR_TRANSFERENCIA'|'CREAR_DIRECTORIO'|'EDITAR_DIRECTORIO';requestId?:string;payload:unknown;roles:string[]},
   work:()=>Promise<T>, authorizeReplay:(result:T)=>Promise<void>) {
   if(input.actor)await validateFinancialActor(client,input.actor,input.roles);
   if(!input.requestId)return work();

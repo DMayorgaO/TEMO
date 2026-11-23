@@ -1,3 +1,4 @@
+import { CopyOnDoubleClick, directoryClipboardNumber } from '../components/CopyOnDoubleClick';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { flushSync } from 'react-dom';
 import { ShiftHandovers } from '../components/ShiftHandovers';
@@ -8,6 +9,7 @@ import { HandoverIdentity } from '../components/HandoverIdentity';
 import type { HandoverIdentityData } from '../components/HandoverIdentity';
 import { nioCentCoins } from '../utils/nio-cent-coins';
 import { createFinancialRequestId } from '../utils/financial-request-id';
+import { DirectoryWriteIntent } from '../utils/directory-write-intent';
 import { buildSafeExportTable, escapeExportHtml } from '../utils/export-html';
 import { downloadExport, exportFilename } from '../utils/export-download';
 import { createTemporaryPassword } from '../utils/temporary-password';
@@ -18,6 +20,8 @@ import { removeLegacyOperationalCache, SessionCache } from '../utils/session-cac
 import type { ChangeEvent, ClipboardEvent, FormEvent, InputHTMLAttributes, KeyboardEvent, PointerEvent as ReactPointerEvent } from 'react';
 import type { LucideIcon } from 'lucide-react';
 import {
+  ArrowDown,
+  ArrowUp,
   ArrowDownAZ,
   ArrowDownLeft,
   ArrowUpDown,
@@ -476,7 +480,7 @@ async function apiRequest<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 class ApiRequestError extends Error {
-  constructor(message:string,readonly code?:string){super(message);this.name='ApiRequestError';}
+  constructor(message:string,readonly code?:string,readonly status?:number){super(message);this.name='ApiRequestError';}
 }
 
 function requireEditVersion(version?:string) {
@@ -517,7 +521,7 @@ async function performApiRequest<T>(path: string, token: string | null, init?: R
     const reference = payload && typeof payload === 'object' && 'code' in payload && payload.code
       ? ` Código: ${payload.code}${payload.requestId ? ` · Ref: ${payload.requestId}` : ''}`
       : '';
-    throw new ApiRequestError(`${readableMessage}${reference}`,payload&&typeof payload==='object'&&'code' in payload?payload.code:undefined);
+    throw new ApiRequestError(`${readableMessage}${reference}`,payload&&typeof payload==='object'&&'code' in payload?payload.code:undefined,response.status);
   }
   if (token !== window.sessionStorage.getItem(authTokenStorageKey)) {
     throw new Error('La sesion cambio durante la operacion. Inicie sesion nuevamente; si estaba guardando, compruebe el registro antes de repetirlo.');
@@ -5617,6 +5621,8 @@ function DirectoryScreen({ currentUser }: { currentUser: AuthUser }) {
   const [sortKey, setSortKey] = useState<'id'|'name'|'type'|'number'|'currency'|'identity'|'reference'>('id');
   const [sortDirection, setSortDirection] = useState<'asc'|'desc'>('desc');
   const [modal, setModal] = useState<{ mode: ModalMode; row?: DirectoryEntry } | null>(null);
+  const annulIntents = useRef(new Map<string, DirectoryWriteIntent>());
+  const annulBusy = useRef(false);
   const [error, setError] = useState('');
 
   async function reload() {
@@ -5659,15 +5665,23 @@ function DirectoryScreen({ currentUser }: { currentUser: AuthUser }) {
   }
 
   async function annul(row: DirectoryEntry) {
-    if (!await requestSystemConfirm(`El destinatario "${row.name}" se conservara en el sistema con estado inactivo.`, { title:'Anular destinatario', confirmLabel:'Anular', tone:'danger' })) return;
+    if (annulBusy.current) return;
+    annulBusy.current = true;
+    const intent = annulIntents.current.get(row.database_id) ?? new DirectoryWriteIntent(createFinancialRequestId);
+    annulIntents.current.set(row.database_id, intent);
     try {
+      if (!await requestSystemConfirm(`El destinatario "${row.name}" se conservara en el sistema con estado inactivo.`, { title:'Anular destinatario', confirmLabel:'Anular', tone:'danger' })) return;
       setError('');
-      await apiRequest(`/directory/${row.database_id}`, { method:'PUT', body:JSON.stringify({ name:row.name, status:'INACTIVO', observations:row.observations, identifiers:row.identifiers, identities:row.identities, references:row.references, expectedVersion:row.edit_version }) });
+      const body=intent.prepare({name:row.name,status:'INACTIVO',observations:row.observations,identifiers:row.identifiers,identities:row.identities,references:row.references,expectedVersion:row.edit_version},window.sessionStorage.getItem(authTokenStorageKey)??'');
+      const saved=await apiRequest<DirectoryEntry>(`/directory/${row.database_id}`, { method:'PUT', body });
+      if(saved?.database_id!==row.database_id)throw new Error('No se pudo confirmar la respuesta del guardado. Reintente la misma anulacion.');
+      intent.complete();annulIntents.current.delete(row.database_id);
       await reload();
       announceOperationalDataChange();
     } catch (annulError) {
+      intent.rejected(annulError instanceof ApiRequestError ? annulError.status : undefined);
       setError(annulError instanceof Error ? annulError.message : 'No fue posible anular el registro.');
-    }
+    } finally { annulBusy.current=false; }
   }
 
   async function openDetail(row: DirectoryEntry, mode: ModalMode) {
@@ -5697,6 +5711,21 @@ function blankDirectoryIdentifier(): DirectoryIdentifier {
   return { institution: '', type: 'Cuenta bancaria', number: '', currency: null };
 }
 
+function moveDirectoryRow<T>(rows: T[], index: number, offset: number): T[] {
+  const target = index + offset;
+  if (target < 0 || target >= rows.length) return rows;
+  const result = [...rows];
+  [result[index], result[target]] = [result[target], result[index]];
+  return result;
+}
+
+function DirectoryOrderButtons({index, count, label, onMove}: {index:number; count:number; label:string; onMove:(offset:number)=>void}) {
+  return <span className="directory-order-buttons">
+    <button type="button" className="icon-button" title={`Subir ${label}`} aria-label={`Subir ${label}`} disabled={index===0} onClick={()=>onMove(-1)}><ArrowUp size={14}/></button>
+    <button type="button" className="icon-button" title={`Bajar ${label}`} aria-label={`Bajar ${label}`} disabled={index===count-1} onClick={()=>onMove(1)}><ArrowDown size={14}/></button>
+  </span>;
+}
+
 function DirectoryModal({ mode, row, onClose, onEdit, onSaved }: { mode: ModalMode; row?: DirectoryEntry; onClose:()=>void; onEdit?:()=>void; onSaved:()=>Promise<void> }) {
   const readOnly = mode === 'view';
   const [name,setName]=useState(row?.name ?? '');
@@ -5706,20 +5735,45 @@ function DirectoryModal({ mode, row, onClose, onEdit, onSaved }: { mode: ModalMo
   const [identities,setIdentities]=useState<DirectoryIdentity[]>(row?.identities ?? []);
   const [references,setReferences]=useState<string[]>(row?.references ?? []);
   const [saving,setSaving]=useState(false); const [error,setError]=useState('');
+  const [uncertain,setUncertain]=useState(false);
+  const [intent]=useState(()=>new DirectoryWriteIntent(createFinancialRequestId));
+  const busy=useRef(false);
   const modalRef=useAutoFocusFirstField<HTMLFormElement>();
 
   function updateIdentifier(index:number, patch:Partial<DirectoryIdentifier>){setIdentifiers((current)=>current.map((item,itemIndex)=>itemIndex===index?{...item,...patch}:item));}
   function normalizeIdentityInput(value:string){const compact=value.replace(/[^0-9A-Za-z]/g,'').toUpperCase().slice(0,14);return [compact.slice(0,3),compact.slice(3,9),compact.slice(9)].filter(Boolean).join('-');}
-  async function save(event:FormEvent){event.preventDefault();if(saving)return;setSaving(true);setError('');try{const payload={name:name.toUpperCase(),status,observations:observations.toUpperCase(),identifiers:identifiers.filter((item)=>item.number.trim()&&item.type.trim()).map((item)=>({...item,institution:item.institution.toUpperCase(),type:item.type.toUpperCase(),number:item.number.toUpperCase()})),identities:identities.filter((item)=>item.number.trim()).map((item)=>({...item,number:item.number.toUpperCase(),holder:item.holder.toUpperCase()})),references:references.filter((item)=>item.trim()).map((item)=>item.toUpperCase()),...(row?{expectedVersion:row.edit_version}:{})};await apiRequest(row?`/directory/${row.database_id}`:'/directory',{method:row?'PUT':'POST',body:JSON.stringify(payload)});await onSaved();}catch(saveError){setError(saveError instanceof Error?saveError.message:'No fue posible guardar el registro.');}finally{setSaving(false)}}
+  async function close() {
+    if (busy.current) return;
+    if (intent.unresolved && !await requestSystemConfirm('El resultado del guardado no esta confirmado. Si cierra, revise el directorio antes de registrar nuevamente. Puede quedarse y reintentar el mismo guardado sin duplicarlo.',{title:'Guardado sin confirmar',confirmLabel:'Cerrar y revisar'})) return;
+    onClose();
+  }
+
+  async function save(event:FormEvent) {
+    event.preventDefault();if(readOnly||busy.current)return;
+    busy.current=true;setSaving(true);setError('');
+    try {
+      const payload={name:name.toUpperCase(),status,observations:observations.toUpperCase(),identifiers:identifiers.filter(item=>item.number.trim()&&item.type.trim()).map(item=>({...item,institution:item.institution.toUpperCase(),type:item.type.toUpperCase(),number:item.number.toUpperCase()})),identities:identities.filter(item=>item.number.trim()).map(item=>({...item,number:item.number.toUpperCase(),holder:item.holder.toUpperCase()})),references:references.filter(item=>item.trim()).map(item=>item.toUpperCase()),...(row?{expectedVersion:row.edit_version}:{})};
+      const body=intent.prepare(payload,window.sessionStorage.getItem(authTokenStorageKey)??'');
+      const saved=await apiRequest<DirectoryEntry>(row?`/directory/${row.database_id}`:'/directory',{method:row?'PUT':'POST',body});
+      if(!saved?.database_id || (row && saved.database_id!==row.database_id))throw new Error('No se pudo confirmar la respuesta del guardado.');
+      intent.complete();setUncertain(false);await onSaved();
+    } catch(saveError) {
+      intent.rejected(saveError instanceof ApiRequestError?saveError.status:undefined);
+      setUncertain(intent.unresolved);
+      setError(intent.unresolved?'No se pudo confirmar el guardado. Su borrador se conserva. Reintente para confirmar la misma solicitud sin crear un duplicado.':saveError instanceof Error?saveError.message:'No fue posible guardar el registro.');
+    } finally {busy.current=false;setSaving(false);}
+  }
 
   return <div className="modal-backdrop" role="dialog" aria-modal="true"><form className="modal-panel directory-modal" onSubmit={save} ref={modalRef}>
-    <div className="modal-header"><div><p>{mode==='create'?'Nuevo registro':readOnly?'Vista de registro':'Editar registro'}</p><h2>Destinatario frecuente</h2></div><button type="button" className="icon-button icon-button--danger" onClick={onClose}><X size={18}/></button></div>
+    <div className="modal-header"><div><p>{mode==='create'?'Nuevo registro':readOnly?'Vista de registro':'Editar registro'}</p><h2>Destinatario frecuente</h2></div><button type="button" disabled={saving} className="icon-button icon-button--danger" onClick={()=>void close()}><X size={18}/></button></div>
+    <fieldset className="directory-write-fields" disabled={saving||uncertain} style={{border:0,padding:0,margin:0,minWidth:0}}>
     <div className="directory-main-fields"><label className="form-field directory-id">ID<input readOnly value={row?.id ?? 'Automatico'}/></label><label className="form-field">Nombre<input readOnly={readOnly} value={name} onChange={(event)=>setName(event.target.value.toUpperCase())} required/></label><label className="form-field directory-status">Estado<select disabled={readOnly} value={status} onChange={(event)=>setStatus(event.target.value as 'ACTIVO'|'INACTIVO')}><option value="ACTIVO">Activo</option><option value="INACTIVO">Inactivo</option></select></label></div>
-    <section className="directory-editor-section"><div className="directory-editor-heading"><strong>Numeros y servicios</strong>{!readOnly&&<button type="button" className="icon-button" title="Agregar numero" onClick={()=>setIdentifiers((current)=>[...current,blankDirectoryIdentifier()])}><Plus size={16}/></button>}</div><div className="directory-identifier-grid directory-identifier-grid--header"><span>Institucion</span><span>Tipo</span><span>Numero</span><span>Moneda</span><span/></div>{identifiers.map((item,index)=><div className="directory-identifier-grid" key={index}><input readOnly={readOnly} value={item.institution} onChange={(event)=>updateIdentifier(index,{institution:event.target.value.toUpperCase()})} placeholder="BAC, Claro..."/><input readOnly={readOnly} value={item.type} onChange={(event)=>updateIdentifier(index,{type:event.target.value.toUpperCase()})} placeholder="Cuenta, contrato..."/><input readOnly={readOnly} value={item.number} onChange={(event)=>updateIdentifier(index,{number:event.target.value.toUpperCase()})} placeholder="Numero"/><select disabled={readOnly} value={item.currency ?? ''} onChange={(event)=>updateIdentifier(index,{currency:(event.target.value||null) as CashCurrency|null})}><option value="">---</option><option value="NIO">NIO</option><option value="USD">USD</option></select>{!readOnly&&<button type="button" className="icon-button icon-button--danger" title="Quitar" onClick={()=>setIdentifiers((current)=>current.filter((_,itemIndex)=>itemIndex!==index))}><Trash2 size={15}/></button>}</div>)}</section>
-    <div className="directory-secondary-grid"><section className="directory-editor-section"><div className="directory-editor-heading"><strong>Cedulas</strong>{!readOnly&&<button type="button" className="icon-button" onClick={()=>setIdentities((current)=>[...current,{number:'',holder:''}])}><Plus size={16}/></button>}</div>{identities.map((item,index)=><div className="directory-paired-row" key={index}><input readOnly={readOnly} value={item.number} onChange={(event)=>setIdentities((current)=>current.map((entry,itemIndex)=>itemIndex===index?{...entry,number:normalizeIdentityInput(event.target.value)}:entry))} placeholder="000-000000-0000A"/><input readOnly={readOnly} value={item.holder} onChange={(event)=>setIdentities((current)=>current.map((entry,itemIndex)=>itemIndex===index?{...entry,holder:event.target.value.toUpperCase()}:entry))} placeholder="Titular (opcional)"/>{!readOnly&&<button type="button" className="icon-button icon-button--danger" onClick={()=>setIdentities((current)=>current.filter((_,itemIndex)=>itemIndex!==index))}><Trash2 size={15}/></button>}</div>)}</section><section className="directory-editor-section"><div className="directory-editor-heading"><strong>Referencias</strong>{!readOnly&&<button type="button" className="icon-button" onClick={()=>setReferences((current)=>[...current,''])}><Plus size={16}/></button>}</div>{references.map((item,index)=><div className="directory-single-row" key={index}><input readOnly={readOnly} value={item} onChange={(event)=>setReferences((current)=>current.map((entry,itemIndex)=>itemIndex===index?event.target.value.toUpperCase():entry))} placeholder="Referencia"/>{!readOnly&&<button type="button" className="icon-button icon-button--danger" onClick={()=>setReferences((current)=>current.filter((_,itemIndex)=>itemIndex!==index))}><Trash2 size={15}/></button>}</div>)}</section></div>
+    <section className="directory-editor-section"><div className="directory-editor-heading"><strong>Numeros y servicios</strong>{!readOnly&&<button type="button" className="icon-button" title="Agregar numero" onClick={()=>setIdentifiers((current)=>[...current,blankDirectoryIdentifier()])}><Plus size={16}/></button>}</div><div className="directory-identifier-grid directory-identifier-grid--header"><span>Institucion</span><span>Tipo</span><span>Numero</span><span>Moneda</span><span/></div>{identifiers.map((item,index)=><div className="directory-identifier-grid" key={index}><input readOnly={readOnly} value={item.institution} onChange={(event)=>updateIdentifier(index,{institution:event.target.value.toUpperCase()})} placeholder="BAC, Claro..."/><input readOnly={readOnly} value={item.type} onChange={(event)=>updateIdentifier(index,{type:event.target.value.toUpperCase()})} placeholder="Cuenta, contrato..."/><input readOnly={readOnly} value={item.number} onChange={(event)=>updateIdentifier(index,{number:event.target.value.toUpperCase()})} placeholder="Numero"/><select disabled={readOnly} value={item.currency ?? ''} onChange={(event)=>updateIdentifier(index,{currency:(event.target.value||null) as CashCurrency|null})}><option value="">---</option><option value="NIO">NIO</option><option value="USD">USD</option></select>{!readOnly&&<div className="directory-row-actions"><DirectoryOrderButtons index={index} count={identifiers.length} label={`numero ${index+1}`} onMove={(offset)=>setIdentifiers((current)=>moveDirectoryRow(current,index,offset))}/><button type="button" className="icon-button icon-button--danger" title="Quitar" onClick={()=>setIdentifiers((current)=>current.filter((_,itemIndex)=>itemIndex!==index))}><Trash2 size={15}/></button></div>}</div>)}</section>
+    <div className="directory-secondary-grid"><section className="directory-editor-section"><div className="directory-editor-heading"><strong>Cedulas</strong>{!readOnly&&<button type="button" className="icon-button" onClick={()=>setIdentities((current)=>[...current,{number:'',holder:''}])}><Plus size={16}/></button>}</div>{identities.map((item,index)=><div className="directory-paired-row" key={index}><input readOnly={readOnly} value={item.number} onChange={(event)=>setIdentities((current)=>current.map((entry,itemIndex)=>itemIndex===index?{...entry,number:normalizeIdentityInput(event.target.value)}:entry))} placeholder="000-000000-0000A"/><input readOnly={readOnly} value={item.holder} onChange={(event)=>setIdentities((current)=>current.map((entry,itemIndex)=>itemIndex===index?{...entry,holder:event.target.value.toUpperCase()}:entry))} placeholder="Titular (opcional)"/>{!readOnly&&<div className="directory-row-actions"><DirectoryOrderButtons index={index} count={identities.length} label={`cedula ${index+1}`} onMove={(offset)=>setIdentities((current)=>moveDirectoryRow(current,index,offset))}/><button type="button" className="icon-button icon-button--danger" onClick={()=>setIdentities((current)=>current.filter((_,itemIndex)=>itemIndex!==index))}><Trash2 size={15}/></button></div>}</div>)}</section><section className="directory-editor-section"><div className="directory-editor-heading"><strong>Referencias</strong>{!readOnly&&<button type="button" className="icon-button" onClick={()=>setReferences((current)=>[...current,''])}><Plus size={16}/></button>}</div>{references.map((item,index)=><div className="directory-single-row" key={index}><input readOnly={readOnly} value={item} onChange={(event)=>setReferences((current)=>current.map((entry,itemIndex)=>itemIndex===index?event.target.value.toUpperCase():entry))} placeholder="Referencia"/>{!readOnly&&<button type="button" className="icon-button icon-button--danger" onClick={()=>setReferences((current)=>current.filter((_,itemIndex)=>itemIndex!==index))}><Trash2 size={15}/></button>}</div>)}</section></div>
     <label className="form-field">Observaciones<textarea readOnly={readOnly} value={observations} onChange={(event)=>setObservations(event.target.value.toUpperCase())} rows={2}/></label>
     {row?.sources.length ? <p className="directory-source-note">Origen: {row.sources.map((source)=>`${source.sheet}, fila ${source.row}`).join(' · ')}</p> : null}
-    {error&&<p className="login-error" role="alert">{error}</p>}<div className="modal-actions"><button type="button" className="secondary-button danger-button" onClick={onClose}><X size={17}/>Cancelar</button>{onEdit&&<button type="button" className="secondary-button" onClick={onEdit}><Edit3 size={17}/>Editar</button>}{!readOnly&&<button type="submit" className="primary-button" disabled={saving||!name.trim()}><Save size={17}/>{saving?'Guardando...':'Guardar'}</button>}</div>
+    </fieldset>
+    {error&&<p className="login-error" role="alert">{error}</p>}<div className="modal-actions"><button type="button" disabled={saving} className="secondary-button danger-button" onClick={()=>void close()}><X size={17}/>Cancelar</button>{onEdit&&<button type="button" className="secondary-button" onClick={onEdit}><Edit3 size={17}/>Editar</button>}{!readOnly&&<button type="submit" className="primary-button" disabled={saving||!name.trim()}><Save size={17}/>{saving?'Guardando...':uncertain?'Reintentar guardado':'Guardar'}</button>}</div>
   </form></div>;
 }
 
@@ -5730,7 +5784,7 @@ function DirectoryLookup({ onClose }: { onClose:()=>void }) {
   const matches=useMemo(()=>{const term=normalizeLookupValue(query);return rows.filter((row)=>row.status==='ACTIVO'&&(!term||directorySearchText(row).includes(term))).slice(0,30);},[query,rows]);
   function startDrag(event:ReactPointerEvent<HTMLElement>){if((event.target as HTMLElement).closest('button,input'))return;drag.current={x:event.clientX,y:event.clientY,left:position.x,top:position.y};event.currentTarget.setPointerCapture(event.pointerId);}
   function moveDrag(event:ReactPointerEvent<HTMLElement>){if(!drag.current)return;setPosition({x:Math.max(8,Math.min(window.innerWidth-320,drag.current.left+event.clientX-drag.current.x)),y:Math.max(8,Math.min(window.innerHeight-120,drag.current.top+event.clientY-drag.current.y))});}
-  return <section className="directory-lookup" style={{left:position.x,top:position.y}} role="dialog" aria-label="Directorio de destinatarios"><header onPointerDown={startDrag} onPointerMove={moveDrag} onPointerUp={()=>{drag.current=null}}><div><BookUser size={18}/><strong>Directorio</strong></div><button type="button" className="icon-button icon-button--danger" onClick={onClose}><X size={16}/></button></header><label className="search-box"><Search size={16}/><input autoFocus value={query} onChange={(event)=>setQuery(event.target.value)} placeholder="Nombre, cuenta, cedula o referencia"/></label>{error&&<p className="login-error">{error}</p>}<div className="directory-lookup__table"><table><thead><tr><th>Nombre</th><th>Tipo</th><th>Numero</th><th>Cedula / Ref.</th></tr></thead><tbody>{matches.map((row)=><tr key={row.database_id}><td><strong>{row.name}</strong></td><td className="directory-identifiers-cell directory-identifiers-cell--lookup" colSpan={2}><div className="directory-identifier-list">{row.identifiers.length ? row.identifiers.map((item,index)=><div className="directory-identifier-row directory-identifier-row--lookup" key={`${item.type}-${item.number}-${index}`}><span>{item.institution ? `${item.institution} · `:''}{item.type}</span><span className="directory-number">{item.number}{item.currency ? ` · ${item.currency}`:''}</span></div>) : <span>---</span>}</div></td><td className="directory-lines">{row.identities.map((item,index)=><span key={`i-${index}`}>{item.number}{item.holder?.trim()&&<small className="directory-lookup__identity-holder">{item.holder.trim()}</small>}</span>)}{row.references.map((item,index)=><span key={`r-${index}`}>Ref. {item}</span>)}</td></tr>)}{!matches.length&&<tr><td colSpan={4} className="empty-table-cell">Sin coincidencias.</td></tr>}</tbody></table></div><footer>Mostrando {matches.length} de {rows.filter((row)=>row.status==='ACTIVO').length}</footer></section>;
+  return <section className="directory-lookup" style={{left:position.x,top:position.y}} role="dialog" aria-label="Directorio de destinatarios"><header onPointerDown={startDrag} onPointerMove={moveDrag} onPointerUp={()=>{drag.current=null}}><div><BookUser size={18}/><strong>Directorio</strong></div><button type="button" className="icon-button icon-button--danger" onClick={onClose}><X size={16}/></button></header><label className="search-box"><Search size={16}/><input autoFocus value={query} onChange={(event)=>setQuery(event.target.value)} placeholder="Nombre, cuenta, cedula o referencia"/></label>{error&&<p className="login-error">{error}</p>}<div className="directory-lookup__table"><table><thead><tr><th>Nombre</th><th>Tipo</th><th>Numero</th><th>Cedula / Ref.</th></tr></thead><tbody>{matches.map((row)=><tr key={row.database_id}><td><strong>{row.name}</strong></td><td className="directory-identifiers-cell directory-identifiers-cell--lookup" colSpan={2}><div className="directory-identifier-list">{row.identifiers.length ? row.identifiers.map((item,index)=><div className="directory-identifier-row directory-identifier-row--lookup" key={`${item.type}-${item.number}-${index}`}><span>{item.institution ? `${item.institution} · `:''}{item.type}</span><CopyOnDoubleClick className="directory-number" text={directoryClipboardNumber(item.number)} label="Copiar número sin guiones">{item.number}{item.currency ? ` · ${item.currency}`:''}</CopyOnDoubleClick></div>) : <span>---</span>}</div></td><td className="directory-lines">{row.identities.map((item,index)=><span key={`i-${index}`}><CopyOnDoubleClick text={directoryClipboardNumber(item.number, true)} label="Copiar cédula sin guiones">{item.number}</CopyOnDoubleClick>{item.holder?.trim()&&<small className="directory-lookup__identity-holder">{item.holder.trim()}</small>}</span>)}{row.references.map((item,index)=><span key={`r-${index}`}>Ref. {item}</span>)}</td></tr>)}{!matches.length&&<tr><td colSpan={4} className="empty-table-cell">Sin coincidencias.</td></tr>}</tbody></table></div><footer>Mostrando {matches.length} de {rows.filter((row)=>row.status==='ACTIVO').length}</footer></section>;
 }
 
 function PendingScreen({ currentUser }: { currentUser: AuthUser }) {
@@ -7068,9 +7122,9 @@ function ConsolidationTable({
                     </div>}
                   </td>
                   <td>{isTeledolar ? <div className="teledolar-differences">
-                    <span>{renderDifference(systemIncome - movement.income, currency)}</span>
-                    <span>{renderDifference(systemExpense - movement.expense, currency)}</span>
-                  </div> : renderDifference(difference, currency)}</td>
+                    <span>{copyableBalanceDifference(systemIncome - movement.income, currency, 'Teledolar Pago')}</span>
+                    <span>{copyableBalanceDifference(systemExpense - movement.expense, currency, 'Teledolar Envío')}</span>
+                  </div> : copyableBalanceDifference(difference, currency, entity)}</td>
                 </tr>
               );
             })}
@@ -7083,7 +7137,7 @@ function ConsolidationTable({
               <td><MoneyAmount currency={currency} value={totals.expense} /></td>
               <td><MoneyAmount currency={currency} value={totals.finalBalance} /></td>
               <td><MoneyAmount currency={currency} value={totals.system} /></td>
-              <td>{renderDifference(totals.difference, currency)}</td>
+              <td>{copyableBalanceDifference(totals.difference, currency, 'Total')}</td>
             </tr>
           </tfoot>
         </table>
@@ -7376,6 +7430,13 @@ function DigitalCalculator({ onClose }: { onClose: () => void }) {
       {showHistory && <section className="digital-calculator__history"><header><strong>Historial</strong>{history.length>0&&<button type="button" className="icon-button" title="Limpiar historial" onClick={()=>setHistory([])}><Trash2 size={14}/></button>}</header>{history.length ? history.map((item)=><div key={item.id}><input value={item.expression} onChange={(event)=>setHistory((current)=>current.map((entry)=>entry.id===item.id?{...entry,expression:event.target.value}:entry))}/><button type="button" onClick={()=>calculate(item.expression,item.id)}>= {formatMoneyNumber(item.result)}</button><button type="button" className="icon-button" title="Usar resultado" onClick={()=>setExpression(String(item.result))}><ChevronLeft size={14}/></button></div>) : <span>Sin cálculos todavía.</span>}</section>}
     </div>
   </section>;
+}
+
+function copyableBalanceDifference(value: number, currency: CashCurrency, entity: string) {
+  const description = Math.abs(value) < 0.005 ? '---' : `${value > 0 ? 'Sobra' : 'Falta'} ${formatCashCountMoney(Math.abs(value), currency)}`;
+  return <CopyOnDoubleClick text={`En ${entity} *${description}*`} label={`Copiar diferencia de ${entity} ${currency}`}>
+    {renderDifference(value, currency)}
+  </CopyOnDoubleClick>;
 }
 
 function renderDifference(
@@ -8327,6 +8388,10 @@ function ShiftModal({
                         nextFocusSelector='[data-shift-balance-phase="closing"][data-shift-balance-currency="NIO"][data-shift-balance-row="0"]'
                         onPileFieldChange={(denominationId, field, value) => updateClosingCashCount('USD', denominationId, field, value)}
                       />
+                      {isReadOnly && <div className="cash-count-adjustments" aria-label="Diferencia final de efectivo">
+                        <div data-money-currency="NIO"><strong>Diferencia NIO</strong>{renderDifference(closingDifference.differenceNio, 'NIO', { positiveLabel: '' })}</div>
+                        <div data-money-currency="USD"><strong>Diferencia USD</strong>{renderDifference(closingDifference.differenceUsd, 'USD', { positiveLabel: '' })}</div>
+                      </div>}
                       <div className="shift-closing-change">
                         <span>Diferencia registrada</span>
                         {isReadOnly ? (
@@ -9489,7 +9554,7 @@ function TransactionModal({
   const [selectedSettlementPendingIds, setSelectedSettlementPendingIds] = useState<string[]>([]);
   const [showPendingSettlement, setShowPendingSettlement] = useState(false);
   const [pendingSettlementQuery, setPendingSettlementQuery] = useState('');
-  const [specialExchangeRateEnabled, setSpecialExchangeRateEnabled] = useState(() => mode !== 'create' && row.exchangeRateBuy === '36.55');
+  const [specialExchangeRateEnabled, setSpecialExchangeRateEnabled] = useState(() => mode !== 'create' && mode !== 'pay' && row.exchangeRateBuy === '36.55');
   const modalRef = useAutoFocusFirstField<HTMLElement>();
   useEffect(() => {
     if (mode !== 'create') return;
@@ -9556,6 +9621,8 @@ function TransactionModal({
         selectedAccountBalance.initial,
       )
     : null;
+  const exceedsDigitalBalance = draft.direction === 'Ingreso' && selectedAccountFinalBalance !== null
+    && Math.round(parseMoneyValue(draft.amountValue) * 100) > Math.round(selectedAccountFinalBalance * 100);
   const hasIncompleteTransactions = drafts.some(
     (transactionDraft) =>
       !transactionDraft.movement ||
@@ -9731,17 +9798,13 @@ function TransactionModal({
     setCashView('received');
   }
 
-  useEffect(() => {
-    if (mode === 'create' && drafts.length < 2 && specialExchangeRateEnabled) setSpecialExchangeRateEnabled(false);
-  }, [mode, drafts.length, specialExchangeRateEnabled]);
-
   async function toggleSpecialExchangeRate() {
     if (specialExchangeRateEnabled) {
       setSpecialExchangeRateEnabled(false);
       return;
     }
     const confirmed = await requestSystemConfirm(
-      'Se aplicará la tasa especial D de C$ 36.55 únicamente para entregar córdobas provenientes de dólares en este grupo de transacciones.',
+      'Se aplicará la tasa especial D de C$ 36.55 para convertir dólares a córdobas únicamente para este cliente en este registro. La compra de dólares conserva su tasa normal.',
       { title: 'Aplicar tasa especial', confirmLabel: 'Confirmar' },
     );
     if (confirmed) setSpecialExchangeRateEnabled(true);
@@ -9980,7 +10043,7 @@ function TransactionModal({
       {navigation && <ModalRecordNavigator {...navigation} />}
       <section className={`modal-panel transaction-modal-panel ${isReadOnly ? 'transaction-modal-panel--readonly' : ''}`} ref={modalRef}>
         <div className="modal-top">
-        <div className="modal-header">
+        <div className={`modal-header transaction-balance-header ${draft.digitalSettlement !== '1' ? `transaction-balance-header--${customerBalanceTone}` : ''}`}>
           <div>
             <p>{mode === 'create' ? 'Nuevo registro' : mode === 'edit' ? 'Editar registro' : mode === 'pay' ? 'Pago de pendiente' : 'Consulta de registro'}</p>
             <h2>{isReadOnly ? 'Detalle de transaccion' : isPayment ? 'Liquidar pendiente' : 'Registro de transaccion'}</h2>
@@ -10186,6 +10249,8 @@ function TransactionModal({
             </span>
             <input
               data-transaction-amount
+              className={exceedsDigitalBalance ? 'transaction-amount--insufficient' : undefined}
+              title={exceedsDigitalBalance ? 'El monto supera el saldo digital disponible.' : undefined}
               value={formatAccountingMoneyInput(draft.amountValue)}
               inputMode="decimal"
               onChange={(event) => updateField('amountValue', normalizeAccountingMoneyRaw(event.target.value))}
@@ -10286,7 +10351,7 @@ function TransactionModal({
                         <span>Tasa de cambio utilizada</span>
                         <strong>{transactionDifference.rateKind} C$ {formatRateDisplay(String(transactionDifference.rateValue))}</strong>
                       </div>
-                      {(mode === 'create' || mode === 'edit') && drafts.length > 1 && (
+                      {(mode === 'create' || mode === 'edit') && (
                         <button
                           type="button"
                           className={`transaction-special-rate-button ${specialExchangeRateEnabled ? 'transaction-special-rate-button--active' : ''}`}

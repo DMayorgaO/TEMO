@@ -1,0 +1,7 @@
+# Directorio y avisos de transacciones — desarrollo
+
+- Números/servicios y cédulas tienen botones Subir/Bajar. Mueven la fila completa, incluido titular y moneda. Los extremos se deshabilitan; consulta no muestra controles. El orden se guarda mediante el contrato existente y se conserva en el Directorio flotante. El bloqueo de borradores con guardado incierto también bloquea estos botones.
+- El monto toma fondo rojo suave si supera, en centavos, el saldo digital mostrado para la cuenta y moneda seleccionadas. Igualdad y saldo suficiente mantienen el estilo normal. Se utiliza la actualización existente del turno cada cinco segundos mientras el formulario está abierto, sin sustituir borradores. Es un aviso visual; no cambia las validaciones financieras ni impide guardar por sí mismo. Si no hay saldo disponible para mostrar, no se supone cero.
+- El tono de la diferencia del cliente cubre todo el encabezado, incluido título y herramientas, sin cambiar las pestañas. El recuadro interior tiene fondo transparente. Conserva amarillo por entregar, rosado por recibir y verde equilibrado.
+
+Verificación: build/lint; recorrido de Directorio en 1366×768 y 1920×1080 con orden conservado al reabrir y en el flotante, incluyendo reintentos seguros; recorrido con saldo insuficiente, igual, mayor y nuevamente menor, conservando el monto. Todas las APIs de navegador son sintéticas interceptadas. No se publicaron cambios ni se realizaron operaciones productivas.

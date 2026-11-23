@@ -1,4 +1,7 @@
-import { BadRequestException, Body, Controller, ForbiddenException, Get, Param, ParseUUIDPipe, NotFoundException, Post, Put, Req } from '@nestjs/common';
+import { BadRequestException, Body, Controller, ForbiddenException, Get, Param, ParseUUIDPipe, NotFoundException, Post, Put, Req, UseGuards } from '@nestjs/common';
+import { z } from 'zod';
+import { CatalogsRouteGuard } from './catalogs-route.guard';
+import { validatePasswordForStorage } from '../../common/password-policy';
 import { AuthenticatedUser } from '../auth/auth.service';
 import { DatabaseService } from '../database/database.service';
 import { CatalogsService } from './catalogs.service';
@@ -9,6 +12,7 @@ import { auditCaptureStatus } from '../../common/errors/audit-capture-status';
 import { authorizedExport, parseExportSelection, requireExportRole, recordRequestedExport } from '../../common/export-selection';
 
 @Controller('catalogs')
+@UseGuards(new CatalogsRouteGuard())
 export class CatalogsController {
   private readonly exportEvents = new Map<string, number>();
   constructor(
@@ -47,12 +51,15 @@ export class CatalogsController {
   @Post('usuarios/:id/reset-password')
   resetUserPassword(
     @Param('id', new ParseUUIDPipe()) id: string,
-    @Body() body: Record<string, unknown>,
+    @Body() body: unknown,
     @Req() request: { user: AuthenticatedUser; ip?: string; headers: Record<string, string | string[] | undefined> },
   ) {
+    const parsed = z.object({ temporaryPassword: z.string().max(72) }).strict().safeParse(body);
+    if (!parsed.success) throw new BadRequestException('La solicitud de clave temporal no es valida.');
+    validatePasswordForStorage(parsed.data.temporaryPassword);
     return this.catalogs.resetUserPassword(
       id,
-      String(body.temporaryPassword ?? ''),
+      parsed.data.temporaryPassword,
       request.user,
       request.ip ?? '',
       String(request.headers['user-agent'] ?? ''),

@@ -4,6 +4,7 @@ import { PoolClient } from 'pg';
 import { AuthenticatedUser } from '../auth/auth.service';
 import { DatabaseService } from '../database/database.service';
 import { DirectoryEntryInput, DirectoryUpdateInput } from './directory.schema';
+import { financialRequest } from '../../common/financial-request';
 import { requireSessionVersion } from '../../common/session-version';
 
 @Injectable()
@@ -23,8 +24,9 @@ export class DirectoryService {
 
   async create(input: DirectoryEntryInput, user: AuthenticatedUser) {
     this.requireDirectoryManager(user);
+    this.requireRequestId(input.requestId);
     return this.db.transaction(async (client) => {
-      await this.requireActiveDirectoryActor(client,user);
+      const receipt = await financialRequest(client, { actor:user,operation:'CREAR_DIRECTORIO',requestId:input.requestId,payload:input,roles:['JEFA','CAJERO'] }, async () => {
       const inserted = await client.query<{ id: string }>(
         `insert into temo.directorio_destinatarios
            (nombre, observaciones, estado, id_usuario_creacion)
@@ -36,14 +38,17 @@ export class DirectoryService {
       await this.replaceChildren(client, id, input);
       const saved=await this.detailWithin(client,id);
       await this.audit(client, user.id, 'CREAR', id,null,saved);
-      return saved;
+      return { id };
+      }, result => this.authorizeReplay(client,result.id));
+      return this.detailWithin(client,receipt.id);
     });
   }
 
   async update(id: string, input: DirectoryUpdateInput, user: AuthenticatedUser) {
     this.requireDirectoryManager(user);
+    this.requireRequestId(input.requestId);
     return this.db.transaction(async (client) => {
-      await this.requireActiveDirectoryActor(client,user);
+      const receipt = await financialRequest(client, { actor:user,operation:'EDITAR_DIRECTORIO',requestId:input.requestId,payload:{id:id.toLowerCase(),...input},roles:['JEFA','CAJERO'] }, async () => {
       if (!/^[a-f0-9]{64}$/.test(input.expectedVersion ?? '')) {
         throw new BadRequestException('Vuelva a abrir el destinatario antes de guardar los cambios.');
       }
@@ -65,7 +70,9 @@ export class DirectoryService {
       await this.replaceChildren(client, id, input);
       const saved=await this.detailWithin(client,id);
       await this.audit(client, user.id, before.status==='ACTIVO'&&saved.status==='INACTIVO'?'ANULAR':'ACTUALIZAR', id,before,saved);
-      return saved;
+      return { id };
+      }, result => this.authorizeReplay(client,result.id));
+      return this.detailWithin(client,receipt.id);
     });
   }
 
@@ -147,15 +154,20 @@ export class DirectoryService {
     if (!['JEFA', 'CAJERO'].includes(user.roleCode)||user.mustChangePassword) {
       throw new ForbiddenException('Tu usuario no puede administrar el directorio.');
     }
+    requireSessionVersion(user.sessionVersion);
   }
 
-  private async requireActiveDirectoryActor(client: PoolClient, user: AuthenticatedUser) {
-    const version = requireSessionVersion(user.sessionVersion);
-    const current=await client.query(`select 1 from temo.usuarios u join temo.roles r using(id_rol)
-      where u.id_usuario=$1 and u.estado='ACTIVO' and r.estado='ACTIVO' and r.codigo=$2
-        and not u.debe_cambiar_contrasena and u.version_sesion=$3
-      for share of u,r`,[user.id,user.roleCode,version]);
-    if(!current.rowCount)throw new ForbiddenException('La sesion o los permisos cambiaron. Inicie sesion nuevamente antes de modificar el directorio.');
+  private requireRequestId(id: string) {
+    if (!/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(id ?? '')) {
+      throw new BadRequestException('Falta una referencia valida de guardado. Vuelva a abrir el formulario del directorio.');
+    }
+  }
+
+  private async authorizeReplay(client: PoolClient, id: string) {
+    // Identity is revalidated by financialRequest before looking up any receipt.
+    // Return the current authorized entry, never a private snapshot stored in a receipt.
+    const row = await client.query('select id_destinatario from temo.directorio_destinatarios where id_destinatario=$1 for update', [id]);
+    if (!row.rowCount) throw new NotFoundException('La solicitud ya fue aplicada, pero el destinatario ya no esta disponible.');
   }
 
   private formatNumber(value: string) {

@@ -30,7 +30,8 @@ try {
   const requiredMigrations = ['040_audit_visible_number.sql', '041_audit_read_action.sql',
     '042_audit_export_action.sql', '043_unique_normalized_identities.sql',
     '050_readable_handover_observations.sql','051_pending_payment_receipts.sql','052_transaction_change_receipts.sql',
-    '053_transaction_edit_versions.sql','054_shift_submission_lock.sql','055_transfer_change_security.sql'];
+    '053_transaction_edit_versions.sql','054_shift_submission_lock.sql','055_transfer_change_security.sql',
+    '056_directory_request_receipts.sql'];
   const migrations = (await client.query('select name from public.preview_migrations where name=any($1::text[])', [requiredMigrations])).rows;
   const missingMigrations = requiredMigrations.filter(name => !migrations.some(row => row.name === name));
   const prerequisites=(await client.query(`select

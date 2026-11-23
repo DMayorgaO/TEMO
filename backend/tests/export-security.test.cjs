@@ -89,7 +89,7 @@ test('export abuse protection isolates users and leaves financial operations una
   const limiter = new ExportLimitInterceptor();
   const req = { method: 'POST', user: { id: actor }, route: { path: '/api/transactions/export' } };
   for (let i = 0; i < 30; i++) await lastValueFrom(limiter.intercept(host(req), { handle: () => of([]) }));
-  assert.throws(() => limiter.intercept(host(req), { handle: () => of([]) }), e => e.getStatus() === 429);
+  await assert.rejects(lastValueFrom(limiter.intercept(host(req), { handle: () => of([]) })), e => e.getStatus() === 429);
   await lastValueFrom(limiter.intercept(host({ ...req, user: { id: second } }), { handle: () => of([]) }));
   await lastValueFrom(limiter.intercept(host({ ...req, route: { path: '/api/transactions/batch' } }), { handle: () => of([]) }));
 });
@@ -100,7 +100,7 @@ test('export concurrency slots are released on errors and completion', async () 
   const source = new Subject();
   const a = limiter.intercept(context, { handle: () => source }).subscribe();
   const b = limiter.intercept(context, { handle: () => source }).subscribe();
-  assert.throws(() => limiter.intercept(context, { handle: () => of([]) }), e => e.getStatus() === 429);
+  await assert.rejects(lastValueFrom(limiter.intercept(context, { handle: () => of([]) })), e => e.getStatus() === 429);
   a.unsubscribe(); b.unsubscribe();
   await assert.rejects(lastValueFrom(limiter.intercept(context, { handle: () => throwError(() => new Error('failed')) })), /failed/);
   await lastValueFrom(limiter.intercept(context, { handle: () => of([]) }));
@@ -131,4 +131,39 @@ test('preview: server exports match scoped reads, reject foreign IDs, never incl
     const event = (await client.query("select datos_nuevos from temo.bitacora where id_usuario=$1 and datos_nuevos->>'evento'='EXPORTACION_AUTORIZADA' order by fecha_creacion desc limit 1", [cashier.id])).rows[0];
     assert.equal(event.datos_nuevos.filas_verificadas, own.length);
   } finally { await client.query('rollback'); await client.end(); }
+});
+
+
+test('filtered exports share concurrency and frequency budgets with all export routes',async()=>{
+ const limiter=new ExportLimitInterceptor(),source=new Subject();
+ const context=path=>host({method:'POST',user:{id:actor},route:{path}});
+ const subscriptions=[];
+ try{
+  subscriptions.push(limiter.intercept(context('/api/transactions/export-filtered'),{handle:()=>source}).subscribe());
+  subscriptions.push(limiter.intercept(context('/api/shifts/export'),{handle:()=>source}).subscribe());
+  for(const path of ['/api/transactions/export-filtered','/api/transactions/export','/api/shifts/dashboard/export','/api/catalogs/export/:resource','/api/catalogs/auditoria/exportaciones']){
+   let called=false;
+   await assert.rejects(lastValueFrom(limiter.intercept(context(path),{handle:()=>{called=true;return of([]);}})),e=>e.getStatus()===429);
+   assert.equal(called,false);
+  }
+  await lastValueFrom(limiter.intercept(context('/api/transactions/batch'),{handle:()=>of([])}));
+ }finally{subscriptions.forEach(s=>s.unsubscribe());}
+ for(let i=0;i<28;i++)await lastValueFrom(limiter.intercept(context(i%2?'/api/transactions/export':'/api/transactions/export-filtered'),{handle:()=>of([])}));
+ await assert.rejects(lastValueFrom(limiter.intercept(context('/api/transactions/export-filtered'),{handle:()=>of([])})),e=>e.getStatus()===429);
+});
+
+test('unsubscribed exports reserve nothing and repeated subscriptions own separate slots',async()=>{
+ const limiter=new ExportLimitInterceptor(),source=new Subject();
+ const context=host({method:'POST',user:{id:actor},route:{path:'/api/transactions/export-filtered'}});
+ const stream=limiter.intercept(context,{handle:()=>source});
+ assert.equal(limiter.actors.size,0);
+ const a=stream.subscribe(),b=stream.subscribe();
+ try{await assert.rejects(lastValueFrom(stream),e=>e.getStatus()===429);assert.equal(limiter.actors.get(actor).active,2);}
+ finally{a.unsubscribe();b.unsubscribe();}
+ assert.equal(limiter.actors.get(actor).active,0);
+ await assert.rejects(lastValueFrom(limiter.intercept(context,{handle:()=>{throw Error('synchronous failure');}})),/synchronous failure/);
+ assert.equal(limiter.actors.get(actor).active,0);
+ limiter.actors.get(actor).expires=0;
+ await lastValueFrom(limiter.intercept(context,{handle:()=>of([])}));
+ assert.equal(limiter.actors.get(actor).count,1);assert.equal(limiter.actors.get(actor).active,0);
 });

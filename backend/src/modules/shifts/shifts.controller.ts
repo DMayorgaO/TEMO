@@ -1,4 +1,5 @@
-import { BadRequestException, Body, Controller, Get, Param, Post, Put, Query, Req, UsePipes } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Get, Param, Post, Put, Query, Req, UseGuards, UsePipes } from '@nestjs/common';
+import { ShiftsRouteGuard } from './shifts-route.guard';
 import { RecordIdPipe } from '../../common/record-id.pipe';
 import { AuthenticatedUser } from '../auth/auth.service';
 import { ShiftsService } from './shifts.service';
@@ -17,6 +18,7 @@ import {
 type AuthenticatedRequest = { user: AuthenticatedUser };
 
 @Controller('shifts')
+@UseGuards(new ShiftsRouteGuard())
 @UsePipes(new RecordIdPipe())
 export class ShiftsController {
   constructor(private readonly shifts: ShiftsService, private readonly handovers: HandoversService) {}

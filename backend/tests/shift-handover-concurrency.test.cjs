@@ -53,6 +53,21 @@ test('real concurrent connections reserve receiver and accept only once in isola
     const denied=await writing;
     assert.equal(denied?.getResponse().code,'TUR-SOL-409');
     assert.deepEqual((await shifts.detail(target,users[index])).cashCounts,cashBefore);
+    const notice=(await db.query(`insert into temo.notificaciones_usuarios(id_usuario_destino,tipo,titulo,mensaje,id_turno)
+      values($1,'PENDIENTE_PAGADO','Concurrency QA','Isolated fixture',$2) returning id_notificacion as id`,[users[index].id,target])).rows[0];
+    let revokeLocked,releaseRevocation;
+    const revocationReady=new Promise(resolve=>{revokeLocked=resolve;}),revocationRelease=new Promise(resolve=>{releaseRevocation=resolve;});
+    const revoking=db.transaction(async c=>{
+      await c.query('update temo.usuarios set version_sesion=version_sesion+1 where id_usuario=$1',[users[index].id]);
+      revokeLocked();await revocationRelease;
+    });
+    await Promise.race([revocationReady,revoking.then(()=>{throw new Error('Revocation ended before acquiring its lock');})]);
+    let acknowledged=false;
+    const acknowledging=shifts.acknowledgeNotification(notice.id,users[index]).then(()=>{acknowledged=true;return null;},error=>{acknowledged=true;return error;});
+    try{await new Promise(resolve=>setTimeout(resolve,50));assert.equal(acknowledged,false,'Acknowledgement waits for the identity lock');}
+    finally{releaseRevocation();await revoking;}
+    assert.equal((await acknowledging)?.getStatus(),403,'Committed revocation wins before the notification is changed');
+    assert.equal((await db.query('select fecha_lectura from temo.notificaciones_usuarios where id_notificacion=$1',[notice.id])).rows[0].fecha_lectura,null);
   }finally{
     if(branch)await db.transaction(async c=>{
       const ids=(await c.query('select id_turno from temo.turnos where id_sucursal=$1',[branch])).rows.map(row=>row.id_turno);

@@ -1,7 +1,8 @@
 import { createHmac, randomInt, timingSafeEqual } from 'node:crypto';
 import { BadRequestException, HttpException, HttpStatus, Injectable, Logger, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { QueryResultRow } from 'pg';
+import { PoolClient, QueryResultRow } from 'pg';
+import { requireSessionVersion } from '../../common/session-version';
 import { DatabaseService } from '../database/database.service';
 import { MfaService } from './mfa.service';
 import { validatePasswordForStorage } from '../../common/password-policy';
@@ -45,8 +46,8 @@ export class AuthService {
     const normalizedIdentifier = identifier.trim().toLowerCase();
     const genericResponse = { success: true, message: 'Si los datos coinciden, recibirá un código de recuperación en el correo registrado.' };
     if (!normalizedIdentifier) return genericResponse;
-    const result = await this.db.query<QueryResultRow & { id: string; email: string; full_name: string }>(
-      `select u.id_usuario as id, u.correo as email, u.nombre_completo as full_name
+    const result = await this.db.query<QueryResultRow & { id: string; email: string; full_name: string; session_version: number }>(
+      `select u.id_usuario as id, u.correo as email, u.nombre_completo as full_name, u.version_sesion as session_version
        from temo.usuarios u join temo.roles r on r.id_rol = u.id_rol
        where (lower(u.usuario) = $1 or lower(u.correo) = $1)
          and u.estado = 'ACTIVO' and r.estado = 'ACTIVO' and r.codigo = 'JEFA'
@@ -57,26 +58,35 @@ export class AuthService {
     if (result.rows.length !== 1) return genericResponse;
 
     const code = String(randomInt(0, 1_000_000)).padStart(6, '0');
-    const codeHash = this.hashRecoveryCode(target.id, code);
+    const codeHash = this.hashRecoveryCode(target.id, code, target.session_version, target.email);
     let recoveryId: string | null;
     try {
       recoveryId = await this.db.transaction(async client => {
+        // Use the same identity lock order as confirmation and administration.
+        // Reject an identity/contact snapshot changed since the public lookup.
+        await client.query('select pg_advisory_xact_lock(741260810)');
+        const current = await client.query(`select 1 from temo.usuarios u join temo.roles r using(id_rol)
+          where u.id_usuario=$1 and u.version_sesion=$2 and u.correo=$3
+            and (lower(u.usuario)=$4 or lower(u.correo)=$4)
+            and u.estado='ACTIVO' and r.estado='ACTIVO' and r.codigo='JEFA'
+          for update of u for share of r`, [target.id, target.session_version, target.email, normalizedIdentifier]);
+        if (!current.rowCount) return null;
         // Serialize requests by account across API instances, not by branch IP.
         await client.query('select pg_advisory_xact_lock(hashtextextended($1, 741260811))', [target.id]);
         const recent = await client.query<{ requests: number; cooling_down: boolean }>(
           `select count(*)::integer as requests,
-                  coalesce(bool_or(fecha_creacion > now() - interval '1 minute'), false) as cooling_down
+                  coalesce(bool_or(fecha_creacion > clock_timestamp() - interval '1 minute'), false) as cooling_down
            from temo.recuperaciones_contrasena
-           where id_usuario = $1 and fecha_creacion > now() - interval '15 minutes'`, [target.id]);
+           where id_usuario = $1 and fecha_creacion > clock_timestamp() - interval '15 minutes'`, [target.id]);
         if (recent.rows[0].cooling_down || recent.rows[0].requests >= 3) return null;
         const recovery = await client.query<{ id: string } & QueryResultRow>(
           `with invalidated as (
-             update temo.recuperaciones_contrasena set consumido_en = now()
+             update temo.recuperaciones_contrasena set consumido_en = clock_timestamp()
              where id_usuario = $1 and consumido_en is null
            )
            insert into temo.recuperaciones_contrasena
-             (id_usuario, codigo_hash, vence_en, direccion_ip)
-           values ($1, $2, now() + interval '10 minutes', nullif($3, '')::inet)
+             (id_usuario, codigo_hash, fecha_creacion, vence_en, direccion_ip)
+           values ($1, $2, clock_timestamp(), clock_timestamp() + interval '10 minutes', nullif($3, '')::inet)
            returning id_recuperacion as id`,
           [target.id, codeHash, this.normalizeIp(ip)],
         );
@@ -99,7 +109,7 @@ export class AuthService {
       await this.sendRecoveryEmail(target.email, target.full_name, code);
     } catch {
       // Keep the request timestamp for abuse controls, but never accept an undelivered code.
-      await this.db.query(`update temo.recuperaciones_contrasena set consumido_en = now() where id_recuperacion = $1`, [recoveryId]);
+      await this.db.query(`update temo.recuperaciones_contrasena set consumido_en = clock_timestamp() where id_recuperacion = $1`, [recoveryId]);
       this.logger.error('No fue posible enviar el correo de recuperación.');
     }
     return genericResponse;
@@ -112,12 +122,13 @@ export class AuthService {
     if (!/^\d{6}$/.test(code)) throw new BadRequestException('El código de recuperación no es válido.');
     const recovered = await this.db.transaction(async (client) => {
       await client.query('select pg_advisory_xact_lock(741260810)');
-      const identities = await client.query<{ id: string }>(`select u.id_usuario as id
+      const identities = await client.query<{ id: string; session_version: number; email: string }>(`select u.id_usuario as id, u.version_sesion as session_version, u.correo as email
         from temo.usuarios u join temo.roles r using(id_rol)
         where (lower(u.usuario)=$1 or lower(u.correo)=$1)
           and u.estado='ACTIVO' and r.estado='ACTIVO' and r.codigo='JEFA'
-          and nullif(trim(u.correo),'') is not null limit 2`, [normalizedIdentifier]);
+          and nullif(trim(u.correo),'') is not null limit 2 for update of u for share of r`, [normalizedIdentifier]);
       if (identities.rows.length !== 1) throw new BadRequestException('El código venció o no es válido. Solicite uno nuevo.');
+      // Transaction-start time may predate a lock wait; expiration must use wall time.
       const result = await client.query<QueryResultRow & { recovery_id: string; user_id: string; code_hash: string }>(
         `select rc.id_recuperacion as recovery_id, u.id_usuario as user_id, rc.codigo_hash as code_hash
          from temo.recuperaciones_contrasena rc
@@ -125,24 +136,24 @@ export class AuthService {
          join temo.roles r on r.id_rol = u.id_rol
          where u.id_usuario = $1
            and r.codigo = 'JEFA' and r.estado = 'ACTIVO' and u.estado = 'ACTIVO'
-           and rc.consumido_en is null and rc.vence_en > now() and rc.intentos < 5
+           and rc.consumido_en is null and rc.vence_en > clock_timestamp() and rc.intentos < 5
          order by rc.fecha_creacion desc limit 1 for update of rc`,
         [identities.rows[0].id],
       );
       const recovery = result.rows[0];
       if (!recovery) throw new BadRequestException('El código venció o no es válido. Solicite uno nuevo.');
-      if (this.hashRecoveryCode(recovery.user_id, code) !== recovery.code_hash) {
+      if (this.hashRecoveryCode(recovery.user_id, code, identities.rows[0].session_version, identities.rows[0].email) !== recovery.code_hash) {
         await client.query(`update temo.recuperaciones_contrasena set intentos = least(intentos + 1, 5) where id_recuperacion = $1`, [recovery.recovery_id]);
         return false;
       }
       await client.query(
         `update temo.usuarios set contrasena_hash = crypt($2, gen_salt('bf', 12)),
-           debe_cambiar_contrasena = false, contrasena_modificada_en = now(),
+           debe_cambiar_contrasena = false, contrasena_modificada_en = clock_timestamp(),
            version_sesion = version_sesion + 1, intentos_fallidos = 0,
-           bloqueado_hasta = null, fecha_modificacion = now() where id_usuario = $1`,
+           bloqueado_hasta = null, fecha_modificacion = clock_timestamp() where id_usuario = $1`,
         [recovery.user_id, newPassword],
       );
-      await client.query(`update temo.recuperaciones_contrasena set consumido_en = now() where id_recuperacion = $1`, [recovery.recovery_id]);
+      await client.query(`update temo.recuperaciones_contrasena set consumido_en = clock_timestamp() where id_recuperacion = $1`, [recovery.recovery_id]);
       await client.query(
         `insert into temo.bitacora
            (id_usuario, accion, tabla, id_registro, datos_nuevos, direccion_ip, agente_usuario)
@@ -169,12 +180,21 @@ export class AuthService {
         `select u.id_usuario as id, u.id_rol as role_id, r.codigo as role_code,
               r.nombre as role_name, u.nombre_completo as full_name, u.usuario as username,
               u.debe_cambiar_contrasena as must_change_password, u.foto_perfil as profile_photo,
-              u.version_sesion as session_version, u.bloqueado_hasta > now() as blocked
+              u.version_sesion as session_version
        from temo.usuarios u join temo.roles r on r.id_rol = u.id_rol
        where lower(u.usuario) = $1 and u.estado = 'ACTIVO' and r.estado = 'ACTIVO' limit 1 for update of u`,
         [normalizedUsername],
       );
       const userRow = result.rows[0];
+      // A SELECT projection can be evaluated before its row-lock wait. Read the
+      // penalty again after acquiring the lock and use the actual decision time.
+      if (userRow) {
+        const penalty = await client.query<{ blocked: boolean }>(
+          `select coalesce(bloqueado_hasta > clock_timestamp(), false) as blocked
+           from temo.usuarios where id_usuario = $1`, [userRow.id],
+        );
+        userRow.blocked = penalty.rows[0]?.blocked !== false;
+      }
       const valid = userRow && !userRow.blocked ? (await client.query(
         `select contrasena_hash = crypt($2, contrasena_hash) as password_valid
          from temo.usuarios where id_usuario = $1`, [userRow.id, password],
@@ -182,12 +202,12 @@ export class AuthService {
       if (!valid) {
         if (userRow && !userRow.blocked) {
           await client.query(
-            `update temo.usuarios set intentos_fallidos = case when bloqueado_hasta <= now()
+            `update temo.usuarios set intentos_fallidos = case when bloqueado_hasta <= clock_timestamp()
                  then 1 else intentos_fallidos + 1 end,
-               bloqueado_hasta = case when (case when bloqueado_hasta <= now()
+               bloqueado_hasta = case when (case when bloqueado_hasta <= clock_timestamp()
                  then 1 else intentos_fallidos + 1 end) >= $2
-                 then now() + make_interval(mins => $3) else null end,
-               fecha_modificacion = now() where id_usuario = $1`,
+                 then clock_timestamp() + make_interval(mins => $3) else null end,
+               fecha_modificacion = clock_timestamp() where id_usuario = $1`,
             [userRow.id, MAX_FAILED_ATTEMPTS, BLOCK_MINUTES],
           );
         }
@@ -226,12 +246,12 @@ export class AuthService {
     const token = this.issueToken(user);
     await this.db.transaction(async (client) => {
       const current = await client.query(
-        `update temo.usuarios u set ultimo_acceso = now(), intentos_fallidos = 0,
+        `update temo.usuarios u set ultimo_acceso = clock_timestamp(), intentos_fallidos = 0,
          bloqueado_hasta = null from temo.roles r
          where u.id_usuario = $1 and u.version_sesion = $2 and u.id_rol = $3
            and u.usuario = $4 and u.estado = 'ACTIVO' and r.id_rol = u.id_rol
            and r.codigo = $5 and r.estado = 'ACTIVO'
-           and (u.bloqueado_hasta is null or u.bloqueado_hasta <= now())
+           and (u.bloqueado_hasta is null or u.bloqueado_hasta <= clock_timestamp())
          returning u.id_usuario`, [user.id, user.sessionVersion, user.roleId, user.username, user.roleCode],
       );
       if (!current.rowCount) throw new UnauthorizedException('El acceso cambio durante la operacion. Inicie sesion nuevamente.');
@@ -247,7 +267,7 @@ export class AuthService {
          values ($1, 'INICIAR_SESION', 'usuarios', $1, nullif($2, '')::inet, nullif($3, ''))`,
         [user.id, safeIp, safeAgent],
       );
-      await client.query(`delete from temo.intentos_inicio_sesion where fecha_creacion < now() - interval '90 days'`);
+      await client.query(`delete from temo.intentos_inicio_sesion where fecha_creacion < clock_timestamp() - interval '90 days'`);
     });
     return { token, expiresIn: this.tokenLifetimeSeconds, user };
   }
@@ -298,6 +318,7 @@ export class AuthService {
       throw new BadRequestException('La fotografia es demasiado grande. Seleccione otra imagen.');
     }
     await this.db.transaction(async (client) => {
+      await this.lockSessionMutation(client, user);
       await client.query(
         `update temo.usuarios set foto_perfil = $2, fecha_modificacion = now()
          where id_usuario = $1`,
@@ -312,11 +333,12 @@ export class AuthService {
         [user.id, this.normalizeIp(ip), userAgent.slice(0, 1000)],
       );
     });
-    return { user: await this.loadUser(user.id, user.username) };
+    return this.session(user);
   }
 
   async logout(user: AuthenticatedUser, ip: string, userAgent: string) {
     await this.db.transaction(async (client) => {
+      await this.lockSessionMutation(client, user, true);
       await client.query(`update temo.usuarios set version_sesion = version_sesion + 1 where id_usuario = $1`, [user.id]);
       await client.query(
         `insert into temo.bitacora
@@ -341,7 +363,27 @@ export class AuthService {
   }
 
   async session(user: AuthenticatedUser) {
-    return { user: await this.loadUser(user.id, user.username) };
+    requireSessionVersion(user.sessionVersion);
+    const current = await this.loadUser(user.id, user.username);
+    if (current.sessionVersion !== user.sessionVersion || current.roleCode !== user.roleCode) {
+      throw new UnauthorizedException('La sesion ya no es valida. Inicie sesion nuevamente.');
+    }
+    return { user: current };
+  }
+
+  private async lockSessionMutation(client: PoolClient, user: AuthenticatedUser, basic = false) {
+    const version = requireSessionVersion(user.sessionVersion);
+    if (!basic && (user.mustChangePassword || !['JEFA', 'CAJERO', 'TRANSFERISTA'].includes(user.roleCode))) {
+      throw new UnauthorizedException('La sesion ya no permite esta operacion.');
+    }
+    // Same lock/order as password changes and identity administration. Serialize
+    // identity mutations without upgrading simultaneous shared user-row locks.
+    await client.query('select pg_advisory_xact_lock(741260810)');
+    const result = await client.query(`select 1 from temo.usuarios u join temo.roles r using(id_rol)
+      where u.id_usuario=$1 and u.version_sesion=$2 and r.codigo=$3
+        and u.estado='ACTIVO' and r.estado='ACTIVO' and ($4::boolean or not u.debe_cambiar_contrasena)
+      for update of u for share of r`, [user.id, version, user.roleCode, basic]);
+    if (!result.rowCount) throw new UnauthorizedException('La sesion ya no es valida. Inicie sesion nuevamente.');
   }
 
   private async loadUser(id: string, username: string, includePhoto = true) {
@@ -383,9 +425,13 @@ export class AuthService {
     validatePasswordForStorage(password);
   }
 
-  // Deriva un hash ligado al usuario para que el código nunca se almacene de forma recuperable.
-  private hashRecoveryCode(userId: string, code: string) {
-    return createHmac('sha256', this.secret).update(`${userId}:${code}`).digest('hex');
+  // Bind the code to the exact access version and delivery address. A revoked
+  // identity cannot reuse an older code, even if its role/contact is restored.
+  // No legacy fallback: codes issued before this format must be requested again.
+  private hashRecoveryCode(userId: string, code: string, sessionVersion: number, email: string) {
+    return createHmac('sha256', this.secret)
+      .update(JSON.stringify(['temo-password-recovery-v2', userId, sessionVersion, email, code]))
+      .digest('hex');
   }
 
   // Entrega el código mediante Resend usando únicamente variables protegidas de Render.

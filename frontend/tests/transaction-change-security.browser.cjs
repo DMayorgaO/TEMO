@@ -50,14 +50,15 @@ const shift={database_id:shiftId,id:'TUR-000100',estado:'ABIERTO',sucursal:'SUCU
         await status.waitFor();
         assert.equal(await status.count(),1,'Customer balance appears once, in the pinned header');
         for(const [quantity,tone,label,color]of [
-          ['0','receive','Pendiente por recibir del cliente','rgb(255, 240, 237)'],
+          ['0','receive','Pendiente por recibir del cliente','rgb(251, 224, 220)'],
           ['2','deliver','Pendiente por entregar al cliente','rgb(255, 244, 199)'],
           ['1','settled','Cuenta del cliente equilibrada','rgb(233, 246, 239)'],
         ]){
           await received.fill(quantity);await received.blur();
           await modal.getByRole('status',{name:label,exact:true}).waitFor();
           assert.ok((await status.getAttribute('class')).endsWith(`--${tone}`));
-          assert.equal(await status.evaluate(e=>getComputedStyle(e).backgroundColor),color,'Existing balance-state colors are preserved');
+          assert.equal(await modal.locator('.transaction-balance-header').evaluate(e=>getComputedStyle(e).backgroundColor),color,'Balance-state color covers the full header');
+          assert.equal(await status.evaluate(e=>getComputedStyle(e).backgroundColor),'rgba(0, 0, 0, 0)','Inner status leaves the header color visible');
           assert.equal(await status.locator('strong').count(),2,'NIO and USD equivalents remain visible');
         }
       }

@@ -124,7 +124,7 @@ test('HTTP: every record route in four operational controllers rejects bad IDs b
   app.setGlobalPrefix('api');
   app.useGlobalGuards(new AuthGuard(new Reflector(), { validateAccessToken: async token => {
     if (token === 'revoked') throw new UnauthorizedException();
-    return { id: uuid, roleCode: token === 'unknown' ? 'OTHER' : 'CAJERO', mustChangePassword: token === 'change' };
+    return { id: uuid, sessionVersion: 1, roleCode: token === 'unknown' ? 'OTHER' : token === 'admin' ? 'JEFA' : 'CAJERO', mustChangePassword: token === 'change' };
   } }));
   try {
     await app.listen(0, '127.0.0.1');
@@ -135,13 +135,16 @@ test('HTTP: every record route in four operational controllers rejects bad IDs b
       .map(handler => ({ path: `/api/${Reflect.getMetadata(PATH_METADATA, controller)}/${Reflect.getMetadata(PATH_METADATA, handler)}`,
         method: RequestMethod[Reflect.getMetadata(METHOD_METADATA, handler)] })));
     assert.equal(routes.length, 30, 'all record routes, including handovers and closure cancellation, remain covered');
+    const authorizedToken = route => route.path.startsWith('/api/shifts/') && (
+      (route.method === 'PUT' && ['/api/shifts/:id','/api/shifts/:id/closed'].includes(route.path)) || /\/(close|reject-close)$/.test(route.path)
+    ) ? 'admin' : 'cashier';
     for (const route of routes) {
       const request = (id, token) => fetch(base + route.path.replace(':id', encodeURIComponent(id)), {
         method: route.method, headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}), 'Content-Type': 'application/json' },
         ...(route.method === 'GET' ? {} : { body: '{}' }), signal: AbortSignal.timeout(5000),
       });
       for (const id of ['invalid-private-marker', 'TRA-000001', "';select secret;--"]) {
-        const response = await request(id, 'cashier');
+        const response = await request(id, authorizedToken(route));
         assert.equal(response.status, 400, `${route.method} ${route.path}`);
         const body = await response.json();
         assert.equal(body.message, 'El identificador del registro no es valido.');
@@ -157,7 +160,7 @@ test('HTTP: every record route in four operational controllers rejects bad IDs b
       const noBody = route.method === 'GET' || /\/(reopen|open-prepared|close-request|cancel-close-request|reject-close|acknowledge)$/.test(route.path)
         || route.path === '/api/transactions/:id/void';
       const response = await fetch(base + route.path.replace(':id', uuid), {
-        method: route.method, headers: { Authorization: 'Bearer cashier', 'Content-Type': 'application/json' },
+        method: route.method, headers: { Authorization: `Bearer ${authorizedToken(route)}`, 'Content-Type': 'application/json' },
         ...(route.method === 'GET' ? {} : { body: '{}' }), signal: AbortSignal.timeout(5000),
       });
       if (noBody) {

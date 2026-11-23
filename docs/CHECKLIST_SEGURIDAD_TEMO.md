@@ -1,6 +1,153 @@
 # Seguridad TEMO: contexto y checklist
 
-Actualizado: 2026-10-30. Referencia local privada: INFORME_SEGURIDAD_TEMO_2026-10-06.md (no publicado).
+Actualizado: 2026-11-23. Referencia local privada: INFORME_SEGURIDAD_TEMO_2026-10-06.md (no publicado).
+
+## Candidato acumulado y seguridad de publicación: 2026-11-23 (sin publicar)
+
+- [x] Control del árbol candidato mediante SHA-256, base/rama Git, índice y archivos de trabajo; rechaza rutas privadas, secretos conocidos de producción/piloto, enlaces, conflictos y flags que ocultan cambios. Cuatro pruebas nuevas aprobadas.
+- [x] Herramientas de lint actualizadas a 8.73.0, instalación limpia y build/lint aprobados. Auditoría runtime sin vulnerabilidades reportadas; tres moderadas de herramientas Nest/glob/minimatch siguen pendientes, sin salto mayor forzado.
+- [x] Regresión de 477 backend, 37 frontend y 21 suites de navegador aprobada. Repetición de 79 comprobaciones financieras/Directorio/ámbito/turnos con rol restringido en los casos que lo admiten.
+- [x] Respaldo nuevo restaurado y migración 056 ensayada solo en clúster aislado: 62 tablas de datos y siete secuencias intactas; solo el CHECK previsto cambió.
+- [x] Preparados artefactos productivos, secuencia de despliegue y retorno. Evidencia: [CANDIDATO_PRODUCCION_2026-11-23.md](CANDIDATO_PRODUCCION_2026-11-23.md).
+- [ ] Falta autorización de publicación, pausa coordinada, comprobaciones/respaldo vigentes y aplicación productiva de 056 antes de API/web. No se modificó producción. El rol efectivo de Render y los controles externos siguen pendientes.
+
+## Bloqueo de login tras espera: 2026-11-22 (solo desarrollo)
+
+- [x] Estado de bloqueo consultado después de obtener la fila del usuario. Decisiones y penalización con hora actual; se conservan cinco intentos y quince minutos.
+- [x] Cinco pruebas nuevas con dos conexiones reales: quinto fallo, vencimiento con contraseña correcta/incorrecta y bloqueo vigente sin prolongarlo ni ejecutar crypt. Tres escenarios reproducidos antes de corregir.
+- [x] 18 pruebas dirigidas y regresión de 473 backend/37 frontend aprobadas, sin fallos ni omitidas; compilación y lint correctos.
+- [ ] Sin publicación ni migración. Evidencia y límites: [SEGURIDAD_BLOQUEO_LOGIN_2026-11-22.md](SEGURIDAD_BLOQUEO_LOGIN_2026-11-22.md).
+
+## Caducidad tras esperas SQL: 2026-11-22 (solo desarrollo)
+
+- [x] Recuperación rechaza códigos vencidos durante la espera por bloqueos; conserva contraseña, versión, intentos y auditoría de éxito sin cambios.
+- [x] Emisión de recuperación y desafíos MFA usa fecha efectiva y vigencia completa; ventanas de intentos y bloqueos MFA usan la hora actual. No se amplían las duraciones ni los límites de intentos.
+- [x] Seis pruebas con dos conexiones reales; cuatro escenarios fallaron antes de corregir y pasaron después. Regresión: 468 backend y 37 frontend aprobadas, sin fallos ni omitidas; build/lint correctos.
+- [ ] Sin publicación ni migraciones. No verifica sincronización de relojes en infraestructura productiva. Evidencia: [SEGURIDAD_CADUCIDAD_AUTENTICACION_2026-11-22.md](SEGURIDAD_CADUCIDAD_AUTENTICACION_2026-11-22.md).
+
+## Recuperación vinculada al ciclo de acceso: 2026-11-22 (solo desarrollo)
+
+- [x] Códigos de recuperación ligados por HMAC al usuario, versión de sesión y correo de emisión. Revocar sesiones, cerrar sesión o cambiar contraseña/identidad impide reutilizar códigos anteriores.
+- [x] Cambiar correo incrementa la versión de sesión; restaurar el correo anterior no reactiva códigos. Ediciones exclusivas de nombres conservan acceso y recuperación.
+- [x] 17 pruebas nuevas: rechazo de códigos anteriores, recuperación nueva de un uso, aislamiento entre cuentas, rollback por auditoría y dos carreras con conexiones SQL reales. Casos transaccionales repetidos con rol SQL restringido.
+- [x] Regresión: 462 backend y 37 frontend, sin fallos ni omitidas; compilación/lint correctos.
+- [ ] Sin publicación ni migración. Al desplegar, los códigos emitidos con el formato anterior deberán solicitarse de nuevo. Evidencia y límites: [SEGURIDAD_RECUPERACION_CICLO_ACCESO_2026-11-22.md](SEGURIDAD_RECUPERACION_CICLO_ACCESO_2026-11-22.md).
+
+## Alcance financiero y día local de pendientes: 2026-11-21 (solo desarrollo)
+
+- [x] Matriz HTTP con SQL real: roles, dos sucursales, cuatro estados de turno, pendientes compartidos, totales filtrados y exportaciones completas/autorizadas.
+- [x] Corregida dependencia de la zona horaria SQL al consultar y liquidar/compensar pendientes. Comparaciones explícitas con el día de America/Managua; accesos legítimos conservados.
+- [x] 12 pruebas nuevas con 250 solicitudes, repetidas con rol SQL restringido. Casos cercanos a medianoche en UTC, Managua y Tokio; rechazo sin cambios de saldo/estado ni auditoría de éxito.
+- [x] Regresión: 445 backend y 37 frontend, sin fallos ni omitidas; navegador de liquidaciones aprobado; compilación/lint correctos.
+- [ ] Sin publicación ni migración. No completa la matriz de todos los módulos. Evidencia: [SEGURIDAD_ALCANCE_FINANCIERO_2026-11-21.md](SEGURIDAD_ALCANCE_FINANCIERO_2026-11-21.md).
+
+## Correcciones y cierre de turnos: 2026-11-21 (solo desarrollo)
+
+- [x] Revalidación de estado/propietario con bloqueo de fila dentro de las escrituras. Corrección de cierre vuelve a comprobar traspaso aceptado; arqueos usan la caja vigente al insertar y actualizar.
+- [x] 22 pruebas nuevas aprobadas: alcance propio/ajeno en dos sucursales, transiciones tardías, cambio de propietario/caja, rollback por auditoría y cierre concurrente con dos conexiones. Suite con rollback repetida con rol SQL restringido.
+- [x] Regresión final: 433 backend, 37 frontend y siete suites de navegador aprobadas; compilación y lint correctos.
+- [ ] Sin publicación ni migración. Evidencia y límites: [SEGURIDAD_MUTACIONES_TURNOS_2026-11-21.md](SEGURIDAD_MUTACIONES_TURNOS_2026-11-21.md).
+
+## Políticas explícitas de rutas financieras: 2026-11-20 (solo desarrollo)
+
+- [x] Las 23 rutas de Transacciones, Transferencias y Compras de dólares requieren una política explícita; las rutas nuevas no heredan acceso automáticamente. Conserva roles, sesión y consultas permitidas.
+- [x] Matriz HTTP de 337 casos y 27 rechazos de rutas no revisadas aprobados, además de claves heredadas y operaciones de otro módulo. Cuatro pruebas de política y 67 de regresión dirigida, sin fallos ni omitidas; compilación/lint correctos.
+- [ ] Sin publicación ni migración nueva. Evidencia y alcance: [SEGURIDAD_POLITICAS_FINANCIERAS_2026-11-20.md](SEGURIDAD_POLITICAS_FINANCIERAS_2026-11-20.md).
+
+## Diferencia histórica de cierre y Directorio: 2026-11-20 (solo desarrollo)
+
+- [x] Detalle de cierre muestra diferencia pendiente NIO y equivalente USD con el cálculo y colores de Arqueo, separada del cambio registrado. Casos positivos, negativos, equilibrados y parciales verificados en ambas resoluciones.
+- [x] Cuatro rutas del Directorio con política explícita, versión de sesión y rechazo de consultas adicionales también en escrituras; nuevas rutas sin política rechazadas. Conserva permisos SQL, recibos, versiones y auditoría.
+- [x] 23 pruebas dirigidas; regresión final: 409 backend, 37 frontend y siete suites de navegador aprobadas. Compilación/lint correctos; API local disponible.
+- [ ] Sin publicación ni migración nueva. Evidencia y límites: [TURNOS_HISTORICOS_SEGURIDAD_DIRECTORIO_2026-11-20.md](TURNOS_HISTORICOS_SEGURIDAD_DIRECTORIO_2026-11-20.md).
+
+## Privacidad y robustez de errores: 2026-11-12 (solo desarrollo)
+
+- [x] Códigos públicos explícitos ligados a su estado HTTP; SQLSTATE acotado en logs. Cuerpos de excepción inesperados o mensajes excesivos usan respuestas seguras y no rompen el filtro.
+- [x] Catálogo PostgreSQL sin resolución de claves heredadas. Se conservan conflictos de edición, bloqueo de turno, rechazos del parser, referencias y captura auxiliar de denegaciones.
+- [x] Ocho pruebas dirigidas aprobadas, incluido HTTP real, metadatos privados sintéticos y compatibilidad de avisos. No cambia cálculos financieros ni permisos.
+- [x] Regresión final: 408 backend, 37 frontend y seis suites de navegador aprobadas; compilación/lint correctos.
+- [ ] Sin publicación ni migración. Evidencia y límites: [SEGURIDAD_METADATOS_ERRORES_2026-11-12.md](SEGURIDAD_METADATOS_ERRORES_2026-11-12.md).
+
+## D desde la primera transacción: 2026-11-12 (solo desarrollo)
+
+- [x] Mismo botón y tasa 36.55 para depósito NIO recibiendo USD, sin retiro previo ni otra pestaña. Compra de dólares conserva la conversión normal de 37; no se cambia la lógica del servicio financiero ni del reporte de compras.
+- [x] Registro nuevo empieza sin D; edición permite desactivarlo; liquidación independiente posterior no arrastra la preferencia. Casos SQL de efectivo mixto, vuelto, múltiples pestañas, deuda entre monedas, edición y anulación comprobados.
+- [x] Build/lint, 404 backend, 37 frontend, ocho suites de navegador y 35 pruebas financieras repetidas con rol SQL restringido aprobados.
+- [ ] Sin publicación ni migración. Evidencia: [TASA_PREFERENCIAL_PRIMERA_TRANSACCION_2026-11-12.md](TASA_PREFERENCIAL_PRIMERA_TRANSACCION_2026-11-12.md).
+
+## Cupos de exportación: 2026-11-12 (solo desarrollo)
+
+- [x] Exportación filtrada comparte los límites existentes de exportación por usuario; conserva consultas pesadas, contenido completo autorizado, permisos y auditoría. Las escrituras financieras no reciben esta cuota.
+- [x] Reserva al iniciar la ejecución y liberación por suscripción; operaciones no iniciadas, fallidas, canceladas o repetidas no dejan contadores incorrectos. Once pruebas dirigidas aprobadas, con HTTP real y prueba SQL local de alcance.
+- [x] Regresión final: 402 backend, 37 frontend y seis suites de navegador aprobadas; compilación y lint correctos.
+- [ ] Sin publicación ni migración. Evidencia y límites: [SEGURIDAD_EXPORTACIONES_CUPOS_2026-11-12.md](SEGURIDAD_EXPORTACIONES_CUPOS_2026-11-12.md).
+
+## Consultas HEAD: 2026-11-11 (solo desarrollo)
+
+- [x] HEAD comparte con GET el límite existente de consultas pesadas por usuario/proceso y la captura auxiliar de lecturas sensibles, registrando su método real. No cambia límites de escrituras ni auditoría financiera obligatoria.
+- [x] 13 pruebas dirigidas aprobadas: HTTP real con lecturas mixtas, rechazos de sesión/perfil/consulta, 429 con Retry-After, cupos reutilizables y privacidad/agrupación de captura. Servicios HTTP simulados; sin cambio de SQL ni de permisos por registro.
+- [x] Regresión final: 399 backend, 37 frontend y seis suites de navegador aprobadas; compilación/lint correctos.
+- [ ] Sin publicación ni migración. Evidencia y límites: [SEGURIDAD_CONSULTAS_HEAD_2026-11-11.md](SEGURIDAD_CONSULTAS_HEAD_2026-11-11.md).
+
+## Recuperación de contraseña e identidad: 2026-11-11 (solo desarrollo)
+
+- [x] La solicitud revalida dentro de la escritura usuario, rol, versión, correo e identificador; cambios desde la lectura inicial no crean códigos ni envían correo. Conserva respuesta genérica y límites por cuenta.
+- [x] Confirmación protege usuario/rol durante la transacción y respeta desactivaciones concurrentes. Auditoría fallida no cambia contraseña, versión ni consumo del código; reintento válido y rechazo de reutilización comprobados.
+- [x] 34 pruebas dirigidas aprobadas, incluidos casos con rol SQL restringido y concurrencia real local. Regresión: 397 backend, 37 frontend y seis suites de navegador; build/lint correctos.
+- [ ] Sin publicación ni nueva migración. Evidencia, alcance del rol restringido y límites del correo externo: [SEGURIDAD_RECUPERACION_IDENTIDAD_2026-11-11.md](SEGURIDAD_RECUPERACION_IDENTIDAD_2026-11-11.md).
+
+## MFA e identidad vigente: 2026-11-11 (solo desarrollo)
+
+- [x] Crear y verificar desafíos protege usuario y rol durante la transacción. Creación exige versión exacta y Administrador activo; conserva VIP Access, límites de intentos y protección contra reutilización.
+- [x] SQL comprueba rechazos por cambios de identidad/rol y retroceso completo ante fallo de auditoría durante alta o recuperación. Casos transaccionales repetidos con rol restringido; revocación concurrente y bloqueo de rol comprobados con dos conexiones locales.
+- [x] 18 pruebas dirigidas aprobadas; regresión final de 389 backend, 37 frontend y seis suites de navegador sin fallos ni omitidas. Compilación/lint correctos.
+- [ ] Sin publicación ni nueva migración. La matriz general y los controles externos siguen pendientes. Evidencia y límites: [SEGURIDAD_MFA_IDENTIDAD_2026-11-11.md](SEGURIDAD_MFA_IDENTIDAD_2026-11-11.md).
+
+## Autenticación y sesión: 2026-11-11 (solo desarrollo)
+
+- [x] Política explícita para ocho manejadores; conserva ingreso/MFA/recuperación públicos y acceso básico durante cambio obligatorio de contraseña. Rechaza consultas y campos adicionales no admitidos.
+- [x] Foto y cierre revalidan identidad dentro de la escritura con bloqueo y auditoría atómica. Un cierre antiguo no revoca una sesión posterior. Consulta de sesión comprueba versión y rol nuevamente.
+- [x] Matriz HTTP de 75 casos; SQL con rol restringido y revocación concurrente real con dos conexiones aprobados. Regresión: 380 backend, 37 frontend, seis suites de navegador y 26 verificaciones adicionales (incluyen repeticiones); build/lint correctos.
+- [ ] Publicación no autorizada ni realizada; sin nueva migración. Evidencia y límites: [SEGURIDAD_AUTH_SESION_2026-11-11.md](SEGURIDAD_AUTH_SESION_2026-11-11.md).
+
+## Catálogos, auditoría y claves temporales: 2026-11-11 (solo desarrollo)
+
+- [x] Política explícita para 19 manejadores de Catálogos, con rechazo de nuevas rutas sin política. Rol/sesión antes de consultar datos o ejecutar servicios; se conservan catálogos operativos y alcance SQL por perfil.
+- [x] Rechazo de parámetros de consulta adicionales y de cuerpos con campos adicionales al revocar sesiones. Clave temporal con contrato estricto, sin coerción de listas/objetos, sin devolver secretos y con política de contraseña existente.
+- [x] Matriz HTTP de 251 casos más credenciales/exportaciones/atribución. Ensayo dirigido de 47 pruebas y 43 pruebas adicionales de identidad/administración, incluidos casos SQL con rol restringido, aprobados.
+- [x] Regresión final: 377 backend, 37 frontend y siete suites de navegador aprobadas, sin fallos ni omisiones. Compilación y lint correctos; API/web locales disponibles.
+- [ ] Publicación no autorizada ni realizada. Sin nuevas migraciones. Evidencia y regresión final: [SEGURIDAD_CATALOGOS_HTTP_2026-11-11.md](SEGURIDAD_CATALOGOS_HTTP_2026-11-11.md).
+
+## Turnos, traspasos y notificaciones: 2026-11-06 (solo desarrollo)
+
+- [x] Política explícita para los 26 manejadores de Turnos; las acciones nuevas sin política quedan rechazadas. Identidad/rol en HTTP antes de procesar el controlador, conservando el alcance SQL y controles transaccionales existentes.
+- [x] Contratos sin parámetros de consulta adicionales y cuerpos vacíos para acciones sin datos; dashboard conserva sus fechas. Matriz HTTP de 438 casos más controles de acción, campos anidados y rutas futuras.
+- [x] Confirmación de notificaciones generales/de cierre revalida sesión dentro de la transacción, conserva destinatario y fecha de primera lectura. Revocación concurrente comprobada con conexiones reales; sin efectos sobre dinero ni estado del cierre.
+- [x] Alcance SQL entre cajeros/sucursales y cinco estados de turno, conservando historial propio y exportaciones autorizadas. Ensayo dirigido de 33 comprobaciones aprobado.
+- [x] Regresión final: 374 backend, 37 frontend, siete suites de navegador y 77 comprobaciones repetidas con rol SQL restringido aprobadas. Build/lint correctos; API y web locales disponibles, datos conservados.
+- [ ] Publicación no autorizada ni realizada; sin nueva migración en este bloque. Evidencia y resultados finales: [SEGURIDAD_TURNOS_NOTIFICACIONES_2026-11-06.md](SEGURIDAD_TURNOS_NOTIFICACIONES_2026-11-06.md).
+
+## Matriz de rutas financieras: 2026-11-06 (solo desarrollo)
+
+- [x] Guard de entrada en las 23 rutas de Transacciones/Pendientes, Transferencias y Compra de dólares: roles explícitos y versión de sesión válida antes de procesar el controlador. Conserva AuthGuard y controles transaccionales/por registro existentes.
+- [x] Rechazo de parámetros de consulta no admitidos; listados paginados mantienen sus filtros. Reapertura individual de pago rechaza cuerpos con campos adicionales. Lecturas de Transferencias y Compra de dólares también verifican perfil/cambio de contraseña dentro del servicio.
+- [x] Matriz HTTP de 337 comprobaciones de roles y rechazos, además de controles de consultas válidas y atribución. Matrices SQL reales de Transferencias/Compra de dólares entre cajeros, sucursales y estados de turno, con rollback.
+- [x] Regresión final: 369 backend, 37 frontend, ocho suites de navegador y 69 comprobaciones repetidas con rol SQL restringido, todas aprobadas. Build/lint correctos; API/web locales disponibles.
+- [ ] Publicación no autorizada ni realizada. No requiere otra migración; 056 del bloque anterior continúa pendiente de publicación. Evidencia, regresión y límites: [SEGURIDAD_RUTAS_FINANCIERAS_2026-11-06.md](SEGURIDAD_RUTAS_FINANCIERAS_2026-11-06.md).
+- [ ] Matriz del resto de rutas y controles externos aún pendientes; las comprobaciones HTTP con servicios simulados no acreditan por sí solas permisos SQL ni identidad real.
+
+## Directorio: recibos y permisos, 2026-11-06 (solo desarrollo)
+
+- [x] Altas, ediciones y anulaciones con referencia obligatoria, recibo persistente mínimo y auditoría atómica. Reintentos exactos no duplican efectos; una referencia no admite cambiar su contenido ni acceder al recibo de otro usuario.
+- [x] Revalidación de sesión, versión, rol y estado antes de devolver recibos. Concurrencia real comprobada; la protección de versiones continúa rechazando ediciones antiguas.
+- [x] Formulario conserva cuerpo y referencia ante respuesta incierta, bloquea cambios durante el reintento y evita doble envío. No persiste datos privados ni sesiones en almacenamiento del navegador. Cerrar o recargar pierde la referencia en memoria: se advierte revisar el Directorio antes de iniciar otra alta.
+- [x] Matriz HTTP de las cuatro rutas, contratos estrictos y rechazos sin ejecutar el servicio. Se conserva el Directorio compartido y sus roles actuales.
+- [x] Build/lint, 365 pruebas backend, 37 frontend, nueve suites de navegador y 67 comprobaciones repetidas con rol SQL restringido aprobados. Migración 056 aplicada únicamente a preview local. Ver [evidencia y límites](SEGURIDAD_DIRECTORIO_RECIBOS_2026-11-06.md).
+- [ ] Publicación de este bloque: no autorizada ni realizada. Requiere 056 antes de API/web y recarga de clientes; las versiones anteriores no envían la nueva referencia obligatoria.
+- [ ] Continúan pendientes la matriz completa del resto de rutas, retención/centralización/alertas de auditoría, CA desde Render y controles de infraestructura.
+
+La publicación anterior del 2026-11-05 está documentada en [DESPLIEGUE_2026-11-05.md](DESPLIEGUE_2026-11-05.md): revisión funcional `0a6b23c`, documentación `cf08337`. Incluye paginación de Transacciones y liquidación entre monedas; falta medición representativa para declarar resuelto todo el rendimiento. Las secciones siguientes conservan el estado histórico de cada fecha.
 
 ## Publicacion autorizada: 2026-10-30
 

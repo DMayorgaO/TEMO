@@ -69,7 +69,7 @@ test('HTTP financial boundary rejects invalid contracts/auth before invoking ser
   const app=await NestFactory.create(BoundaryModule,{logger:false});app.setGlobalPrefix('api');
   app.useGlobalGuards(new AuthGuard(new Reflector(),{validateAccessToken:async token=>{
     if(token==='revoked')throw new UnauthorizedException();
-    return {id,roleCode:token==='unknown'?'OTHER':'JEFA',mustChangePassword:token==='change',sessionVersion:1};
+    return {id,roleCode:token==='unknown'?'OTHER':token==='cashier'?'CAJERO':'JEFA',mustChangePassword:token==='change',sessionVersion:1};
   }}));
   const routes=[
     ['POST','shifts',opening,'create'],
@@ -88,7 +88,8 @@ test('HTTP financial boundary rejects invalid contracts/auth before invoking ser
   try{
     await app.listen(0,'127.0.0.1');const base=await app.getUrl();
     for(const [method,path,body,service]of routes){
-      const send=(payload,token='valid')=>fetch(`${base}/api/${path}`,{method,headers:{'Content-Type':'application/json',...(token?{Authorization:`Bearer ${token}`}:{})},body:JSON.stringify(payload),signal:AbortSignal.timeout(5000)});
+      const expectedRole=['requestClose','propose','registerDifference'].includes(service)?'CAJERO':'JEFA';
+      const send=(payload,token=expectedRole==='CAJERO'?'cashier':'valid')=>fetch(`${base}/api/${path}`,{method,headers:{'Content-Type':'application/json',...(token?{Authorization:`Bearer ${token}`}:{})},body:JSON.stringify(payload),signal:AbortSignal.timeout(5000)});
       const before=calls.length;
       const invalid=await send({...body,id_usuario_creacion:'private-value-not-to-echo'});
       assert.equal(invalid.status,400,path);
@@ -97,7 +98,7 @@ test('HTTP financial boundary rejects invalid contracts/auth before invoking ser
       assert.equal(calls.length,before,'Rejected requests never reach a service');
       const accepted=await send(body);assert.ok([200,201].includes(accepted.status),`${path}: ${await accepted.text()}`);
       assert.equal(calls.length,before+1);assert.equal(calls.at(-1).method,service);
-      assert.ok(calls.at(-1).args.some(value=>value?.id===id&&value?.roleCode==='JEFA'),'Only the authenticated actor is forwarded');
+      assert.ok(calls.at(-1).args.some(value=>value?.id===id&&value?.roleCode===expectedRole),'Only the authenticated actor is forwarded');
     }
   }finally{await app.close();}
 });

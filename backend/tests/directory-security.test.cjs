@@ -16,7 +16,11 @@ test('directory writes revalidate current identity and audit safely with atomic 
     try{const result=await work({query});await c.query('release savepoint '+save);return result;}
     catch(error){await c.query('rollback to savepoint '+save);await c.query('release savepoint '+save);throw error;}
   }};
-  const directory=new DirectoryService(db);
+  const service=new DirectoryService(db);
+  // Each existing scenario below is a new intent, not a replay of another test's write.
+  const directory={list:()=>service.list(),detail:id=>service.detail(id),
+    create:(input,user)=>service.create({...input,requestId:randomUUID()},user),
+    update:(id,input,user)=>service.update(id,{...input,requestId:randomUUID()},user)};
   const update=async(id,input,actor)=>directory.update(id,{...input,expectedVersion:(await directory.detail(id)).edit_version},actor);
   try{
     if(process.env.TEMO_TEST_RESTRICTED_ROLE==='1')await require('./helpers/restricted-role.cjs').useRestrictedPreviewRole(c);
@@ -27,7 +31,7 @@ test('directory writes revalidate current identity and audit safely with atomic 
         returning id_usuario as id,version_sesion as "sessionVersion"`,['directory_'+randomUUID().replaceAll('-',''),roleCode])).rows[0];
       actors[roleCode]={...actor,roleCode};
     }
-    const input=directoryEntrySchema.parse({name:'Persona QA',observations:'private notes sentinel',identifiers:[{institution:'QA Bank',type:'Cuenta',number:'1234567890123456',currency:'NIO'}],identities:[{number:'001-010101-0001A',holder:'Persona sensible'}],references:['private reference sentinel']});
+    const input=directoryEntrySchema.parse({requestId:randomUUID(),name:'Persona QA',observations:'private notes sentinel',identifiers:[{institution:'QA Bank',type:'Cuenta',number:'1234567890123456',currency:'NIO'}],identities:[{number:'001-010101-0001A',holder:'Persona sensible'}],references:['private reference sentinel']});
     const entry=await directory.create(input,actors.CAJERO);
     await t.test('missing and malformed versions cannot create, edit or deactivate directory entries',async()=>{
       const before=await directory.detail(entry.database_id);

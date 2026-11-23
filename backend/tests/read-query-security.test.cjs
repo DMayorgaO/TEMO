@@ -67,11 +67,11 @@ test('HTTP query pollution, repeated parameters and forged scope fail before SQL
   app.useGlobalInterceptors(new ReadWorkloadInterceptor());
   app.useGlobalGuards(new AuthGuard(new Reflector(),{validateAccessToken:async token=>{
     if(token==='revoked')throw new UnauthorizedException();
-    return {id,roleCode:token==='cashier'?'CAJERO':token==='transfer'?'TRANSFERISTA':'JEFA',mustChangePassword:token==='change'};
+    return {id,sessionVersion:1,roleCode:token==='cashier'?'CAJERO':token==='transfer'?'TRANSFERISTA':'JEFA',mustChangePassword:token==='change'};
   }}));
   try{
     await app.listen(0,'127.0.0.1');const base=await app.getUrl();
-    const get=(path,token='admin')=>fetch(base+'/api/'+path,{headers:token?{Authorization:`Bearer ${token}`}:{},signal:AbortSignal.timeout(5000)});
+    const get=(path,token='admin',method='GET')=>fetch(base+'/api/'+path,{method,headers:token?{Authorization:`Bearer ${token}`}:{},signal:AbortSignal.timeout(5000)});
     for(const path of ['transactions/table?limit=201','transactions/table?limit=10&limit=20','transactions/table?userId='+id,'transactions/table?sort=secret', 'transactions?limit=10&limit=20','transactions?offset=1&offset=2',
       'transactions?limit%5Bvalue%5D=20','transactions?offset=1e3','transactions?userId='+id,
       'transactions?limit=10private-query-marker','transactions?limit=201',
@@ -82,6 +82,8 @@ test('HTTP query pollution, repeated parameters and forged scope fail before SQL
       assert.ok(!(await response.text()).includes('private-query-marker'));
     }
     for(const [token,status]of [[null,401],['revoked',401],['change',403],['transfer',403]]){assert.equal((await get('transactions',token)).status,status);assert.equal((await get('transactions/table',token)).status,status);}
+    for(const [token,status]of [[null,401],['revoked',401],['change',403],['transfer',403]])assert.equal((await get('transactions',token,'HEAD')).status,status);
+    assert.equal((await get('transactions?limit=201','admin','HEAD')).status,400);
     assert.equal(calls.length,0,'No rejected request queries the database');
     for(const token of ['admin','cashier']){
       assert.equal((await get('transactions?limit=200&offset=0',token)).status,200);
@@ -93,12 +95,15 @@ test('HTTP query pollution, repeated parameters and forged scope fail before SQL
     const invalidExport=await fetch(base+'/api/shifts/dashboard/export',{method:'POST',headers:{Authorization:'Bearer admin','Content-Type':'application/json'},body:JSON.stringify({day:['2026-10-29']})});
     assert.equal(invalidExport.status,400);assert.equal(calls.length,before);
     holdReads=true;
-    const active=Array.from({length:4},()=>get('transactions?limit=1'));
+    const active=Array.from({length:4},(_,i)=>get('transactions?limit=1','admin',i%2?'HEAD':'GET'));
     try{
       const deadline=Date.now()+3000;
       while(waiters.length<4&&Date.now()<deadline)await new Promise(resolve=>setTimeout(resolve,10));
       assert.equal(waiters.length,4);
-      const busy=await get('transactions?limit=1');assert.equal(busy.status,429);assert.equal(busy.headers.get('retry-after'),'1');
+      for(const method of ['GET','HEAD']){
+        const busy=await get('transactions?limit=1','admin',method);assert.equal(busy.status,429);assert.equal(busy.headers.get('retry-after'),'1');
+        if(method==='HEAD')assert.equal(await busy.text(),'');
+      }
       const write=await fetch(base+'/api/transactions/batch',{method:'POST',headers:{Authorization:'Bearer admin','Content-Type':'application/json'},body:'{}'});
       assert.equal(write.status,400,'Writes are validated normally, not blocked by report concurrency');
     }finally{holdReads=false;waiters.splice(0).forEach(resolve=>resolve());await Promise.allSettled(active);}

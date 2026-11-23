@@ -1,4 +1,5 @@
-import { Body, Controller, Get, Post, Req } from '@nestjs/common';
+import { Body, Controller, Get, Post, Req, UseGuards } from '@nestjs/common';
+import { AuthRouteGuard } from './auth-route.guard';
 import { AuthService } from './auth.service';
 import { Public } from './public.decorator';
 import { changePasswordSchema, loginSchema, mfaVerifySchema, parseAuthBody, profilePhotoSchema,
@@ -11,6 +12,7 @@ type HttpRequest = {
 };
 
 @Controller('auth')
+@UseGuards(new AuthRouteGuard())
 export class AuthController {
   constructor(private readonly auth: AuthService) {}
 

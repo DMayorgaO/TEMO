@@ -346,6 +346,7 @@ export class ShiftsService {
     }
     await this.db.transaction(async (client) => {
       await validateFinancialActor(client,user,['JEFA']);
+      await this.lockShiftForMutation(client, shiftId, user, ['PENDIENTE_APERTURA', 'ABIERTO', 'PENDIENTE_APROBACION']);
       const branchId = await this.resolveActiveBranch(client, input.branchId, input.branch);
 
       const cashierResult = await client.query<{ id_usuario: string } & QueryResultRow>(
@@ -415,11 +416,11 @@ export class ShiftsService {
   }
 
   async saveCashCount(shiftId: string, input: SaveCashCountInput, user: AuthenticatedUser) {
-    const shift = await this.findAuthorizedShift(shiftId, user, true);
+    await this.findAuthorizedShift(shiftId, user, true);
     await this.db.transaction(async (client) => {
       const writable=await this.lockWritableShift(client,shiftId,user);
       const before=writable.estado==='EN_REVISION'?await this.shiftAudit(client,shiftId):null;
-      await this.persistCashCounts(client, shiftId, shift.id_caja, user.id, 'ACTUAL', input.counts);
+      await this.persistCashCounts(client, shiftId, writable.id_caja, user.id, 'ACTUAL', input.counts);
       await client.query(
         `update temo.turnos
          set cambio_nio = $2, fecha_modificacion = now()
@@ -443,11 +444,15 @@ export class ShiftsService {
 
     await this.db.transaction(async (client) => {
       await validateFinancialActor(client,user,['JEFA']);
+      const current = await this.lockShiftForMutation(client, shiftId, user, ['CERRADO']);
+      if ((await client.query(`select 1 from temo.traspasos_turno where id_turno_origen=$1 and estado='ACEPTADO'`, [shiftId])).rowCount) {
+        throw new ConflictException('Este cierre ya fue traspasado a otro cajero. No se pueden modificar las existencias entregadas.');
+      }
       const openingTotals = this.cashTotals(input.opening.counts);
       const closingTotals = this.cashTotals(input.closing.counts);
-      await this.persistCashCounts(client, shiftId, shift.id_caja, user.id, 'APERTURA', input.opening.counts);
-      await this.persistCashCounts(client, shiftId, shift.id_caja, user.id, 'CIERRE_CONTADO', input.closing.counts);
-      await this.persistOpeningBalances(client, shiftId, shift.id_sucursal, input.opening.balances);
+      await this.persistCashCounts(client, shiftId, current.id_caja, user.id, 'APERTURA', input.opening.counts);
+      await this.persistCashCounts(client, shiftId, current.id_caja, user.id, 'CIERRE_CONTADO', input.closing.counts);
+      await this.persistOpeningBalances(client, shiftId, current.id_sucursal, input.opening.balances);
       await this.persistClosingBalances(client, shiftId, input.closing.balances);
       await client.query(
         `update temo.turnos set
@@ -719,12 +724,13 @@ export class ShiftsService {
   }
 
   async acknowledgeNotification(notificationId: string, user: AuthenticatedUser) {
-    const generic = await this.db.query(
+    return this.db.transaction(async client => {
+    await validateFinancialActor(client, user, ['JEFA', 'CAJERO', 'TRANSFERISTA']);
+    const generic = await client.query(
       `update temo.notificaciones_usuarios
-       set fecha_lectura = now()
+       set fecha_lectura = coalesce(fecha_lectura, now())
        where id_notificacion = $1
          and id_usuario_destino = $2
-         and fecha_lectura is null
        returning id_notificacion as id`,
       [notificationId, user.id],
     );
@@ -732,9 +738,9 @@ export class ShiftsService {
       return generic.rows[0];
     }
 
-    const result = await this.db.query(
+    const result = await client.query(
       `update temo.solicitudes_cierre_turno
-       set fecha_notificacion_cajero_leida = now()
+       set fecha_notificacion_cajero_leida = coalesce(fecha_notificacion_cajero_leida, now())
        where id_solicitud_cierre = $1
          and id_usuario_solicitud = $2
        returning id_solicitud_cierre as id`,
@@ -744,24 +750,22 @@ export class ShiftsService {
       throw new NotFoundException('La notificacion no existe.');
     }
     return result.rows[0];
+    });
   }
 
   async close(shiftId: string, input: CloseShiftInput, user: AuthenticatedUser) {
     this.requireBoss(user);
-    const shift = await this.findAuthorizedShift(shiftId, user, true);
+    await this.findAuthorizedShift(shiftId, user, true);
     await this.db.transaction(async (client) => {
       await validateFinancialActor(client,user,['JEFA']);
-      const locked = await client.query('select estado from temo.turnos where id_turno=$1 for update', [shiftId]);
-      if (!['ABIERTO', 'PENDIENTE_APROBACION','EN_REVISION'].includes(locked.rows[0]?.estado)) {
-        throw new ConflictException('El turno ya no admite cierre. Actualice la pantalla.');
-      }
+      const current = await this.lockShiftForMutation(client, shiftId, user, ['ABIERTO', 'PENDIENTE_APROBACION', 'EN_REVISION']);
       const before=await this.shiftAudit(client,shiftId);
       if(input.expectedCloseRequest&&!(await client.query(`select 1 from temo.solicitudes_cierre_turno
         where id_turno=$1 and estado='PENDIENTE' and fecha_solicitud::text=$2`,[shiftId,input.expectedCloseRequest])).rowCount){
         throw new ConflictException('La solicitud de cierre fue cancelada o renovada. Actualice el turno antes de revisarlo.');
       }
       const totals = this.cashTotals(input.counts);
-      await this.persistCashCounts(client, shiftId, shift.id_caja, user.id, 'CIERRE_CONTADO', input.counts);
+      await this.persistCashCounts(client, shiftId, current.id_caja, user.id, 'CIERRE_CONTADO', input.counts);
       await this.persistClosingBalances(client, shiftId, input.balances);
       await client.query(
         `update temo.turnos
@@ -956,10 +960,19 @@ export class ShiftsService {
   private async lockWritableShift(client: PoolClient, shiftId: string, user: AuthenticatedUser) {
     await validateFinancialActor(client,user,['JEFA','CAJERO']);
     await assertShiftNotSubmitted(client,shiftId,user);
-    const result=await client.query(`select estado,id_cajero from temo.turnos where id_turno=$1 for update`,[shiftId]);
-    const row=result.rows[0];
-    if (!row || !['ABIERTO','PENDIENTE_APROBACION','EN_REVISION'].includes(row.estado)
-      || (user.roleCode!=='JEFA' && row.id_cajero!==user.id)) throw new ConflictException('El turno ya no admite cambios. Actualice la pantalla.');
+    return this.lockShiftForMutation(client, shiftId, user, ['ABIERTO', 'PENDIENTE_APROBACION', 'EN_REVISION']);
+  }
+
+  // Read state and ownership under the same lock held until financial writes commit.
+  // Never use a pre-transaction box/branch reference to persist an updated count.
+  private async lockShiftForMutation(client: PoolClient, shiftId: string, user: AuthenticatedUser, states: readonly string[]) {
+    const result = await client.query<{ estado: string; id_cajero: string; id_caja: string; id_sucursal: string } & QueryResultRow>(
+      `select estado, id_cajero, id_caja, id_sucursal from temo.turnos where id_turno=$1 for update`, [shiftId],
+    );
+    const row = result.rows[0];
+    if (!row || !states.includes(row.estado) || (user.roleCode !== 'JEFA' && row.id_cajero !== user.id)) {
+      throw new ConflictException('El turno ya no admite cambios. Actualice la pantalla.');
+    }
     return row;
   }
 
@@ -1088,9 +1101,9 @@ export class ShiftsService {
     if (cashCountId) {
       await queryable.query(
         `update temo.arqueos
-         set monto_total = $2, id_usuario_creacion = $3, fecha_creacion = now()
+         set monto_total = $2, id_usuario_creacion = $3, id_caja = $4, fecha_creacion = now()
          where id_arqueo = $1`,
-        [cashCountId, total, userId],
+        [cashCountId, total, userId, registerId],
       );
       await queryable.query(
         `delete from temo.arqueos_denominaciones where id_arqueo = $1`,
@@ -1530,7 +1543,7 @@ export class ShiftsService {
       from temo.turnos t join temo.sucursales s using(id_sucursal) join temo.cajas c using(id_caja)
       join temo.usuarios u on u.id_usuario=t.id_cajero where t.id_turno=$1`,[shiftId]);
     const row=state.rows[0];
-    if (row.source_day!==row.day) throw new ConflictException('El turno corresponde a otra jornada. Solicite cierre administrativo para cambiar de dia.');
+    if (row.source_day!==row.day) throw new ConflictException('El turno corresponde a otro día. Solicite cierre administrativo para cambiar de dia.');
     const cashDifference=totals.NIO+totals.USD*summary.expectedGeneralRate-summary.expectedGeneral.NIO;
     const accountDifferences=balances.flatMap(balance=>{
       const fields=balance.entity==='TELEDOLAR'

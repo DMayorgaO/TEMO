@@ -1,3 +1,5 @@
+import { UseGuards } from '@nestjs/common';
+import { FinancialRouteGuard } from '../../common/financial-route.guard';
 import { BadRequestException, Body, Controller, Get, Param, Post, Put, Req, UsePipes } from '@nestjs/common';
 import { RecordIdPipe } from '../../common/record-id.pipe';
 import { AuthenticatedUser } from '../auth/auth.service';
@@ -5,6 +7,7 @@ import { transferSchema, voidTransferSchema } from './transfers.schema';
 import { TransfersService } from './transfers.service';
 
 @Controller('transfers')
+@UseGuards(new FinancialRouteGuard('transfers'))
 @UsePipes(new RecordIdPipe())
 export class TransfersController {
   constructor(private readonly transfers: TransfersService) {}

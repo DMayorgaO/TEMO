@@ -61,11 +61,17 @@ test('transfer edits/voids: stale forms, confirmed receipts, permissions and rol
     };
     await t.test('migration is repeatable and never resets counters or existing receipt types',async()=>{
       const id=(await create()).database_id,before=await version(id);
-      const sql=require('node:fs').readFileSync(require('node:path').resolve(__dirname,'../../database/init/055_transfer_change_security.sql'),'utf8');
+      // 055 describes the historical receipt vocabulary. Never replay its older
+      // CHECK over real preview receipts introduced by 056 or later migrations.
+      await c.query('create temporary table qa_055_receipts (like temo.solicitudes_financieras including all) on commit drop');
+      await c.query("insert into pg_temp.qa_055_receipts select * from temo.solicitudes_financieras where operacion in ('CREAR_TRANSACCIONES','CREAR_TRANSFERENCIA','LIQUIDAR_PENDIENTE','LIQUIDAR_PENDIENTES','EDITAR_TRANSACCION','ANULAR_TRANSACCION','EDITAR_GRUPO','EDITAR_TRANSFERENCIA','ANULAR_TRANSFERENCIA')");
+      const receiptsBefore=(await c.query('select * from pg_temp.qa_055_receipts order by id_usuario,operacion,id_solicitud')).rows;
+      const sql=require('node:fs').readFileSync(require('node:path').resolve(__dirname,'../../database/init/055_transfer_change_security.sql'),'utf8').replaceAll('temo.solicitudes_financieras','pg_temp.qa_055_receipts');
       // Execute inside an enclosing test savepoint, without committing the fixture transaction.
       await c.query(sql.replace(/^BEGIN;\s*/,'').replace(/COMMIT;\s*$/,''));
       await c.query(sql.replace(/^BEGIN;\s*/,'').replace(/COMMIT;\s*$/,''));
       assert.equal(await version(id),before);
+      assert.deepEqual((await c.query('select * from pg_temp.qa_055_receipts order by id_usuario,operacion,id_solicitud')).rows,receiptsBefore);
     });
     if(process.env.TEMO_TEST_RESTRICTED_ROLE==='1')await require('./helpers/restricted-role.cjs').useRestrictedPreviewRole(c);
     await t.test('old edit/void versions cannot overwrite newer state; confirmed edit retries apply once',async()=>{

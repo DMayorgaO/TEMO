@@ -57,3 +57,19 @@ test('table pages and filtered exports share the heavy-read budget',async()=>{
  }finally{subscriptions.forEach(s=>s.unsubscribe());}
  assert.equal(limiter.active,0);
 });
+
+test('HEAD reports share global and per-actor slots with GET and release on failures',async()=>{
+ const limiter=new ReadWorkloadInterceptor(),source=new Subject(),subscriptions=[];
+ try{
+  for(let i=0;i<16;i++)subscriptions.push(limiter.intercept(host('actor-'+Math.floor(i/4),'/api/transactions/table',i%2?'HEAD':'GET'),{handle:()=>source}).subscribe());
+  for(const method of ['GET','HEAD']){
+   let calls=0;
+   await assert.rejects(lastValueFrom(limiter.intercept(host('extra','/api/dollar-purchases',method),{handle:()=>{calls++;return of([]);}})),e=>e.getStatus()===429);
+   assert.equal(calls,0);
+  }
+ }finally{subscriptions.forEach(s=>s.unsubscribe());}
+ for(const path of ['/api/transactions','/api/transactions/table','/api/shifts/dashboard','/api/dollar-purchases']){
+  await assert.rejects(lastValueFrom(limiter.intercept(host('actor',path,'HEAD'),{handle:()=>throwError(()=>Error('failed read'))})),/failed read/);
+ }
+ assert.equal(limiter.active,0);assert.equal(limiter.activeActors.size,0);
+});

@@ -11,7 +11,7 @@ test('security dependency floors and workspace adapter anchor remain in the repr
   const override=manifest.overrides['@nestjs/platform-express'];
   assert.equal(manifest.devDependencies['@nestjs/platform-express'],override['.'],'Root adapter anchor must agree with its override');
   assert.equal(override.multer,'2.5.0');
-  for(const [name,floor]of Object.entries({'body-parser':'2.4.0','multer':'2.5.0','fast-uri':'3.1.9','ip-address':'10.7.5','zod':'4.6.6','vite':'8.2.4'})){
+  for(const [name,floor]of Object.entries({'body-parser':'2.4.0','multer':'2.5.0','fast-uri':'3.1.9','ip-address':'10.7.5','zod':'4.6.6','vite':'8.2.4','@typescript-eslint/parser':'8.73.0','@typescript-eslint/eslint-plugin':'8.73.0'})){
     const copies=Object.entries(lock.packages).filter(([key])=>key.endsWith('/node_modules/'+name)||key==='node_modules/'+name);
     assert.ok(copies.length,`${name} must be installed`);
     for(const [location,entry]of copies)assert.ok(semver.gte(entry.version,floor),`${location} is below the security floor`);

@@ -13,7 +13,7 @@ test('blocked or nonexistent accounts never execute crypt; failed decisions comm
         assert.ok(!sql.includes('crypt('));
         assert.ok(!sql.includes('update temo.usuarios'));
         if (sql.includes('insert into temo.intentos')) attempts++;
-        return { rows: sql.includes('for update of u') && row ? [row] : [] };
+        return { rows: (sql.includes('for update of u') || sql.includes('as blocked')) && row ? [row] : [] };
       } });
       committed = true;
       return value;
@@ -31,7 +31,7 @@ test('session completion fails closed before successful-access audit when identi
     statements++;
     assert.match(sql, /u.version_sesion = \$2/);
     assert.match(sql, /r.estado = 'ACTIVO'/);
-    assert.match(sql, /u.bloqueado_hasta <= now\(\)/);
+    assert.match(sql, /u.bloqueado_hasta <= clock_timestamp\(\)/);
     assert.deepEqual(values, [actor.id, 2, actor.roleId, 'test', 'CAJERO']);
     return { rowCount: 0, rows: [] };
   } }) }, config);

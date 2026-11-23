@@ -7,6 +7,7 @@ const {HandoversService}=require('../dist/modules/shifts/handovers.service');
 const {TransactionsService}=require('../dist/modules/transactions/transactions.service');
 const {TransactionsController}=require('../dist/modules/transactions/transactions.controller');
 const {TransfersService}=require('../dist/modules/transfers/transfers.service');
+const {DollarPurchasesService}=require('../dist/modules/dollar-purchases/dollar-purchases.service');
 const {createTransactionBatchSchema}=require('../dist/modules/transactions/transaction-batch.schema');
 const {auditChanges}=require('../dist/modules/catalogs/audit-changes');
 const url='postgresql://temo_preview@127.0.0.1:55433/temo_preview';
@@ -159,6 +160,99 @@ test('financial receipts and permission matrix: real local services, every chang
       assert.equal((await transfers.create(input,operator.actor)).database_id,applied.database_id);
       await assert.rejects(transactions.createBatch({...payload(operator),shiftId:operator.shift.database_id},{actor:operator.actor}),e=>e.getStatus()===403);
       await assert.rejects(shifts.saveCashCount(operator.shift.database_id,{counts:cash(1000),changeNio:0},operator.actor),e=>e.getStatus()===403);
+    });
+    await t.test('transfer read matrix isolates owner, branch and closed shifts while preserving administrator and operator access',async()=>{
+      const input={requestId:randomUUID(),shiftId:b.shift.database_id,type:'EFECTIVO',direction:'EGRESO',currency:'NIO',amount:10,description:'read scope fixture',cashLines:cash(10).NIO};
+      const row=await transfers.create(input,b.actor);
+      const operator={...admin,roleCode:'TRANSFERISTA'}; // Read policy only; real operator writes are tested above.
+      for(const state of ['ABIERTO','PENDIENTE_APROBACION','EN_REVISION','CERRADO']){
+        await c.query('savepoint transfer_read_scope');
+        try{
+          await c.query('update temo.turnos set estado=$2 where id_turno=$1',[b.shift.database_id,state]);
+          for(const outsider of [a.actor,foreign.actor]){
+            assert.ok(!(await transfers.list(outsider)).some(r=>r.database_id===row.database_id));
+            await assert.rejects(transfers.detail(row.database_id,outsider),e=>e.getStatus()===403);
+            assert.ok(!(await transfers.context(outsider)).shifts.some(r=>r.id===b.shift.database_id));
+          }
+          const own=(await transfers.list(b.actor)).some(r=>r.database_id===row.database_id);
+          assert.equal(own,state!=='CERRADO');
+          if(state==='CERRADO')await assert.rejects(transfers.detail(row.database_id,b.actor),e=>e.getStatus()===403);
+          else assert.equal((await transfers.detail(row.database_id,b.actor)).database_id,row.database_id);
+          for(const manager of [admin,operator]){
+            assert.equal((await transfers.detail(row.database_id,manager)).database_id,row.database_id);
+            assert.ok((await transfers.list(manager)).some(r=>r.database_id===row.database_id));
+          }
+        }finally{await c.query('rollback to savepoint transfer_read_scope');}
+      }
+      await assert.rejects(transfers.detail(randomUUID(),b.actor),e=>e.getStatus()===404);
+    });
+    await t.test('dollar ledger isolates other cashiers and branches and hides closed shifts from their former owner',async()=>{
+      const purchases=new DollarPurchasesService(db);
+      const input=payload(b);input.transactions[0].currencyCode='USD';input.transactions[0].amount=10;
+      input.settlement={...settlement(370),primaryRateKind:'VENTA'};
+      const group=await transactions.createBatch(input,{actor:b.actor});const id=group.transactions[0].id;
+      assert.ok((await purchases.list(b.actor)).some(r=>r.database_id===id));
+      for(const outsider of [a.actor,foreign.actor])assert.ok(!(await purchases.list(outsider)).some(r=>r.database_id===id));
+      await c.query('savepoint closed_purchase_scope');
+      try{
+        await c.query("update temo.turnos set estado='CERRADO' where id_turno=$1",[b.shift.database_id]);
+        assert.ok(!(await purchases.list(b.actor)).some(r=>r.database_id===id));
+        assert.ok((await purchases.list(admin)).some(r=>r.database_id===id));
+      }finally{await c.query('rollback to savepoint closed_purchase_scope');}
+    });
+    await t.test('shift reads preserve own history and isolate other cashiers and branches in every shift state',async()=>{
+      for(const state of ['PENDIENTE_APERTURA','ABIERTO','PENDIENTE_APROBACION','EN_REVISION','CERRADO']){
+        await c.query('savepoint shift_read_scope');
+        try{
+          await c.query('update temo.turnos set estado=$2 where id_turno=$1',[b.shift.database_id,state]);
+          assert.ok((await shifts.list(b.actor)).some(r=>r.database_id===b.shift.database_id));
+          assert.equal((await shifts.detail(b.shift.database_id,b.actor)).database_id,b.shift.database_id);
+          assert.equal((await shifts.detail(b.shift.database_id,admin)).database_id,b.shift.database_id);
+          const access=await shifts.access(b.actor);
+          assert.equal(access.prepared?.database_id===b.shift.database_id,state==='PENDIENTE_APERTURA');
+          assert.equal(access.active?.database_id===b.shift.database_id,['ABIERTO','PENDIENTE_APROBACION','EN_REVISION'].includes(state));
+          for(const outsider of [a.actor,foreign.actor]){
+            assert.ok(!(await shifts.list(outsider)).some(r=>r.database_id===b.shift.database_id));
+            assert.ok(!(await shifts.open(outsider)).some(r=>r.database_id===b.shift.database_id));
+            await assert.rejects(shifts.detail(b.shift.database_id,outsider),e=>e.getStatus()===404);
+            await assert.rejects(shifts.exportRows({format:'EXCEL',ids:[b.shift.database_id]},{user:outsider}),e=>e.getStatus()===403);
+          }
+        }finally{await c.query('rollback to savepoint shift_read_scope');}
+      }
+    });
+    await t.test('notification acknowledgement isolates recipients, preserves the first timestamp and denies revoked sessions',async()=>{
+      const before=await summary(b);
+      const notice=(await c.query(`insert into temo.notificaciones_usuarios(id_usuario_destino,tipo,titulo,mensaje,id_turno)
+        values($1,'PENDIENTE_PAGADO','QA','Isolated fixture',$2) returning id_notificacion as id`,[b.actor.id,b.shift.database_id])).rows[0];
+      for(const outsider of [a.actor,foreign.actor,admin])await assert.rejects(shifts.acknowledgeNotification(notice.id,outsider),e=>e.getStatus()===404);
+      assert.equal((await c.query('select fecha_lectura from temo.notificaciones_usuarios where id_notificacion=$1',[notice.id])).rows[0].fecha_lectura,null);
+      assert.deepEqual(await shifts.acknowledgeNotification(notice.id,b.actor),{id:notice.id});
+      // now() is fixed within this test transaction: use a sentinel to detect rewrites.
+      await c.query("update temo.notificaciones_usuarios set fecha_lectura='2001-01-01T00:00:00Z' where id_notificacion=$1",[notice.id]);
+      assert.deepEqual(await shifts.acknowledgeNotification(notice.id,b.actor),{id:notice.id});
+      for(const [column,value] of [['version_sesion','version_sesion+1'],['estado',"'INACTIVO'"],['debe_cambiar_contrasena','true'],['id_rol',"(select id_rol from temo.roles where codigo='TRANSFERISTA')"]]){
+        await c.query('savepoint notification_identity');
+        try{
+          await c.query(`update temo.usuarios set ${column}=${value} where id_usuario=$1`,[b.actor.id]);
+          await assert.rejects(shifts.acknowledgeNotification(notice.id,b.actor),e=>e.getStatus()===403);
+        }finally{await c.query('rollback to savepoint notification_identity');}
+      }
+      for(const sessionVersion of [undefined,null,'1',-1])await assert.rejects(shifts.acknowledgeNotification(notice.id,{...b.actor,sessionVersion}),e=>e.getStatus()===403);
+      assert.equal((await c.query('select fecha_lectura from temo.notificaciones_usuarios where id_notificacion=$1',[notice.id])).rows[0].fecha_lectura.toISOString(),'2001-01-01T00:00:00.000Z');
+      assert.deepEqual((await summary(b)).expectedCash,before.expectedCash);assert.deepEqual((await summary(b)).cashCounts,before.cashCounts);
+    });
+    await t.test('close-request notification has the same recipient, replay and revocation protections',async()=>{
+      await c.query('savepoint close_notification');
+      try{
+        const notice=await shifts.requestClose(b.shift.database_id,b.actor);
+        for(const outsider of [a.actor,foreign.actor,admin])await assert.rejects(shifts.acknowledgeNotification(notice.id,outsider),e=>e.getStatus()===404);
+        await assert.rejects(shifts.acknowledgeNotification(notice.id,{...b.actor,sessionVersion:b.actor.sessionVersion+1}),e=>e.getStatus()===403);
+        assert.deepEqual(await shifts.acknowledgeNotification(notice.id,b.actor),{id:notice.id});
+        await c.query("update temo.solicitudes_cierre_turno set fecha_notificacion_cajero_leida='2001-01-01T00:00:00Z' where id_solicitud_cierre=$1",[notice.id]);
+        assert.deepEqual(await shifts.acknowledgeNotification(notice.id,b.actor),{id:notice.id});
+        const row=(await c.query('select estado,bloquea_cambios,fecha_notificacion_cajero_leida from temo.solicitudes_cierre_turno where id_solicitud_cierre=$1',[notice.id])).rows[0];
+        assert.equal(row.fecha_notificacion_cajero_leida.toISOString(),'2001-01-01T00:00:00.000Z');assert.equal(row.estado,'PENDIENTE');assert.equal(row.bloquea_cambios,true);
+      }finally{await c.query('rollback to savepoint close_notification');}
     });
     await t.test('review corrections capture before/after counts and balances; audit failure preserves old values',async()=>{
       await c.query(`update temo.turnos set estado='EN_REVISION' where id_turno=$1`,[a.shift.database_id]);

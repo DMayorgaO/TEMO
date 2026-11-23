@@ -50,7 +50,7 @@ test('login keeps accepting existing-format passwords above the new storage boun
   let checked;
   const auth = new AuthService({ transaction: async work => work({ query: async (sql, params) => {
     if (sql.includes('crypt(')) { checked = params; return { rows: [{ password_valid: true }] }; }
-    return { rows: [{ id: 'existing-user', role_code: 'CAJERO' }] };
+    return { rows: [{ id: 'existing-user', role_code: 'CAJERO', blocked: false }] };
   } }) }, config);
   auth.buildAuthenticatedUser = async () => ({ id: 'existing-user', roleCode: 'CAJERO' });
   auth.completeLogin = async () => ({ token: 'test-session' });

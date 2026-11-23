@@ -2,7 +2,7 @@ const test=require('node:test');
 const assert=require('node:assert/strict');
 const {directoryEntrySchema,directoryUpdateSchema}=require('../dist/modules/directory/directory.schema');
 const {DirectoryController}=require('../dist/modules/directory/directory.controller');
-const input={name:'  Persona QA  ',references:['Referencia QA']};
+const input={requestId:'11111111-1111-4111-8111-111111111111',name:'  Persona QA  ',references:['Referencia QA']};
 const version='a'.repeat(64);
 
 test('directory strict contracts preserve normal inputs, defaults and required edit version',()=>{

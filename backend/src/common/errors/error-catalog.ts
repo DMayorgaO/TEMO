@@ -36,7 +36,7 @@ function modulePrefix(path: string) {
 }
 
 export function catalogPostgresError(postgresCode: string | undefined, path: string): ErrorCatalogEntry {
-  const entry = postgresCode ? postgresErrors[postgresCode] : undefined;
+  const entry = postgresCode && Object.hasOwn(postgresErrors, postgresCode) ? postgresErrors[postgresCode] : undefined;
   if (!entry) {
     return { code: `${modulePrefix(path)}-500`, message: 'No fue posible completar la operación.' };
   }

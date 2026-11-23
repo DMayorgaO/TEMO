@@ -1,3 +1,5 @@
+import { UseGuards } from '@nestjs/common';
+import { FinancialRouteGuard } from '../../common/financial-route.guard';
 import {
   BadRequestException,
   Body,
@@ -29,6 +31,7 @@ import { RecordIdPipe } from '../../common/record-id.pipe';
 import { parseTransactionQuery, requireTransactionReader } from '../../common/read-query';
 
 @Controller('transactions')
+@UseGuards(new FinancialRouteGuard('transactions'))
 @UsePipes(new RecordIdPipe())
 export class TransactionsController {
   constructor(
@@ -271,7 +274,11 @@ export class TransactionsController {
   reopenPendingPayment(
     @Param('id') id: string,
     @Req() request: { user: AuthenticatedUser },
+    @Body() body?: unknown,
   ) {
+    if (!z.object({}).strict().safeParse(body ?? {}).success) {
+      throw new BadRequestException('La reapertura no admite campos adicionales.');
+    }
     return this.transactions.reopenPendingPayment(id, request.user);
   }
 

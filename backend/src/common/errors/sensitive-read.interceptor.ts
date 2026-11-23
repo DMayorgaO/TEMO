@@ -28,10 +28,11 @@ export class SensitiveReadInterceptor implements NestInterceptor {
       route?: { path?: string }; params?: { id?: string };
     }>();
     const route = typeof request.route?.path === 'string' ? `${request.baseUrl ?? ''}${request.route.path}` : '';
-    if (request.method !== 'GET' || !request.user?.id || !sensitiveRoutes.has(route)) return next.handle();
+    if ((request.method !== 'GET' && request.method !== 'HEAD') || !request.user?.id || !sensitiveRoutes.has(route)) return next.handle();
     const id = request.user.id;
+    const method = request.method;
     return next.handle().pipe(tap({ next: () => {
-      void this.audit.record(id, 'GET', route, request.ip ?? '', request.params?.id)
+      void this.audit.record(id, method, route, request.ip ?? '', request.params?.id)
         .catch(() => this.logger.warn('No se pudo persistir un evento de lectura sensible.'));
     } }));
   }

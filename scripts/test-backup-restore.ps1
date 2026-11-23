@@ -1,4 +1,4 @@
-param([Parameter(Mandatory = $true)][string]$BackupPath, [switch]$VerifyPreview, [switch]$VerifyReleaseMigrations, [switch]$VerifyTransferRelease)
+param([Parameter(Mandatory = $true)][string]$BackupPath, [switch]$VerifyPreview, [switch]$VerifyReleaseMigrations, [switch]$VerifyTransferRelease, [switch]$VerifyDirectoryRelease)
 
 $ErrorActionPreference = 'Stop'
 $root = (Resolve-Path (Split-Path -Parent $PSScriptRoot)).Path
@@ -77,6 +77,10 @@ try {
   if ($VerifyTransferRelease) {
     & node (Join-Path $root 'scripts/verify-transfer-release.mjs') --isolated-restored-transfer $resolvedBackup
     if ($LASTEXITCODE -ne 0) { throw 'El ensayo de la migracion 055 no fue aprobado.' }
+  }
+  if ($VerifyDirectoryRelease) {
+    & node (Join-Path $root 'scripts/verify-directory-release.mjs') --isolated-restored-directory
+    if ($LASTEXITCODE -ne 0) { throw 'El ensayo de la migracion 056 no fue aprobado.' }
   }
   Write-Host "Restauracion verificada: $result" -ForegroundColor Green
 } finally {

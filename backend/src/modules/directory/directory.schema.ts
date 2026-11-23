@@ -15,6 +15,7 @@ const identitySchema = z.object({
 }).strict();
 
 const directoryFields = z.object({
+  requestId: z.string().uuid(),
   name: z.string().trim().min(2).max(180),
   observations: optionalText,
   status: z.enum(['ACTIVO', 'INACTIVO']).optional().default('ACTIVO'),

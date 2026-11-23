@@ -569,7 +569,7 @@ export class TransactionsService {
              where active_shift.id_cajero = $2::uuid
                and active_shift.estado in ('ABIERTO', 'PENDIENTE_APROBACION')
                and active_shift.id_sucursal = t.id_sucursal
-               and active_shift.fecha_apertura::date = tu.fecha_apertura::date
+               and (active_shift.fecha_apertura at time zone 'America/Managua')::date = (tu.fecha_apertura at time zone 'America/Managua')::date
            )
          )
        order by
@@ -645,7 +645,7 @@ export class TransactionsService {
            coalesce(t.descripcion, '') as descripcion,
            t.id_cajero,
            t.id_sucursal,
-           tu.fecha_apertura::date as fecha_turno,
+           to_char(tu.fecha_apertura at time zone 'America/Managua', 'YYYY-MM-DD') as fecha_turno,
            tu.estado as estado_turno,
            coalesce(t.tasa_compra_usada, 36.40) as tasa_compra_usada,
            coalesce(t.tasa_venta_usada, 37.00) as tasa_venta_usada
@@ -683,7 +683,7 @@ export class TransactionsService {
           `select 1 from temo.turnos
            where id_cajero = $1 and id_sucursal = $2
              and estado in ('ABIERTO', 'PENDIENTE_APROBACION')
-             and fecha_apertura::date = $3::date
+             and (fecha_apertura at time zone 'America/Managua')::date = $3::date
              and exists (
                select 1 from temo.transacciones shared_transaction
                join temo.pagos_pendientes shared_pending on shared_pending.id_transaccion = shared_transaction.id_transaccion
@@ -1345,7 +1345,7 @@ export class TransactionsService {
            t.id_turno,
            t.id_cajero,
            t.id_sucursal,
-           tu.fecha_apertura::date as fecha_turno,
+           to_char(tu.fecha_apertura at time zone 'America/Managua', 'YYYY-MM-DD') as fecha_turno,
            pp.tipo,
            pp.id_moneda,
            m.codigo as moneda,
@@ -1374,7 +1374,7 @@ export class TransactionsService {
       const shiftResult = await client.query<ShiftRow>(
         `select id_turno, id_sucursal, id_caja, id_cajero
          from temo.turnos
-         where ${user.roleCode === 'JEFA' ? 'id_turno = $1' : 'id_cajero = $1 and id_sucursal = $2 and fecha_apertura::date = $3::date'}
+         where ${user.roleCode === 'JEFA' ? 'id_turno = $1' : "id_cajero = $1 and id_sucursal = $2 and (fecha_apertura at time zone 'America/Managua')::date = $3::date"}
            and estado in ('ABIERTO', 'PENDIENTE_APROBACION')
          for update`,
         user.roleCode === 'JEFA'
@@ -2252,7 +2252,7 @@ export class TransactionsService {
        join temo.turnos active_shift on active_shift.id_turno = $2
        where pp.id_pendiente = any($1::uuid[])
          and source_transaction.id_sucursal = $3
-         and source_shift.fecha_apertura::date = active_shift.fecha_apertura::date
+         and (source_shift.fecha_apertura at time zone 'America/Managua')::date = (active_shift.fecha_apertura at time zone 'America/Managua')::date
        order by pp.id_pendiente
        for update of pp`,
       [pendingIds, shift.id_turno, shift.id_sucursal],

@@ -97,7 +97,7 @@ test('HTTP diagnostic route precedes UUID detail and enforces session/role bound
   const app=await NestFactory.create(BoundaryModule,{logger:false});app.setGlobalPrefix('api');
   app.useGlobalGuards(new AuthGuard(new Reflector(),{validateAccessToken:async token=>{
     if(token==='revoked')throw new UnauthorizedException();
-    return {id:actor,roleCode:token==='admin'||token==='change'?'JEFA':'CAJERO',mustChangePassword:token==='change'};
+    return {id:actor,sessionVersion:1,roleCode:token==='admin'||token==='change'?'JEFA':'CAJERO',mustChangePassword:token==='change'};
   }}));
   try{
     await app.listen(0,'127.0.0.1');const base=await app.getUrl();

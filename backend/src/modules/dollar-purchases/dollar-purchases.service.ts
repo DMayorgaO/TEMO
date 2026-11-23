@@ -11,7 +11,7 @@ export class DollarPurchasesService {
   constructor(private readonly db: DatabaseService) {}
 
   async list(user: AuthenticatedUser) {
-    if (!['JEFA', 'CAJERO'].includes(user.roleCode)) {
+    if (!['JEFA', 'CAJERO'].includes(user.roleCode) || user.mustChangePassword) {
       throw new ForbiddenException('No tiene permiso para consultar las compras de dolares.');
     }
     return this.load(user.roleCode, user.id, null);
